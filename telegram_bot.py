@@ -156,6 +156,7 @@ def create_bot_app():
         bot.reply_to(message, "🔒 <b>تم تفعيل الوضع الخاص!</b> البوت مقفل الآن ومتاح لك وللمستخدمين المصرح لهم فقط.")
 
     @bot.message_handler(commands=['start', 'help'])
+    @bot.message_handler(func=lambda msg: msg.text and msg.text.strip() in ['ابدأ', 'ابدا', 'مرحبا', 'start', 'help'])
     def send_welcome(message):
         if not is_user_authorized(message):
             bot.reply_to(message, "⛔ <b>عذراً، هذا البوت خاص وغير متاح للعامة.</b>\nتواصل مع مالك البوت للحصول على إذن الاستخدام.")
