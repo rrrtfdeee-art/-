@@ -73,6 +73,16 @@ from media_engine import (
     cleanup_media_directory,
     is_ffmpeg_available
 )
+import nsw_bot_bridge
+import nsw_healer_engine
+
+# إطلاق جسر بوت إدارة الموقع تلقائياً في الخلفية مرة واحدة فقط
+if "nsw_bridge_started" not in st.session_state:
+    try:
+        nsw_bot_bridge.start_bridge_thread()
+        st.session_state.nsw_bridge_started = True
+    except Exception as _br_err:
+        pass
 
 # ==============================================================================
 # تهيئة صفحة Streamlit والتنسيق البصري (High-Contrast Dark Theme)
@@ -753,7 +763,7 @@ if st.session_state.active_novel:
 st.markdown('<div class="scraper-card">', unsafe_allow_html=True)
 st.subheader("3️⃣ سجل الأحداث المباشر & التصدير النهائي")
 
-tab_logs, tab_export, tab_preview, tab_media = st.tabs(["📟 Live Console Log", "📥 تصدير الرواية .TXT", "📖 معاينة الفصول", "🎬 محمل وتجزئة الوسائط"])
+tab_logs, tab_export, tab_preview, tab_media, tab_nsw = st.tabs(["📟 Live Console Log", "📥 تصدير الرواية .TXT", "📖 معاينة الفصول", "🎬 محمل وتجزئة الوسائط", "🩹 استصلاح فصول المدونة"])
 
 with tab_logs:
     st.markdown(f'<div class="terminal-console">{"\n".join(st.session_state.logs[-18:])}</div>', unsafe_allow_html=True)
@@ -861,5 +871,52 @@ with tab_media:
                                 st.warning("⚠️ تيليجرام: " + msg_tg)
                 else:
                     st.error(f"❌ تعذر تحميل الفيديو: {res.get('error')}")
+
+with tab_nsw:
+    st.markdown("### 🩹 منظومة استصلاح وعلاج الفصول المبتورة (NSW Truncation Healer)")
+    st.caption("يقوم هذا النظام بفحص فصول المدونة المنشورة، ورصد أي فصل ناقص أو مبتور، وسحبه من المصدر الأصلي، وترجمته وتدقيقه، وتحديث المنشور في مكانه على Blogger.")
+
+    col_n1, col_n2 = st.columns([2, 1])
+    with col_n1:
+        target_novel_filter = st.text_input("اسم الرواية المراد فحصها (اتركه فارغاً لفحص الكل):", value="After Severing Ties")
+    with col_n2:
+        min_chars_thresh = st.number_input("الحد الأدنى لعدد الأحرف (أقل منه = مبتور):", min_value=100, max_value=5000, value=800, step=100)
+
+    col_btn_scan, col_btn_heal = st.columns(2)
+    with col_btn_scan:
+        scan_clicked = st.button("🔍 فحص الفصول المبتورة الآن", use_container_width=True, type="primary")
+    with col_btn_heal:
+        heal_auto_clicked = st.button("🚀 استصلاح وتحديث الفصول المكتشفة", use_container_width=True)
+
+    if scan_clicked:
+        with st.spinner("جاري فحص فصول المدونة المنشورة عبر التغذية الحية..."):
+            detected = nsw_healer_engine.scan_for_truncated_chapters(
+                novel_name=target_novel_filter.strip() if target_novel_filter.strip() else None,
+                min_length=min_chars_thresh
+            )
+            st.session_state["nsw_detected_broken"] = detected
+            if detected:
+                st.warning(f"⚠️ تم رصد {len(detected)} فصول مبتورة تعاني من نقص المحتوى!")
+                for b in detected:
+                    st.markdown(f"- 📖 **{b['title']}** (الحجم: `{b['content_length']}` حرف) ➔ [رابط التدوينة]({b['post_url']})")
+            else:
+                st.success("✅ جميع الفصول المنشورة كاملة وسليمة 100% ولا يوجد أي بتر!")
+
+    if heal_auto_clicked:
+        broken_items = st.session_state.get("nsw_detected_broken", [])
+        if not broken_items:
+            st.info("اضغط على 'فحص الفصول المبتورة الآن' أولاً لرصد الفصول المحتاجة للعلاج.")
+        else:
+            with st.spinner(f"جاري سحب وترجمة واستصلاح {len(broken_items)} فصول وتحديث Blogger..."):
+                h_count = 0
+                for item in broken_items:
+                    res_h = nsw_healer_engine.heal_truncated_chapter(item)
+                    if res_h.get("success"):
+                        h_count += 1
+                        st.success(f"✅ تم استصلاح: {res_h.get('title')}")
+                    else:
+                        st.error(f"❌ تعذر استصلاح {item.get('title')}: {res_h.get('error')}")
+                st.balloons()
+                st.success(f"🎉 اكتمل الاستصلاح: تم علاج وتحديث {h_count} فصول بنجاح على المدونة!")
 
 st.markdown('</div>', unsafe_allow_html=True)
