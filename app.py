@@ -919,4 +919,34 @@ with tab_nsw:
                 st.balloons()
                 st.success(f"🎉 اكتمل الاستصلاح: تم علاج وتحديث {h_count} فصول بنجاح على المدونة!")
 
+    st.markdown("---")
+    st.markdown("#### 🧩 كشف وسد فجوات الفصول المفقودة (Automatic Gap-Filler)")
+    st.caption("يفحص كافة الجداول وبلوجر، وإذا وجد قفزة في الترقيم، يسحب الفصل المفقود ويترجمه وينشره ويربط أزرار السابق والتالي تلقائياً.")
+
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        scan_gaps_clicked = st.button("🔍 فحص الفجوات المفقودة", use_container_width=True)
+    with col_g2:
+        fill_gaps_clicked = st.button("🚀 ملء الفجوات المفقودة ونشرها", use_container_width=True, type="primary")
+
+    if scan_gaps_clicked:
+        with st.spinner("جاري فحص كافة الجداول وبلوجر لكشف الفجوات..."):
+            gaps_found = nsw_healer_engine.detect_system_gaps(target_novel_filter.strip() if target_novel_filter.strip() else None)
+            st.session_state["nsw_gaps_found"] = gaps_found
+            if gaps_found:
+                st.warning(f"⚠️ تم رصد فجوات مفقودة في تسلسل الروايات!")
+                for g in gaps_found:
+                    st.markdown(f"- 📖 **{g['novel_name']}**: مفقود الفصول **{g['missing_chapters']}** (بين الفصل {g['prev_chapter']} والفصل {g['next_chapter']})")
+            else:
+                st.success("✅ جميع الفصول متسلسلة عبر كافة الجداول وبلوجر ولا توجد أي فجوة مفقودة!")
+
+    if fill_gaps_clicked:
+        with st.spinner("جاري سحب وترجمة ونشر الفصول المفقودة وربط أزرار التنقل..."):
+            filled_cnt = nsw_healer_engine.run_auto_fill_all_gaps(target_novel_filter.strip() if target_novel_filter.strip() else None)
+            if filled_cnt > 0:
+                st.balloons()
+                st.success(f"🎉 تم بنجاح ملء ونشر {filled_cnt} فصول مفقودة وتحديث أزرار التنقل!")
+            else:
+                st.info("لا توجد فجوات مفقودة لملئها حالياً.")
+
 st.markdown('</div>', unsafe_allow_html=True)

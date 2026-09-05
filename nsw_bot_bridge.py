@@ -127,10 +127,17 @@ def run_bridge_loop(single_pass: bool = False):
                         user = msg.get("from", {}).get("first_name", "مجهول")
                         user_id = str(msg.get("from", {}).get("id", ""))
                         text = msg.get("text") or msg.get("data") or ""
-                        logger.info(f"📩 رسالة واردة من [{user} ID: {user_id}]: '{text}'")
-
-                        # تمرير التحديث فورياً إلى Google Apps Script
-                        forward_to_gas(u)
+                        text_clean = text.strip().lower()
+                        # الأوامر السحابية المباشرة
+                        if text_clean == "/fill_gaps" or text_clean == "ملء الفجوات":
+                            send_instant_message("🧩 <i>جاري فحص كافة الجداول وبلوجر، وسحب وترجمة ونشر الفصول المفقودة تلقائياً...</i>", user_id)
+                            threading.Thread(target=nsw_healer_engine.run_auto_fill_all_gaps, daemon=True).start()
+                        elif text_clean == "/heal_now" or text_clean == "استصلاح":
+                            send_instant_message("🩹 <i>جاري فحص الفصول المبتورة وسحبها من المصدر وتحديث Blogger فورياً...</i>", user_id)
+                            threading.Thread(target=nsw_healer_engine.run_full_auto_heal, daemon=True).start()
+                        else:
+                            # تمرير التحديث فورياً إلى Google Apps Script
+                            forward_to_gas(u)
 
             if single_pass:
                 break
