@@ -181,8 +181,23 @@ def create_bot_app():
             return
 
         user_text = message.text.strip()
+        cleaned_text = user_text.lower().strip()
+
+        # الكلمات العربية والإنجليزية الترحيبية والتشغيلية
+        start_words = ['ابدأ', 'ابدا', 'بدء', 'تشغيل', 'مرحبا', 'أهلاً', 'اهلا', 'start', 'help', 'مساعده', 'مساعدة']
+        if any(word == cleaned_text or cleaned_text.startswith(word) for word in start_words):
+            send_welcome(message)
+            return
+
         if not user_text.startswith("http://") and not user_text.startswith("https://"):
-            bot.reply_to(message, "⚠️ يرجى إرسال رابط صالح يبدأ بـ http أو https.")
+            bot.reply_to(
+                message,
+                "💡 <b>أهلاً بك!</b>\n"
+                "أرسل لي أي رابط تريد سحبه أو تنزيله:\n"
+                "• 📚 <b>رابط رواية:</b> لسحب الفصول بملف TXT\n"
+                "• 🎬 <b>رابط فيديو:</b> (يوتيوب / تيك توك / تويتر) لتحميله MP4 أو MP3\n\n"
+                "أو اكتب <b>ابدأ</b> أو <b>/admin</b> للتحكم في الصلاحيات."
+            )
             return
 
         chat_id = message.chat.id
