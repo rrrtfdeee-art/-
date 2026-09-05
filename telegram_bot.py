@@ -197,6 +197,7 @@ def create_bot_app():
         threading.Thread(target=_recognize_task, daemon=True).start()
 
     def _send_cinema_result(chat_id: int, res: dict, replace_msg_id: Optional[int] = None):
+        recognized = res.get("recognized", False)
         title_ar = res.get("title_arabic", "غير معروف")
         title_orig = res.get("title_original", "")
         c_type = res.get("type", "unknown")
@@ -205,6 +206,25 @@ def create_bot_app():
         year = res.get("release_year", "")
         duration = res.get("duration", "")
         seasons_cnt = res.get("seasons_count", 1)
+
+        # إذا لم يتم التعرف على العمل بنجاح (مثلاً إرسال أمر /cinema فقط أو وصف فارغ)
+        if not recognized or c_type == "unknown" or (title_ar in ["غير معروف", "N/A"] and not title_orig):
+            text = (
+                "ℹ️ <b>ميزة التعرف السينمائي الذكي:</b>\n\n"
+                "لم يتم التعرف على العمل المطلوب بدقة.\n\n"
+                "💡 <b>كيفية الاستخدام:</b>\n"
+                "• أرسل <b>صورة</b> أو <b>لقطة شاشة</b> من الفيلم/المسلسل.\n"
+                "• أو أرسل <b>اسم العمل أو وصف المشهد</b> كتابة (مثال: <code>Breaking Bad</code> أو <code>فيلم عن الأحلام لنولان</code>).\n"
+                "• أو أرسل <b>رابط فيديو</b> (ريلز/يوتيوب) واضغط كشف بالذكاء الاصطناعي."
+            )
+            if replace_msg_id:
+                try:
+                    bot.edit_message_text(text, chat_id, replace_msg_id)
+                    return
+                except Exception:
+                    pass
+            bot.send_message(chat_id, text)
+            return
 
         type_label = "🎬 فيلم" if c_type == "movie" else ("📺 مسلسل تلفزيوني" if c_type == "series" else "❓ عمل فني")
 
@@ -238,6 +258,33 @@ def create_bot_app():
             except Exception:
                 pass
         bot.send_message(chat_id, text, reply_markup=markup)
+
+    @bot.message_handler(commands=['cinema'])
+    def handle_cinema_command(message):
+        if not is_user_authorized(message):
+            bot.reply_to(message, "⛔ <b>غير مصرح لك بالاستخدام.</b>")
+            return
+        args = message.text.replace("/cinema", "").strip()
+        if args:
+            status_msg = bot.reply_to(message, f"🔎 <b>جاري فحص والتعرف على:</b> <i>{args}</i>...")
+            def _rec_arg():
+                res = cinema_engine.analyze_cinema_content(query_text=args)
+                _send_cinema_result(message.chat.id, res, status_msg.message_id)
+            threading.Thread(target=_rec_arg, daemon=True).start()
+        else:
+            bot.reply_to(
+                message,
+                "🎬 <b>ميزة السينما والمسلسلات:</b>\n"
+                "أرسل اسم الفيلم أو المسلسل مباشرة، أو أرسل صورة/لقطة شاشة للتعرف عليها فوراً واستعراض مواسمها وحلقاتها."
+            )
+
+    @bot.message_handler(commands=['media'])
+    def handle_media_command(message):
+        bot.reply_to(message, "🎬 <b>محرك تنزيل الفيديوهات والصوتيات:</b>\nفقط أرسل أي رابط من (يوتيوب، تيك توك، إنستغرام، أو تويتر) وسيتم تنزيله فوراً مع التجزئة التلقائية إذا لزم.")
+
+    @bot.message_handler(commands=['novel'])
+    def handle_novel_command(message):
+        bot.reply_to(message, "📚 <b>محرك سحب الروايات:</b>\nأرسل رابط صفحة الرواية أو الفهرس لسحب كافة الفصول بدقة وتصديرها بملف TXT نظيف.")
 
     @bot.message_handler(func=lambda msg: True)
     def handle_incoming_link(message):
