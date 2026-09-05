@@ -15,6 +15,13 @@ import time
 import threading
 from typing import Dict, Any, Optional
 
+# ضبط ترميز الإخراج ليتوافق مع الرموز التعبيرية واللغة العربية في ويندوز
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 try:
     import telebot
     from telebot import types
