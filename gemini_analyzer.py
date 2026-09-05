@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 import database
 
 DEFAULT_GAS_POOL = [
+    "https://script.google.com/macros/s/AKfycbzqvNegOJvo1eHKNjUsaVwUnFn0-Apg5ouNuvuAGNSdMU32Kt0YuDKtpCQTDXPx_Mqd6Q/exec",
     "https://script.google.com/macros/s/AKfycbzg-zSivsMeJOtau8gGg8UdsrnCcVKsV1GLeee-1N4iear1mI-G5dAU1vDMrlCEPeXZ/exec",
     "https://script.google.com/macros/s/AKfycbxX2_Nm-13N06GfGP7fVWrfvGd1Gh7fYk7Z2KW4qsJdpY35eiBC5A-oc9yb4mVMBbPX/exec",
     "https://script.google.com/macros/s/AKfycbzbghSWICv5pebQ5RQtuf8KPnAN1qkPudtJeVw-zY-W3NTEZFe2RpwjnXmXRKv7vlZAbA/exec"
