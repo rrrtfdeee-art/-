@@ -145,3 +145,62 @@ def get_episode_details(series_name: str, season: int, episode: int) -> Dict[str
             "duration": "45 دقيقة",
             "summary": f"الحلقة رقم {episode} من الموسم {season} لمسلسل {series_name}."
         }
+
+
+def get_cinema_sources(title: str, c_type: str = "movie", season: int = 1, episode: int = 1) -> List[Dict[str, str]]:
+    """
+    توليد وتوفير روابط مصادر البث والمشاهدة والتحميل المباشرة (العربية والأجنبية المجانية والرسمية).
+    """
+    import urllib.parse
+    encoded_title = urllib.parse.quote(title)
+    
+    sources = []
+    
+    # 1. المصادر العربية المجانية والمفتوحة (مترجم ومدبلج)
+    # سيرفرات المشاهدة المباشرة المتوافقة مع البوتات والتحميل:
+    if c_type == "series":
+        sources.append({
+            "name": "🌐 عرب سيد / فاصل إعلاني (مترجم)",
+            "url": f"https://vidsrc.to/embed/tv/{encoded_title}/{season}/{episode}",
+            "type": "free_stream"
+        })
+        sources.append({
+            "name": "⚡ مشغل VidSrc السريع (بدون إعلانات)",
+            "url": f"https://vidsrc.xyz/embed/tv?imdb={encoded_title}&season={season}&episode={episode}",
+            "type": "direct_player"
+        })
+        sources.append({
+            "name": "📥 خادم التحميل السحابي المباشر",
+            "url": f"https://autoembed.to/tv/imdb/{encoded_title}-{season}-{episode}",
+            "type": "direct_download"
+        })
+    else:
+        sources.append({
+            "name": "🌐 سيرفر البث المباشر (عربي/مترجم)",
+            "url": f"https://vidsrc.to/embed/movie/{encoded_title}",
+            "type": "free_stream"
+        })
+        sources.append({
+            "name": "⚡ مشغل VidSrc الفوري HD",
+            "url": f"https://vidsrc.xyz/embed/movie?imdb={encoded_title}",
+            "type": "direct_player"
+        })
+        sources.append({
+            "name": "📥 سيرفر التحميل السريع MP4",
+            "url": f"https://autoembed.to/movie/imdb/{encoded_title}",
+            "type": "direct_download"
+        })
+
+    # 2. المصادر الرسمية العالمية (للمشاهدة القانونية أو الاشتراك)
+    sources.append({
+        "name": "🍿 منصة Netflix",
+        "url": f"https://www.netflix.com/search?q={encoded_title}",
+        "type": "official"
+    })
+    sources.append({
+        "name": "⭐ قاعدة بيانات وتراخيص IMDb",
+        "url": f"https://www.imdb.com/find/?q={encoded_title}",
+        "type": "official"
+    })
+
+    return sources

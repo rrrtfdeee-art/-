@@ -406,24 +406,37 @@ def create_bot_app():
             status_msg = bot.send_message(chat_id, f"⏳ <b>جاري جلب تفاصيل الحلقة {ep_num} من الموسم {s_num}...</b>")
             def _ep_fetch():
                 ep_info = cinema_engine.get_episode_details(s_name, s_num, ep_num)
-                markup = types.InlineKeyboardMarkup(row_width=2)
-                btn_dl_sub = types.InlineKeyboardButton("📥 توكيد التنزيل (مترجم)", callback_data=f"cin_dl_ep_{s_num}_{ep_num}_sub")
-                btn_dl_raw = types.InlineKeyboardButton("📥 توكيد التنزيل (أصلي)", callback_data=f"cin_dl_ep_{s_num}_{ep_num}_raw")
-                markup.add(btn_dl_sub, btn_dl_raw)
+                sources = cinema_engine.get_cinema_sources(s_name, c_type="series", season=s_num, episode=ep_num)
+                markup = types.InlineKeyboardMarkup(row_width=1)
+                for src in sources:
+                    btn = types.InlineKeyboardButton(src["name"], url=src["url"])
+                    markup.add(btn)
 
                 ep_text = (
                     f"🎬 <b>{s_name} - الموسم {s_num}</b>\n"
                     f"🏷️ <b>الحلقة {ep_num}:</b> {ep_info.get('title', '')}\n"
                     f"⏱️ <b>المدة:</b> {ep_info.get('duration', '45 دقيقة')}\n\n"
                     f"📝 <b>الملخص:</b>\n{ep_info.get('summary', '')}\n\n"
-                    f"<i>اضغط على توكيد التنزيل لإرسال الحلقة:</i>"
+                    f"🍿 <b>مصادر المشاهدة والتحميل المباشر (المجانية والرسمية):</b>\n"
+                    f"<i>اضغط على المصدر المفضل لديك للتشغيل فوراً بدقة عالية أو التحميل المباشر:</i>"
                 )
                 bot.edit_message_text(ep_text, chat_id, status_msg.message_id, reply_markup=markup)
             threading.Thread(target=_ep_fetch, daemon=True).start()
             return
 
         elif data.startswith("cin_dl_"):
-            bot.send_message(chat_id, "🚀 <b>جاري البحث في مصادر البث السحابي وتجهيز الحلقة للإرسال السريع...</b>\n(ملاحظة: يتم تقطيع الحلقات الكبيرة تلقائياً لتفادي حدود تيليجرام)")
+            cin_data = session_data.get("cinema_data", {})
+            s_name = cin_data.get("title_original") or cin_data.get("title_arabic", "عمل سينمائي")
+            sources = cinema_engine.get_cinema_sources(s_name, c_type="movie")
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            for src in sources:
+                markup.add(types.InlineKeyboardButton(src["name"], url=src["url"]))
+
+            bot.send_message(
+                chat_id,
+                f"🍿 <b>مصادر المشاهدة والتحميل المباشر لـ: {s_name}</b>\nاختر السيرفر المفضل للمشاهدة بدون إعلانات أو التحميل:",
+                reply_markup=markup
+            )
             return
 
         if not target_url:
