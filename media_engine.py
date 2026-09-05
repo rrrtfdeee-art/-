@@ -182,14 +182,25 @@ def translate_subtitles_with_gemini(srt_content: str) -> str:
         return f"خطأ أثناء الترجمة: {str(e)}"
 
 
-def send_to_telegram(bot_token: str, chat_id: str, file_path: str, caption: str = "") -> Tuple[bool, str]:
-    """إرسال ملف الفيديو أو الترجمة مباشرة إلى محادثة تيليجرام."""
+def send_to_telegram(bot_token: str, chat_id: str, file_path: str, caption: str = "", auto_split_if_large: bool = True) -> Tuple[bool, str]:
+    """إرسال ملف الفيديو أو الترجمة مباشرة إلى محادثة تيليجرام مع التقطيع التلقائي إذا تجاوز 48MB."""
     if not bot_token or not chat_id or not os.path.exists(file_path):
         return False, "بيانات الإرسال أو الملف غير صحيحة"
 
     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-    if file_size_mb > 50:
-        return False, f"حجم الملف ({file_size_mb:.1f}MB) يتجاوز الحد المسموح به في Telegram Bot API المباشر (50MB). يرجى تفعيل خيار التجزئة."
+    if file_size_mb > 48:
+        if auto_split_if_large:
+            # التقطيع التلقائي الإلزامي لضمان وصول الملف دون رفض تيليجرام
+            parts = split_video_lossless(file_path, max_part_mb=45)
+            if len(parts) > 1:
+                all_ok = True
+                for idx, part in enumerate(parts, 1):
+                    part_cap = f"{caption}\n📦 جزء ({idx}/{len(parts)})" if caption else f"📦 جزء ({idx}/{len(parts)})"
+                    ok, _ = send_to_telegram(bot_token, chat_id, part, caption=part_cap, auto_split_if_large=False)
+                    if not ok:
+                        all_ok = False
+                return all_ok, f"تم تقطيع الملف وإرساله على {len(parts)} أجزاء بنجاح."
+        return False, f"حجم الملف ({file_size_mb:.1f}MB) يتجاوز الحد المسموح به في Telegram Bot API (50MB)."
 
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     try:

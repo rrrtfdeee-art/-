@@ -219,7 +219,7 @@ def auto_detect_selectors_heuristically(toc_html: str, chapter_html: str) -> Dic
 def call_gemini_api(
     prompt: str,
     api_key: Optional[str] = None,
-    model_name: str = "gemini-3.8-flash",
+    model_name: str = "gemini-3.6-flash",
     gas_url: Optional[str] = None,
     timeout: int = 60
 ) -> str:

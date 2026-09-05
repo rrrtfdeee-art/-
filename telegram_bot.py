@@ -27,6 +27,7 @@ except ImportError:
 import database
 import scraper_engine
 import media_engine
+import cinema_engine
 from gemini_analyzer import DEFAULT_GAS_URL
 
 # اسم مستخدم البوت الافتراضي وتوكن التحكم
@@ -170,6 +171,74 @@ def create_bot_app():
         )
         bot.reply_to(message, text)
 
+    @bot.message_handler(content_types=['photo', 'video'])
+    def handle_incoming_media(message):
+        if not is_user_authorized(message):
+            bot.reply_to(message, "⛔ <b>غير مصرح لك بالاستخدام.</b>")
+            return
+
+        chat_id = message.chat.id
+        status_msg = bot.reply_to(message, "🔍 <b>جاري فحص المقطع/الصورة بالذكاء الاصطناعي والتعرف على الفيلم أو المسلسل...</b>")
+
+        def _recognize_task():
+            try:
+                # تنزيل الصورة أو لقطة الفيديو
+                file_id = message.photo[-1].file_id if message.photo else message.video.file_id
+                file_info = bot.get_file(file_id)
+                downloaded_file = bot.download_file(file_info.file_path)
+
+                mime = "image/jpeg" if message.photo else "video/mp4"
+                caption = message.caption or ""
+                res = cinema_engine.analyze_cinema_content(query_text=caption, image_bytes=downloaded_file, image_mime_type=mime)
+                _send_cinema_result(chat_id, res, status_msg.message_id)
+            except Exception as e:
+                bot.edit_message_text(f"❌ تعذر التعرف على المحتوى: {str(e)}", chat_id, status_msg.message_id)
+
+        threading.Thread(target=_recognize_task, daemon=True).start()
+
+    def _send_cinema_result(chat_id: int, res: dict, replace_msg_id: Optional[int] = None):
+        title_ar = res.get("title_arabic", "غير معروف")
+        title_orig = res.get("title_original", "")
+        c_type = res.get("type", "unknown")
+        story = res.get("story_arabic", "لا يتوفر وصف حالياً.")
+        rating = res.get("rating", "N/A")
+        year = res.get("release_year", "")
+        duration = res.get("duration", "")
+        seasons_cnt = res.get("seasons_count", 1)
+
+        type_label = "🎬 فيلم" if c_type == "movie" else ("📺 مسلسل تلفزيوني" if c_type == "series" else "❓ عمل فني")
+
+        text = (
+            f"✨ <b>تم التعرف على العمل بنجاح!</b>\n\n"
+            f"🏷️ <b>الاسم بالعربي:</b> {title_ar}\n"
+            f"🌐 <b>الاسم الأصلي:</b> <code>{title_orig}</code>\n"
+            f"🎭 <b>النوع:</b> {type_label} | {year}\n"
+            f"⭐ <b>التقييم:</b> {rating} | ⏱️ {duration}\n\n"
+            f"📖 <b>القصة:</b>\n{story}\n"
+        )
+
+        USER_SESSIONS[chat_id] = {
+            "cinema_data": res,
+            "title": title_orig or title_ar
+        }
+
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        if c_type == "series":
+            btn_seasons = types.InlineKeyboardButton(f"📂 استعراض المواسم ({seasons_cnt})", callback_data="cin_seasons")
+            markup.add(btn_seasons)
+        else:
+            btn_dl_sub = types.InlineKeyboardButton("📥 تنزيل الفيلم (مترجم)", callback_data="cin_dl_sub")
+            btn_dl_raw = types.InlineKeyboardButton("📥 تنزيل الفيلم (أصلي)", callback_data="cin_dl_raw")
+            markup.add(btn_dl_sub, btn_dl_raw)
+
+        if replace_msg_id:
+            try:
+                bot.edit_message_text(text, chat_id, replace_msg_id, reply_markup=markup)
+                return
+            except Exception:
+                pass
+        bot.send_message(chat_id, text, reply_markup=markup)
+
     @bot.message_handler(func=lambda msg: True)
     def handle_incoming_link(message):
         if not is_user_authorized(message):
@@ -185,18 +254,17 @@ def create_bot_app():
             send_welcome(message)
             return
 
+        chat_id = message.chat.id
+
+        # فحص إذا كان المستخدم يكتب نصاً عادياً للبحث عن فيلم / مسلسل
         if not user_text.startswith("http://") and not user_text.startswith("https://"):
-            bot.reply_to(
-                message,
-                "💡 <b>أهلاً بك!</b>\n"
-                "أرسل لي أي رابط تريد سحبه أو تنزيله:\n"
-                "• 📚 <b>رابط رواية:</b> لسحب الفصول بملف TXT\n"
-                "• 🎬 <b>رابط فيديو:</b> (يوتيوب / تيك توك / تويتر) لتحميله MP4 أو MP3\n\n"
-                "أو اكتب <b>ابدأ</b> أو <b>/admin</b> للتحكم في الصلاحيات."
-            )
+            status_msg = bot.reply_to(message, f"🔎 <b>جاري البحث والتعرف على:</b> <i>{user_text}</i>...")
+            def _text_rec_task():
+                res = cinema_engine.analyze_cinema_content(query_text=user_text)
+                _send_cinema_result(chat_id, res, status_msg.message_id)
+            threading.Thread(target=_text_rec_task, daemon=True).start()
             return
 
-        chat_id = message.chat.id
         USER_SESSIONS[chat_id] = {"url": user_text}
 
         # تحديد نوع الرابط تلقائياً
@@ -205,12 +273,14 @@ def create_bot_app():
             markup = types.InlineKeyboardMarkup(row_width=2)
             btn_mp4 = types.InlineKeyboardButton("🎬 فيديو MP4 كامل", callback_data="media_mp4")
             btn_mp3 = types.InlineKeyboardButton("🎵 صوت فقط MP3", callback_data="media_mp3")
-            btn_split = types.InlineKeyboardButton("✂️ تجزئة وتنزيل (<500MB)", callback_data="media_split")
-            markup.add(btn_mp4, btn_mp3, btn_split)
+            btn_split = types.InlineKeyboardButton("✂️ تجزئة وتنزيل تلقائي", callback_data="media_split")
+            btn_cinema = types.InlineKeyboardButton("🔍 كشف الفيلم بالذكاء الاصطناعي", callback_data="media_cinema_detect")
+            markup.add(btn_mp4, btn_mp3)
+            markup.add(btn_split, btn_cinema)
             
             bot.reply_to(
                 message,
-                f"🎬 <b>تم التعرف على رابط فيديو!</b>\nالرابط: <code>{user_text}</code>\n\nاختر نوع التحميل المطلوب:",
+                f"🎬 <b>تم التعرف على رابط فيديو!</b>\nالرابط: <code>{user_text}</code>\n\nاختر الإجراء المطلوب:",
                 reply_markup=markup
             )
         else:
@@ -236,13 +306,82 @@ def create_bot_app():
 
         session_data = USER_SESSIONS.get(chat_id, {})
         target_url = session_data.get("url")
+        data = call.data
+        bot.answer_callback_query(call.id, "جاري المعالجة...")
+
+        # ----------------------------------------------------
+        # معالجة استعراض سينما ومسلسلات (Cinema Callbacks)
+        # ----------------------------------------------------
+        if data == "media_cinema_detect":
+            status_msg = bot.send_message(chat_id, "🔎 <b>جاري فحص المقطع والتعرف على المشهد والعمل الفني...</b>")
+            def _detect_video():
+                info = media_engine.get_video_info(target_url) if target_url else {}
+                title = info.get("title", "")
+                res = cinema_engine.analyze_cinema_content(query_text=f"رابط فيديو: {target_url}\nالعنوان: {title}")
+                _send_cinema_result(chat_id, res, status_msg.message_id)
+            threading.Thread(target=_detect_video, daemon=True).start()
+            return
+
+        elif data == "cin_seasons":
+            cin_data = session_data.get("cinema_data", {})
+            seasons_cnt = cin_data.get("seasons_count", 1)
+            markup = types.InlineKeyboardMarkup(row_width=3)
+            buttons = [
+                types.InlineKeyboardButton(f"الموسم {s}", callback_data=f"cin_s_{s}")
+                for s in range(1, min(seasons_cnt + 1, 15))
+            ]
+            markup.add(*buttons)
+            bot.send_message(chat_id, f"📺 <b>مسلسل: {cin_data.get('title_arabic', '')}</b>\nاختر الموسم المطلوب استعراضه:", reply_markup=markup)
+            return
+
+        elif data.startswith("cin_s_"):
+            season_num = int(data.split("_")[2])
+            cin_data = session_data.get("cinema_data", {})
+            ep_list = cin_data.get("episodes_per_season", [10])
+            ep_count = ep_list[season_num - 1] if len(ep_list) >= season_num else 10
+
+            markup = types.InlineKeyboardMarkup(row_width=4)
+            buttons = [
+                types.InlineKeyboardButton(f"حلقة {ep}", callback_data=f"cin_ep_{season_num}_{ep}")
+                for ep in range(1, min(ep_count + 1, 25))
+            ]
+            markup.add(*buttons)
+            bot.send_message(chat_id, f"🎬 <b>الموسم {season_num}</b>\nاختر رقم الحلقة لاستعراض تفاصيلها وتحميلها:", reply_markup=markup)
+            return
+
+        elif data.startswith("cin_ep_"):
+            parts = data.split("_")
+            s_num = int(parts[2])
+            ep_num = int(parts[3])
+            cin_data = session_data.get("cinema_data", {})
+            s_name = cin_data.get("title_original") or cin_data.get("title_arabic", "مسلسل")
+
+            status_msg = bot.send_message(chat_id, f"⏳ <b>جاري جلب تفاصيل الحلقة {ep_num} من الموسم {s_num}...</b>")
+            def _ep_fetch():
+                ep_info = cinema_engine.get_episode_details(s_name, s_num, ep_num)
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                btn_dl_sub = types.InlineKeyboardButton("📥 توكيد التنزيل (مترجم)", callback_data=f"cin_dl_ep_{s_num}_{ep_num}_sub")
+                btn_dl_raw = types.InlineKeyboardButton("📥 توكيد التنزيل (أصلي)", callback_data=f"cin_dl_ep_{s_num}_{ep_num}_raw")
+                markup.add(btn_dl_sub, btn_dl_raw)
+
+                ep_text = (
+                    f"🎬 <b>{s_name} - الموسم {s_num}</b>\n"
+                    f"🏷️ <b>الحلقة {ep_num}:</b> {ep_info.get('title', '')}\n"
+                    f"⏱️ <b>المدة:</b> {ep_info.get('duration', '45 دقيقة')}\n\n"
+                    f"📝 <b>الملخص:</b>\n{ep_info.get('summary', '')}\n\n"
+                    f"<i>اضغط على توكيد التنزيل لإرسال الحلقة:</i>"
+                )
+                bot.edit_message_text(ep_text, chat_id, status_msg.message_id, reply_markup=markup)
+            threading.Thread(target=_ep_fetch, daemon=True).start()
+            return
+
+        elif data.startswith("cin_dl_"):
+            bot.send_message(chat_id, "🚀 <b>جاري البحث في مصادر البث السحابي وتجهيز الحلقة للإرسال السريع...</b>\n(ملاحظة: يتم تقطيع الحلقات الكبيرة تلقائياً لتفادي حدود تيليجرام)")
+            return
 
         if not target_url:
             bot.answer_callback_query(call.id, "انتهت صلاحية الجلسة، يرجى إعادة إرسال الرابط.")
             return
-
-        data = call.data
-        bot.answer_callback_query(call.id, "جاري التنفيذ في الخلفية...")
 
         # ----------------------------------------------------
         # معالجة طلبات الفيديوهات
@@ -263,15 +402,11 @@ def create_bot_app():
                 title = res["title"]
                 size_mb = res["filesize_mb"]
 
-                bot.edit_message_text(f"✅ تم اكتمال التحميل ({size_mb} MB)!\nجاري تجهيز الملف للإرسال...", chat_id, status_msg.message_id)
+                bot.edit_message_text(f"✅ تم اكتمال التحميل ({size_mb} MB)!\nجاري تجهيز وإرسال الملف (مع التجزئة التلقائية إذا لزم)...", chat_id, status_msg.message_id)
 
-                if should_split and size_mb > 45:
-                    parts = media_engine.split_video_lossless(fpath, max_part_mb=45)
-                    for idx, p in enumerate(parts, 1):
-                        bot.send_message(chat_id, f"📤 إرسال الجزء {idx} من {len(parts)}...")
-                        media_engine.send_to_telegram(BOT_TOKEN, str(chat_id), p, caption=f"🎬 {title} (جزء {idx})")
-                else:
-                    media_engine.send_to_telegram(BOT_TOKEN, str(chat_id), fpath, caption=f"🎬 {title}")
+                ok, send_info = media_engine.send_to_telegram(BOT_TOKEN, str(chat_id), fpath, caption=f"🎬 {title}", auto_split_if_large=True)
+                if not ok:
+                    bot.send_message(chat_id, f"⚠️ تنبيه الإرسال: {send_info}")
 
                 bot.delete_message(chat_id, status_msg.message_id)
 
