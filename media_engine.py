@@ -38,7 +38,8 @@ def get_video_info(url: str) -> Dict[str, Any]:
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
-            "extract_flat": "in_playlist"
+            "extract_flat": "in_playlist",
+            "socket_timeout": 30
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -76,7 +77,10 @@ def download_media_file(
         ydl_opts = {
             "outtmpl": out_template,
             "quiet": True,
-            "no_warnings": True
+            "no_warnings": True,
+            "socket_timeout": 30,
+            "retries": 3,
+            "fragment_retries": 3
         }
 
         if extract_audio:
@@ -88,7 +92,11 @@ def download_media_file(
                     "preferredquality": "192",
                 }]
         else:
-            ydl_opts["format"] = format_type
+            # إذا لم يكن ffmpeg مثبتاً محلياً، نختار صيغة مدمجة مسبقاً (single-file mp4) لتفادي خطأ الدمج
+            if not is_ffmpeg_available():
+                ydl_opts["format"] = "best[ext=mp4]/best"
+            else:
+                ydl_opts["format"] = format_type
 
         if progress_hook:
             ydl_opts["progress_hooks"] = [progress_hook]
