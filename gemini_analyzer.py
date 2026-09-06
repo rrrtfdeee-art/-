@@ -220,10 +220,11 @@ def auto_detect_selectors_heuristically(toc_html: str, chapter_html: str) -> Dic
 def call_gemini_api(
     prompt: str,
     api_key: Optional[str] = None,
-    model_name: str = "gemini-3.6-flash",
+    model_name: str = "gemini-3.5-flash-lite",
     gas_url: Optional[str] = None,
     timeout: int = 60
 ) -> str:
+
     """
     إرسال الطلب إلى Gemini مع دعم مجمع الوسائط المتعددة (Multi-GAS Pool & Automatic Failover).
     """
@@ -238,7 +239,35 @@ def call_gemini_api(
 
     last_error = ""
 
-    # تجربة وسائط المجمع بالترتيب مع التبديل التلقائي عند الخطأ
+    # 1. إذا كان مفتاح Gemini API متوفراً، نستخدم SDK الرسمي أو الاتصال المباشر أولاً
+    if stored_key:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=stored_key)
+            g_model = genai.GenerativeModel(f"models/{clean_model}" if not clean_model.startswith("models/") else clean_model)
+            resp = g_model.generate_content(prompt)
+            if resp and resp.text:
+                return resp.text.strip()
+        except Exception as sdk_err:
+            last_error = f"SDK Error: {sdk_err}"
+            # محاولة REST API المباشر
+            try:
+                direct_url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={stored_key}"
+                direct_payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.1}
+                }
+                direct_res = requests.post(direct_url, json=direct_payload, timeout=timeout)
+                if direct_res.status_code == 200:
+                    res_json = direct_res.json()
+                    candidates = res_json.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        return "".join(p.get("text", "") for p in parts)
+            except Exception as e_direct:
+                last_error = f"Direct REST Error: {e_direct}"
+
+    # 2. في حال عدم وجود مفتاح أو فشل الاتصال المباشر، تجربة وسائط GAS
     for endpoint in endpoints_to_try:
         try:
             payload = {
@@ -257,30 +286,15 @@ def call_gemini_api(
                 continue
             
             # نجاح الاستجابة
-            return data.get("text", "")
+            text_val = data.get("text", "")
+            if text_val:
+                return text_val
         except Exception as e_endpoint:
             last_error = str(e_endpoint)
             continue
 
-    # في حال تعثر كافة الوسائط في المجمع، محاولة الاتصال المباشر بـ REST API
-    if stored_key:
-        try:
-            direct_url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={stored_key}"
-            direct_payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"}
-            }
-            direct_res = requests.post(direct_url, json=direct_payload, timeout=timeout)
-            if direct_res.status_code == 200:
-                res_json = direct_res.json()
-                candidates = res_json.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    return "".join(p.get("text", "") for p in parts)
-        except Exception as e_direct:
-            last_error = f"فشل الاتصال المباشر أيضاً: {str(e_direct)}"
+    raise RuntimeError(f"تعذر استلام الرد من جميع مصادر الذكاء الاصطناعي المتاحة: {last_error}")
 
-    raise RuntimeError(f"تعذر استلام الرد من جميع وسائط Google Apps Script المتاحة: {last_error}")
 
 
 def fetch_html_via_gas_pool(target_url: str, timeout: int = 25) -> Tuple[bool, str]:

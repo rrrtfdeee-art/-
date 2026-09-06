@@ -958,7 +958,8 @@ def evaluate_and_refine_chapter_quality(novel_name: str, chapter_number: int, dr
     try:
         from gemini_analyzer import call_gemini_api
         full_review_prompt = f"{review_prompt}\n\nالرواية: {novel_name}\nالعنوان: {draft_title}\n\nالنص:\n{draft_content[:25000]}"
-        text_out = call_gemini_api(full_review_prompt, model_name="gemini-2.5-flash")
+        text_out = call_gemini_api(full_review_prompt, model_name="gemini-3.6-flash")
+
 
         clean_out = text_out.strip()
         if "```json" in clean_out:
