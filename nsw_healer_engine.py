@@ -56,6 +56,54 @@ ADMIN_CHAT_ID = os.getenv("NSW_TELEGRAM_CHAT_ID", "1974483260")
 
 MIN_SAFE_TEXT_LENGTH = 800
 
+# 📡 تتبع الحالة اللحظية المباشرة للمحرك 24/7
+ENGINE_LIVE_STATE = {
+    "status": "خامل (في وضع الاستعداد)",
+    "current_task": "انتظار الأوامر أو الجدولة الدورية",
+    "novel_name": "لا يوجد",
+    "chapter_num": None,
+    "stage": "جاهز",
+    "details": "المحرك مستقر، ولم يتم رصد أي نشاط مكثف حالياً.",
+    "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    "last_updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+    "processed_count": 0,
+    "last_error": None
+}
+
+def set_engine_state(status: str, task: str, stage: str, novel: str = "عام", chapter: Optional[int] = None, details: str = ""):
+    """تحديث الحالة اللحظية لما يقوم به المحرك الآن بدقة ثانية بثانية."""
+    global ENGINE_LIVE_STATE
+    ENGINE_LIVE_STATE["status"] = status
+    ENGINE_LIVE_STATE["current_task"] = task
+    ENGINE_LIVE_STATE["stage"] = stage
+    ENGINE_LIVE_STATE["novel_name"] = novel
+    ENGINE_LIVE_STATE["chapter_num"] = chapter
+    ENGINE_LIVE_STATE["details"] = details
+    ENGINE_LIVE_STATE["last_updated"] = time.strftime("%H:%M:%S")
+
+def get_realtime_engine_report() -> str:
+    """توليد التقرير الآني الحي لحالة المحرك بصيغة HTML تليجرام احترافية."""
+    st = ENGINE_LIVE_STATE
+    icon = "⚡" if "نشط" in st["status"] or "جاري" in st["status"] else ("⏳" if "تهدئة" in st["status"] or "انتظار" in st["status"] else "💤")
+    
+    report = (
+        f"{icon} <b>[التقرير الآني لما يفعله المحرك الآن]</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📍 <b>الحالة العامة:</b> {st['status']}\n"
+        f"⚙️ <b>المهمة الحالية:</b> {st['current_task']}\n"
+        f"📖 <b>الرواية:</b> {st['novel_name']}\n"
+    )
+    if st["chapter_num"]:
+        report += f"🔢 <b>الفصل المستهدف:</b> {st['chapter_num']}\n"
+    report += (
+        f"🚧 <b>المرحلة البرمجية:</b> {st['stage']}\n"
+        f"📝 <b>التفاصيل اللحظية:</b> {st['details']}\n"
+        f"⏰ <b>آخر تحديث للنبض:</b> {st['last_updated']}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💡 <i>المحرك يعمل بأقصى طاقة ويقوم بالاستصلاح وملء الفجوات ومزامنة الجداول تلقائياً.</i>"
+    )
+    return report
+
 
 # ==============================================================================
 # 🔔 1. نظام التنبيهات وإشعارات الأعطال ونفاد الحصص
@@ -923,6 +971,7 @@ def fix_single_chapter_x(novel_name: str, chapter_number: int, custom_toc_url: O
     يقوم المشرف بإدخال (اسم الرواية + رقم الفصل)، فيقوم السيرفر بجلب الفصل الخام
     من صفحة الفهرس والمصدر الأصلي فوراً، وترجمته، وتدقيقه، وتحديثه أو نشره مباشرة.
     """
+    set_engine_state("نشط ⚡", f"إصلاح الفصل {chapter_number}", "بدء فحص الرواية والمصدر", novel=novel_name, chapter=chapter_number, details="جاري البحث عن معلومات الفهرس والمصدر الأصلي...")
     logger.info(f"🎯 [إصلاح يدوي مخصص] طلب إصلاح الفصل {chapter_number} لرواية '{novel_name}'...")
     notify_admin(f"🎯 <b>[طلب إصلاح مخصص]:</b> جاري جلب الفصل {chapter_number} لرواية <b>{novel_name}</b> من المصدر فوراً...")
 
@@ -931,6 +980,7 @@ def fix_single_chapter_x(novel_name: str, chapter_number: int, custom_toc_url: O
 
     if not toc_url:
         err = f"تعذر تحديد رابط الفهرس للرواية '{novel_name}'. يرجى تزويد الرابط في الجدول أو يدوياً."
+        set_engine_state("خامل (مع خطأ)", "فشل العثور على المصدر", "خطأ فادح", novel=novel_name, chapter=chapter_number, details=err)
         notify_unfixable_error(novel_name, chapter_number, err, "إصلاح مخصص")
         return {"success": False, "error": err}
 

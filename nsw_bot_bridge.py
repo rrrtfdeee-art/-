@@ -129,7 +129,10 @@ def run_bridge_loop(single_pass: bool = False):
                         text = msg.get("text") or msg.get("data") or ""
                         text_clean = text.strip().lower()
                         # الأوامر السحابية المباشرة
-                        if text_clean == "/fill_gaps" or text_clean == "ملء الفجوات":
+                        if text_clean in ["/status", "/now", "التقرير الاني", "التقرير الآني", "ماذا تفعل الآن", "الحالة"]:
+                            report_msg = nsw_healer_engine.get_realtime_engine_report()
+                            send_instant_message(report_msg, user_id)
+                        elif text_clean == "/fill_gaps" or text_clean == "ملء الفجوات":
                             send_instant_message("🧩 <i>جاري فحص كافة الجداول وبلوجر، وسحب وترجمة ونشر الفصول المفقودة تلقائياً...</i>", user_id)
                             threading.Thread(target=nsw_healer_engine.run_auto_fill_all_gaps, daemon=True).start()
                         elif text_clean == "/heal_now" or text_clean == "استصلاح":
