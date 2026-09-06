@@ -571,14 +571,21 @@ def get_novel_source_info(novel_name: str) -> Dict[str, Any]:
             }
 
     try:
-        url = f"https://docs.google.com/spreadsheets/d/{NOVELS_INDEX_SPREADSHEET_ID}/export?format=csv"
+        url = f"https://docs.google.com/spreadsheets/d/{NOVELS_INDEX_SPREADSHEET_ID}/gviz/tq?tqx=out:json"
         res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
-        lines = res.text.splitlines()
-        for line in lines[1:]:
-            parts = [p.strip('"') for p in line.split(",")]
-            if len(parts) >= 3:
-                name_col = parts[0].strip()
-                index_col = parts[2].strip()
+        text = res.text
+        if "google.visualization.Query.setResponse(" in text:
+            text = text.split("google.visualization.Query.setResponse(")[1].rsplit(");", 1)[0]
+        data = json.loads(text)
+        rows = data.get("table", {}).get("rows", [])
+        for r in rows:
+            c = r.get("c", [])
+            if len(c) > 0 and c[0]:
+                name_col = str(c[0].get("v", "")).strip()
+                # العمود H (الفهرس 7) هو "الرابط الاصلي"، وإذا لم يوجد نأخذ العمود C (الفهرس 2)
+                orig_url = str(c[7].get("v", "") if len(c) > 7 and c[7] else "").strip()
+                index_col = orig_url if (orig_url and orig_url != "None") else str(c[2].get("v", "") if len(c) > 2 and c[2] else "").strip()
+                
                 if novel_name.lower() in name_col.lower() or name_col.lower() in novel_name.lower():
                     domain = scraper_engine.extract_clean_domain(index_col)
                     cfg = database.get_domain_config(domain) or {}
