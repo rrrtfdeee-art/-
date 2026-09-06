@@ -191,16 +191,58 @@ def get_cinema_sources(title: str, c_type: str = "movie", season: int = 1, episo
             "type": "direct_download"
         })
 
-    # 2. المصادر الرسمية العالمية (للمشاهدة القانونية أو الاشتراك)
+    # 2. كبرى منصات البث العربية المجانية المشهورة
+    sources.append({
+        "name": "🎬 إيجي بست (EgyBest)",
+        "url": f"https://egybest.to/explore/?q={encoded_title}",
+        "type": "free_stream"
+    })
+    sources.append({
+        "name": "🔥 أكوام (Akwam HD)",
+        "url": f"https://akwam.to/search?q={encoded_title}",
+        "type": "free_stream"
+    })
+    sources.append({
+        "name": "🍿 وي سيما (WeCima / MyCima)",
+        "url": f"https://wecima.show/search/{encoded_title}/",
+        "type": "free_stream"
+    })
+    sources.append({
+        "name": "🧲 خادم التورنت فائق السرعة (YTS / 1337x)",
+        "url": f"https://1337x.to/search/{encoded_title}/1/",
+        "type": "torrent"
+    })
+
+    # 3. المنصات الرسمية العالمية والعربية المشهورة (المدفوعة والمجانية)
+    sources.append({
+        "name": "👑 منصة شاهد VIP (Shahid)",
+        "url": f"https://shahid.mbc.net/ar/search?q={encoded_title}",
+        "type": "official_paid"
+    })
     sources.append({
         "name": "🍿 منصة Netflix",
         "url": f"https://www.netflix.com/search?q={encoded_title}",
-        "type": "official"
+        "type": "official_paid"
+    })
+    sources.append({
+        "name": "✨ منصة OSN+ / TOD",
+        "url": f"https://osnplus.com/ar-ae/search?q={encoded_title}",
+        "type": "official_paid"
+    })
+    sources.append({
+        "name": "🌟 منصة Disney+",
+        "url": f"https://www.disneyplus.com/search?q={encoded_title}",
+        "type": "official_paid"
+    })
+    sources.append({
+        "name": "📦 منصة Amazon Prime Video",
+        "url": f"https://www.primevideo.com/search?phrase={encoded_title}",
+        "type": "official_paid"
     })
     sources.append({
         "name": "⭐ قاعدة بيانات وتراخيص IMDb",
         "url": f"https://www.imdb.com/find/?q={encoded_title}",
-        "type": "official"
+        "type": "official_info"
     })
 
     return sources

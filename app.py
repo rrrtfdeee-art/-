@@ -949,4 +949,29 @@ with tab_nsw:
             else:
                 st.info("لا توجد فجوات مفقودة لملئها حالياً.")
 
+    st.markdown("---")
+    st.markdown("#### 🎯 ميزة إصلاح الفصل المخصص X (Fix Specific Chapter)")
+    st.caption("حدد اسم الرواية ورقم الفصل، ليقوم السيرفر بسحبه فورياً من المصدر، وترجمته وتدقيقه، وتحديثه في مكانه أو نشره.")
+
+    col_fix_n, col_fix_num = st.columns([3, 1])
+    with col_fix_n:
+        fix_novel_inp = st.text_input("اسم الرواية للإصلاح المباشر:", value="After Severing Ties", key="fix_novel_inp")
+    with col_fix_num:
+        fix_chap_num_inp = st.number_input("رقم الفصل المستهدف (X):", min_value=1, max_value=99999, value=456, step=1, key="fix_chap_num_inp")
+
+    fix_custom_toc = st.text_input("رابط الفهرس الأصلي (اختياري - يترك فارغاً للاستعلام التلقائي من الجدول):", value="", placeholder="https://www.69shuba.com/book/54809.htm")
+
+    if st.button("🚀 سحب وإصلاح وتحديث هذا الفصل الآن", use_container_width=True, type="primary"):
+        with st.spinner(f"جاري جلب الفصل {fix_chap_num_inp} لرواية '{fix_novel_inp}' من المصدر وترجمته وتحديثه..."):
+            fix_res = nsw_healer_engine.fix_single_chapter_x(
+                novel_name=fix_novel_inp.strip(),
+                chapter_number=int(fix_chap_num_inp),
+                custom_toc_url=fix_custom_toc.strip() if fix_custom_toc.strip() else None
+            )
+            if fix_res.get("success"):
+                st.balloons()
+                st.success(f"🎉 تم بنجاح إصلاح واعتماد الفصل {fix_chap_num_inp}: {fix_res.get('title')}")
+            else:
+                st.error(f"❌ تعذر إصلاح الفصل: {fix_res.get('error')}")
+
 st.markdown('</div>', unsafe_allow_html=True)

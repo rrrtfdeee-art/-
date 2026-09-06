@@ -135,6 +135,21 @@ def run_bridge_loop(single_pass: bool = False):
                         elif text_clean == "/heal_now" or text_clean == "استصلاح":
                             send_instant_message("🩹 <i>جاري فحص الفصول المبتورة وسحبها من المصدر وتحديث Blogger فورياً...</i>", user_id)
                             threading.Thread(target=nsw_healer_engine.run_full_auto_heal, daemon=True).start()
+                        elif text_clean.startswith("/fix"):
+                            # مثال: /fix After Severing Ties 456
+                            parts = text.strip().split()
+                            if len(parts) >= 3:
+                                chap_to_fix = int(parts[-1]) if parts[-1].isdigit() else 1
+                                novel_to_fix = " ".join(parts[1:-1])
+                            elif len(parts) == 2 and parts[1].isdigit():
+                                chap_to_fix = int(parts[1])
+                                novel_to_fix = "After Severing Ties"
+                            else:
+                                chap_to_fix = 456
+                                novel_to_fix = "After Severing Ties"
+                            
+                            send_instant_message(f"🎯 <i>جاري سحب وترجمة وتدقيق الفصل {chap_to_fix} لرواية '{novel_to_fix}' من المصدر فوراً...</i>", user_id)
+                            threading.Thread(target=nsw_healer_engine.fix_single_chapter_x, args=(novel_to_fix, chap_to_fix), daemon=True).start()
                         else:
                             # تمرير التحديث فورياً إلى Google Apps Script
                             forward_to_gas(u)

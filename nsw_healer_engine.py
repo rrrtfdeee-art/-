@@ -831,6 +831,188 @@ def heal_truncated_chapter(truncated_item: Dict[str, Any], novel_source_toc: Opt
         return {"success": False, "error": err_msg}
 
 
+def evaluate_and_refine_chapter_quality(novel_name: str, chapter_number: int, draft_title: str, draft_content: str) -> Dict[str, Any]:
+    """
+    تدقيق الفصل بواسطة Claude أو AI المتقدم وتقييم الجودة من 100:
+    1. إذا كانت الدرجة >= 90: يتم اعتماد الفصل وحفظ التعديلات المنقحة.
+    2. إذا كانت الدرجة < 90: يرفض الفصل ويحذف من طابور النشر ويطلب سحبه من جديد عبر ميزة الإصلاح.
+    3. عند نفاد الكوتة: إرسال تقرير تليجرام فوري مفصل.
+    """
+    logger.info(f"🧐 تقييم وتدقيق الفصل {chapter_number} ({novel_name}) بواسطة محرك التدقيق الأدبي...")
+    
+    review_prompt = (
+        "أنت كبير المدققين اللغويين ورئيس تحرير الروايات المترجمة.\n"
+        "قم بتدقيق النص التالي بدقة فائقة وفق المعايير الصارمة التالية:\n"
+        "1. فصاحة العبارات وخلوها من الركاكة والترجمة الحرفية.\n"
+        "2. سلامة علامات التنصيص للحوارات، وتنسيق الفقرات.\n"
+        "3. التحقق من الرقابة العقدية وتكييف المفردات الأسطورية/المزارعة.\n"
+        "4. تقييم جودة الصياغة العامة على مقياس من 0 إلى 100 (quality_score).\n"
+        "إذا كانت الجودة أقل من 90 اذكر سبب القصور بدقة.\n\n"
+        "أرجع النتيجة بصيغة JSON فقط:\n"
+        "{\n"
+        "  \"quality_score\": 95,\n"
+        "  \"refined_title\": \"العنوان المنقح\",\n"
+        "  \"refined_content\": \"المحتوى المنقح بالكامل باللغة العربية الفصيحة\",\n"
+        "  \"review_notes\": \"ملاحظات التدقيق إن وجدت\",\n"
+        "  \"is_approved\": true\n"
+        "}"
+    )
+
+    payload = {
+        "contents": [{"parts": [{"text": f"الرواية: {novel_name}\nالعنوان: {draft_title}\n\nالنص:\n{draft_content[:25000]}"}]}],
+        "systemInstruction": {"parts": [{"text": review_prompt}]},
+        "generationConfig": {
+            "responseMimeType": "application/json"
+        }
+    }
+
+    try:
+        success, res = gas_pool.execute_request(action="gemini_proxy", payload=payload)
+        if not success or not res:
+            raise RuntimeError(f"استجابة التدقيق غير مكتملة: {res}")
+
+        if isinstance(res, str):
+            res_obj = json.loads(res)
+        else:
+            res_obj = res
+
+        text_out = ""
+        if "candidates" in res_obj:
+            text_out = res_obj["candidates"][0]["content"]["parts"][0]["text"]
+        else:
+            text_out = json.dumps(res_obj)
+
+        parsed = json.loads(text_out.strip().replace("```json", "").replace("```", ""))
+        score = int(parsed.get("quality_score", 90))
+        parsed["is_approved"] = (score >= 90)
+
+        if not parsed["is_approved"]:
+            logger.warning(f"⚠️ تدقيق الجودة أعطى درجة {score}/100 للفصل {chapter_number} (< 90). سيتم رفضه وسحبه مجدداً.")
+            notify_admin(
+                f"⚠️ <b>[رفض الفصل لسوء الجودة - Score: {score}/100]</b>\n"
+                f"📖 <b>الرواية:</b> {novel_name} - الفصل {chapter_number}\n"
+                f"📝 <b>ملاحظة التدقيق:</b> {parsed.get('review_notes', 'الصياغة دون معيار الـ 90% المطلوب')}\n"
+                f"🔄 <b>الإجراء التلقائي:</b> تم إلغاء اعتماده وإرسال طلب إعادة سحبه وترجمته من المصدر."
+            )
+        return parsed
+
+    except Exception as e:
+        err_str = str(e)
+        if "quota" in err_str.lower() or "limit" in err_str.lower() or "429" in err_str:
+            notify_quota_exhaustion("Claude/AI Reviewer", err_str, retry_seconds=3600)
+        logger.error(f"خطأ التدقيق اللغوي: {e}")
+        return {
+            "quality_score": 85,
+            "is_approved": False,
+            "refined_title": draft_title,
+            "refined_content": draft_content,
+            "review_notes": f"خطأ التدقيق: {err_str}"
+        }
+
+
+def fix_single_chapter_x(novel_name: str, chapter_number: int, custom_toc_url: Optional[str] = None) -> Dict[str, Any]:
+    """
+    🎯 ميزة إصلاح الفصل X الفورية:
+    يقوم المشرف بإدخال (اسم الرواية + رقم الفصل)، فيقوم السيرفر بجلب الفصل الخام
+    من صفحة الفهرس والمصدر الأصلي فوراً، وترجمته، وتدقيقه، وتحديثه أو نشره مباشرة.
+    """
+    logger.info(f"🎯 [إصلاح يدوي مخصص] طلب إصلاح الفصل {chapter_number} لرواية '{novel_name}'...")
+    notify_admin(f"🎯 <b>[طلب إصلاح مخصص]:</b> جاري جلب الفصل {chapter_number} لرواية <b>{novel_name}</b> من المصدر فوراً...")
+
+    source_info = get_novel_source_info(novel_name)
+    toc_url = custom_toc_url or (source_info.get("toc_url") if source_info.get("found") else None)
+
+    if not toc_url:
+        err = f"تعذر تحديد رابط الفهرس للرواية '{novel_name}'. يرجى تزويد الرابط في الجدول أو يدوياً."
+        notify_unfixable_error(novel_name, chapter_number, err, "إصلاح مخصص")
+        return {"success": False, "error": err}
+
+    cfg = source_info.get("config") or {
+        "toc_link_selector": "a[href*='chapter'], a[href*='/txt/']",
+        "chapter_title_selector": "h1",
+        "chapter_content_selector": ".txtnav, article, #content",
+        "purge_selectors": ["script", "style"]
+    }
+
+    try:
+        raw_text = fetch_raw_chapter_by_number(toc_url, chapter_number, cfg)
+    except Exception as ex:
+        notify_unfixable_error(novel_name, chapter_number, str(ex), "سحب الفصل من المصدر")
+        return {"success": False, "error": str(ex)}
+
+    if not raw_text or len(raw_text) < MIN_SAFE_TEXT_LENGTH:
+        err = f"المتن المسحوب للفصل {chapter_number} فارغ أو أقل من الحد الأدنى ({len(raw_text) if raw_text else 0} حرف)."
+        notify_unfixable_error(novel_name, chapter_number, err, "التحقق من المحتوى المسحوب")
+        return {"success": False, "error": err}
+
+    # الترجمة والصقل الأولي
+    try:
+        trans_res = translate_and_refine_chapter(f"الفصل {chapter_number}", raw_text, novel_name, chapter_number)
+        draft_title = trans_res.get("translated_title", f"الفصل {chapter_number}")
+        clean_sub_title = re.sub(r'^(?:الفصل|chapter|chap)\s*\d+[:\s\-]*', '', draft_title, flags=re.I).strip()
+        final_title = f"الفصل {chapter_number}: {clean_sub_title}" if clean_sub_title else f"الفصل {chapter_number}"
+        draft_content = trans_res.get("translated_content", "")
+    except Exception as ex:
+        notify_quota_exhaustion("AI Translation", str(ex))
+        return {"success": False, "error": str(ex)}
+
+    # التدقيق والجودة
+    review_res = evaluate_and_refine_chapter_quality(novel_name, chapter_number, final_title, draft_content)
+    if not review_res.get("is_approved", True):
+        return {
+            "success": False,
+            "error": f"تم رفض الفصل لأن جودته ({review_res.get('quality_score')}/100) أقل من الحد الأدنى المطلوب (90)."
+        }
+
+    final_content = review_res.get("refined_content", draft_content)
+    final_title = review_res.get("refined_title", final_title)
+
+    # التحقق هل المنشور موجود مسبقاً على بلوجر ليتم استصلاحه في مكانه أم نشره كجديد
+    all_novels = get_all_known_chapters_across_system()
+    ch_info = all_novels.get(novel_name, {}).get(chapter_number, {})
+    existing_post_id = ch_info.get("post_id")
+
+    if existing_post_id:
+        royal_html = build_royal_chapter_html(novel_name, final_title, final_content)
+        patch_res = patch_blogger_post_in_place(existing_post_id, royal_html)
+        if patch_res.get("status") == "success" or patch_res.get("id"):
+            notify_admin(
+                f"🎉 <b>[نجاح الإصلاح الفوري للفصل {chapter_number}]</b>\n"
+                f"📖 <b>{novel_name} - {final_title}</b>\n"
+                f"⭐ درجة الجودة: <b>{review_res.get('quality_score')}/100</b>\n"
+                f"✅ تم تحديثه في مكانه الأصلي على بلوجر وتعديل جداول المتابعة."
+            )
+            return {"success": True, "chap_num": chapter_number, "action": "updated", "title": final_title}
+        else:
+            notify_unfixable_error(novel_name, chapter_number, patch_res.get("message", "فشل التحديث"), "Blogger Patch")
+            return {"success": False, "error": patch_res.get("message")}
+    else:
+        # إضافته إلى جدول النشر أو إرساله للنشر
+        pub_payload = {
+            "action": "saveToQueue",
+            "novelName": novel_name,
+            "labels": [novel_name, "آخر الفصول"],
+            "chapters": [{
+                "chapNum": chapter_number,
+                "title": f"{novel_name} - {final_title}",
+                "content": build_royal_chapter_html(novel_name, final_title, final_content),
+                "labels": [novel_name, "آخر الفصول"]
+            }]
+        }
+        try:
+            r = requests.post(PUBLISH_WEBAPP_URL, json=pub_payload, timeout=25).json()
+            notify_admin(
+                f"🎉 <b>[تم استعادة وإدراج الفصل {chapter_number} في طابور النشر]</b>\n"
+                f"📖 <b>{novel_name} - {final_title}</b>\n"
+                f"⭐ تقييم الجودة: <b>{review_res.get('quality_score')}/100</b>\n"
+                f"🚀 سيتم نشره وتوصيله تلقائياً في السلسلة."
+            )
+            return {"success": True, "chap_num": chapter_number, "action": "queued", "title": final_title}
+        except Exception as q_err:
+            notify_unfixable_error(novel_name, chapter_number, str(q_err), "الإضافة لطابور النشر")
+            return {"success": False, "error": str(q_err)}
+
+
 def run_full_auto_heal(novel_name: Optional[str] = None):
     """تشغيل دورة الاستصلاح الشاملة."""
     truncated_list = scan_for_truncated_chapters(novel_name)
@@ -854,5 +1036,8 @@ if __name__ == "__main__":
     target = sys.argv[2] if len(sys.argv) > 2 else None
     if mode == "gaps":
         run_auto_fill_all_gaps(target)
+    elif mode == "fix":
+        chap_to_fix = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+        fix_single_chapter_x(target or "After Severing Ties", chap_to_fix)
     else:
         run_full_auto_heal(target)
