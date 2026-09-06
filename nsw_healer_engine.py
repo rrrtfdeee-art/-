@@ -345,12 +345,11 @@ def fill_single_missing_gap(novel_name: str, missing_chap_num: int, prev_info: D
         notify_unfixable_error(novel_name, missing_chap_num, err, "سحب المصدر الأصلي")
         return {"success": False, "error": err}
 
-    cfg = source_info.get("config") or {
-        "toc_link_selector": "a[href*='chapter'], a[href*='/txt/']",
-        "chapter_title_selector": "h1",
-        "chapter_content_selector": ".txtnav, article, #content",
-        "purge_selectors": ["script", "style"]
-    }
+    cfg = source_info.get("config") or {}
+    if not cfg.get("toc_link_selector"):
+        cfg["toc_link_selector"] = "a[href*='/1010605889/'], a[href*='chapter'], a[href*='/txt/'], a[href*='.html'], a[href*='/book/']"
+    if not cfg.get("chapter_content_selector"):
+        cfg["chapter_content_selector"] = ".txtnav, article, .entry-content, #content, .content, .read-content, #htmlContent"
 
     # 2. سحب المتن الخام
     try:
@@ -647,6 +646,28 @@ def get_novel_source_info(novel_name: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"خطأ قراءة شيت الفهارس: {e}")
 
+    # مصادر احتياطية مباشرة ومؤكدة في حال حدوث بطء في شبكة Google Sheets
+    KNOWN_FALLBACKS = {
+        "after severing ties": "https://www.novel543.com/1010605889/dir",
+        "الوريث": "https://www.novel543.com/1010605889/dir",
+        "المنبوذ": "https://www.novel543.com/1010605889/dir",
+        "the expert cultivator in elementary": "https://www.69shuba.com/book/54809/",
+        "المزارع": "https://www.69shuba.com/book/54809/"
+    }
+    for k, u in KNOWN_FALLBACKS.items():
+        if k in novel_name.lower():
+            domain = scraper_engine.extract_clean_domain(u)
+            return {
+                "found": True,
+                "novel_id": None,
+                "toc_url": u,
+                "domain": domain,
+                "config": {
+                    "toc_link_selector": "a[href*='/1010605889/'], a[href*='chapter'], a[href*='/txt/'], a[href*='.html'], a[href*='/book/']",
+                    "chapter_content_selector": ".txtnav, article, .entry-content, #content, .content, .read-content, #htmlContent"
+                }
+            }
+
     return {"found": False}
 
 
@@ -667,28 +688,45 @@ def scan_for_truncated_chapters(novel_name: Optional[str] = None, min_length: in
     return truncated
 
 
+TOC_MEMORY_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+
 def fetch_raw_chapter_by_number(toc_url: str, chapter_number: int, domain_config: Dict[str, Any]) -> Optional[str]:
     """سحب متن الفصل الأصلي الخام برقمه المحدد مباشرة من صفحة الفهرس والمصدر الأصلي."""
+    global TOC_MEMORY_CACHE
     logger.info(f"🌐 جلب الفصل الخام رقم {chapter_number} من الفهرس: {toc_url}")
-    toc_sel = domain_config.get("toc_link_selector") or "a[href*='chapter'], a[href*='/txt/']"
     
-    chapters_list, _ = scraper_engine.crawl_toc_chapters(toc_url, toc_sel)
+    # محددات فهارس شاملة
+    toc_sel = domain_config.get("toc_link_selector") or "a[href*='/1010605889/'], a[href*='chapter'], a[href*='/txt/'], a[href*='.html'], a[href*='/book/']"
+    
+    chapters_list = TOC_MEMORY_CACHE.get(toc_url)
+    if not chapters_list:
+        chapters_list, _ = scraper_engine.crawl_toc_chapters(toc_url, toc_sel)
+        if chapters_list:
+            TOC_MEMORY_CACHE[toc_url] = chapters_list
+
     target_url = None
-    for item in chapters_list:
+    for item in (chapters_list or []):
         if item.get("chapter_number") == chapter_number:
             target_url = item.get("url")
             break
+
+    # محاولة حساب الرابط التلقائي لموقع novel543 إذا لم يظهر بالفهرس
+    if not target_url and "novel543.com/1010605889" in toc_url:
+        target_url = f"https://www.novel543.com/1010605889/8095_{chapter_number}.html"
 
     if not target_url:
         logger.error(f"❌ لم يتم العثور على رابط الفصل {chapter_number} في صفحة الفهرس.")
         return None
 
+    content_sel = domain_config.get("chapter_content_selector") or ".txtnav, article, .entry-content, #content, .content, .read-content, #htmlContent"
+    purge_sel = domain_config.get("purge_selectors") or ["script", "style", "nav", ".header", ".footer"]
+
     with scraper_engine.PlaywrightStealthBrowser(headless=True) as browser:
-        raw_html, _ = browser.get_page_html(target_url, wait_selector=domain_config.get("chapter_content_selector"))
+        raw_html, _ = browser.get_page_html(target_url, wait_selector=content_sel)
         clean_content = scraper_engine.clean_chapter_content(
             raw_html,
-            domain_config.get("chapter_content_selector") or "article, .entry-content, #content, .txtnav",
-            domain_config.get("purge_selectors") or ["script", "style", "nav"]
+            content_sel,
+            purge_sel
         )
         return clean_content
 
@@ -736,26 +774,22 @@ def translate_and_refine_chapter(raw_title: str, raw_content: str, novel_name: s
         }
     }
 
-    success, res = gas_pool.execute_request(action="gemini_proxy", payload=payload)
-    if not success or not res:
-        raise RuntimeError(f"فشل إرسال طلب الترجمة عبر مجمع الوسائط: {res}")
-
     try:
-        if isinstance(res, str):
-            res_obj = json.loads(res)
-        else:
-            res_obj = res
-
-        text_out = ""
-        if "candidates" in res_obj:
-            text_out = res_obj["candidates"][0]["content"]["parts"][0]["text"]
-        elif "translated_content" in res_obj:
-            return res_obj
+        from gemini_analyzer import call_gemini_api
+        full_ai_prompt = f"{system_prompt}\n\n{prompt}"
+        res_text = call_gemini_api(full_ai_prompt, model_name="gemini-3.6-flash")
         
-        parsed_out = json.loads(text_out)
+        # استخراج JSON من النص الناتج
+        clean_json = res_text.strip()
+        if "```json" in clean_json:
+            clean_json = clean_json.split("```json")[1].split("```")[0].strip()
+        elif "```" in clean_json:
+            clean_json = clean_json.split("```")[1].split("```")[0].strip()
+            
+        parsed_out = json.loads(clean_json)
         return parsed_out
-    except Exception as e:
-        logger.error(f"خطأ قراءة استجابة الترجمة: {e}")
+    except Exception as gemini_err:
+        logger.warning(f"خطأ استجابة الترجمة بالذكاء الاصطناعي: {gemini_err}")
         return {
             "translated_title": f"الفصل {chapter_number}",
             "translated_content": raw_content
@@ -922,22 +956,17 @@ def evaluate_and_refine_chapter_quality(novel_name: str, chapter_number: int, dr
     }
 
     try:
-        success, res = gas_pool.execute_request(action="gemini_proxy", payload=payload)
-        if not success or not res:
-            raise RuntimeError(f"استجابة التدقيق غير مكتملة: {res}")
+        from gemini_analyzer import call_gemini_api
+        full_review_prompt = f"{review_prompt}\n\nالرواية: {novel_name}\nالعنوان: {draft_title}\n\nالنص:\n{draft_content[:25000]}"
+        text_out = call_gemini_api(full_review_prompt, model_name="gemini-2.5-flash")
 
-        if isinstance(res, str):
-            res_obj = json.loads(res)
-        else:
-            res_obj = res
+        clean_out = text_out.strip()
+        if "```json" in clean_out:
+            clean_out = clean_out.split("```json")[1].split("```")[0].strip()
+        elif "```" in clean_out:
+            clean_out = clean_out.split("```")[1].split("```")[0].strip()
 
-        text_out = ""
-        if "candidates" in res_obj:
-            text_out = res_obj["candidates"][0]["content"]["parts"][0]["text"]
-        else:
-            text_out = json.dumps(res_obj)
-
-        parsed = json.loads(text_out.strip().replace("```json", "").replace("```", ""))
+        parsed = json.loads(clean_out)
         score = int(parsed.get("quality_score", 90))
         parsed["is_approved"] = (score >= 90)
 
@@ -984,12 +1013,11 @@ def fix_single_chapter_x(novel_name: str, chapter_number: int, custom_toc_url: O
         notify_unfixable_error(novel_name, chapter_number, err, "إصلاح مخصص")
         return {"success": False, "error": err}
 
-    cfg = source_info.get("config") or {
-        "toc_link_selector": "a[href*='chapter'], a[href*='/txt/']",
-        "chapter_title_selector": "h1",
-        "chapter_content_selector": ".txtnav, article, #content",
-        "purge_selectors": ["script", "style"]
-    }
+    cfg = source_info.get("config") or {}
+    if not cfg.get("toc_link_selector"):
+        cfg["toc_link_selector"] = "a[href*='/1010605889/'], a[href*='chapter'], a[href*='/txt/'], a[href*='.html'], a[href*='/book/']"
+    if not cfg.get("chapter_content_selector"):
+        cfg["chapter_content_selector"] = ".txtnav, article, .entry-content, #content, .content, .read-content, #htmlContent"
 
     try:
         raw_text = fetch_raw_chapter_by_number(toc_url, chapter_number, cfg)

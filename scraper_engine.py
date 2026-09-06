@@ -407,8 +407,23 @@ def crawl_toc_chapters(
         structured_chapters = []
         for idx, item in enumerate(raw_chapters, start=1):
             title = item["title"] if item["title"] else f"الفصل {idx}"
+            # استخراج رقم الفصل الحقيقي من العنوان مثل 第477章 أو Chapter 477 أو 477.html
+            parsed_num = None
+            m_cn = re.search(r"第\s*(\d+)\s*章", title)
+            if m_cn:
+                parsed_num = int(m_cn.group(1))
+            else:
+                m_any = re.search(r"(?:chapter|chap|ch\.?|الفصل)?\s*(\d+)", title, re.IGNORECASE)
+                if m_any:
+                    parsed_num = int(m_any.group(1))
+                else:
+                    m_url = re.search(r"_(\d+)\.html|\b(\d+)\.html", item["url"])
+                    if m_url:
+                        parsed_num = int(m_url.group(1) or m_url.group(2))
+
+            chap_num = parsed_num if parsed_num is not None else idx
             structured_chapters.append({
-                "chapter_number": idx,
+                "chapter_number": chap_num,
                 "url": item["url"],
                 "title": title
             })
