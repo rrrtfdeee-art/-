@@ -334,6 +334,14 @@ def normalize_toc_url(url: str) -> str:
         clean_id = re.search(r"/book/(\d+)\.htm", url)
         if clean_id:
             return f"https://www.69shuba.com/book/{clean_id.group(1)}/"
+    # موقع novel543: التأكد أن الرابط ينتهي بـ /dir أو /dir/
+    if "novel543.com" in url:
+        url = url.rstrip("/")
+        if not url.endswith("/dir"):
+            # إذا كان الرابط مثل /1010605889 بدون /dir
+            m = re.search(r"novel543\.com/(\d+)$", url)
+            if m:
+                url = url + "/dir"
     return url
 
 
@@ -361,6 +369,22 @@ def crawl_toc_chapters(
         if not links:
             links = soup.find_all("a", href=re.compile(r"(chapter|ch-|\bch\d+|\bchap\b|/txt/)", re.IGNORECASE))
 
+        # Fallback خاص بـ novel543.com: البحث عن روابط رقمية مثل /1010605889/12345678
+        is_novel543 = "novel543.com" in normalized_url
+        if not links and is_novel543:
+            # استخراج رقم الكتاب من الرابط
+            book_id_match = re.search(r"novel543\.com/(\d+)", normalized_url)
+            if book_id_match:
+                book_id = book_id_match.group(1)
+                links = soup.find_all("a", href=re.compile(rf"/{book_id}/\d+"))
+        
+        # Fallback عام إضافي: البحث عن أي رابط رقمي داخل حاوية القائمة
+        if not links:
+            for container_sel in ["ul.chapters", ".chapter-list", ".list", "#list", ".mulu", ".zjlist", "dd a", ".listmain dd a"]:
+                links = soup.select(container_sel + " a" if " a" not in container_sel else container_sel)
+                if links:
+                    break
+
         raw_chapters = []
         seen_urls = set()
 
@@ -372,6 +396,9 @@ def crawl_toc_chapters(
             full_url = urljoin(normalized_url, href)
             # تجنب تكرار الروابط وتجنب روابط الرئيسية وصفحات الكتب
             if full_url in seen_urls or full_url.rstrip("/").endswith((".com", ".net", ".org", "book")):
+                continue
+            # تجنب روابط /dir نفسها
+            if full_url.rstrip("/").endswith("/dir"):
                 continue
             seen_urls.add(full_url)
 
@@ -465,6 +492,18 @@ def fetch_samples_for_gemini_analysis(
             if href and not href.startswith("#") and "javascript:" not in href:
                 sample_chapter_url = urljoin(toc_url, href)
                 break
+
+        # Fallback خاص بـ novel543.com: البحث عن روابط رقمية
+        if not sample_chapter_url and "novel543.com" in toc_url:
+            book_id_match = re.search(r"novel543\.com/(\d+)", toc_url)
+            if book_id_match:
+                book_id = book_id_match.group(1)
+                novel543_links = soup.find_all("a", href=re.compile(rf"/{book_id}/\d+"))
+                for a in novel543_links:
+                    href = a.get("href")
+                    if href and not href.endswith("/dir"):
+                        sample_chapter_url = urljoin(toc_url, href)
+                        break
 
         # إذا لم نجد رابطاً صريحاً، نأخذ أي رابط داخلي صالح
         if not sample_chapter_url:
