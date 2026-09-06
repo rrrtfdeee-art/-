@@ -202,14 +202,37 @@ def send_to_telegram(bot_token: str, chat_id: str, file_path: str, caption: str 
                 return all_ok, f"تم تقطيع الملف وإرساله على {len(parts)} أجزاء بنجاح."
         return False, f"حجم الملف ({file_size_mb:.1f}MB) يتجاوز الحد المسموح به في Telegram Bot API (50MB)."
 
-    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+    ext = os.path.splitext(file_path)[1].lower()
+    is_video = ext in [".mp4", ".mkv", ".webm", ".mov", ".avi"]
+    is_audio = ext in [".mp3", ".m4a", ".aac", ".ogg", ".wav"]
+
+    if is_video:
+        url = f"https://api.telegram.org/bot{bot_token}/sendVideo"
+        file_key = "video"
+        data = {"chat_id": chat_id, "caption": caption, "supports_streaming": "true"}
+    elif is_audio:
+        url = f"https://api.telegram.org/bot{bot_token}/sendAudio"
+        file_key = "audio"
+        data = {"chat_id": chat_id, "caption": caption}
+    else:
+        url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+        file_key = "document"
+        data = {"chat_id": chat_id, "caption": caption}
+
     try:
         with open(file_path, "rb") as f:
-            files = {"document": f}
-            data = {"chat_id": chat_id, "caption": caption}
-            res = requests.post(url, files=files, data=data, timeout=120)
+            files = {file_key: f}
+            res = requests.post(url, files=files, data=data, timeout=180)
             if res.status_code == 200 and res.json().get("ok"):
                 return True, "تم الإرسال بنجاح إلى تيليجرام!"
+            
+            # في حال رفض sendVideo نجرب sendDocument كحل احتياطي
+            if is_video or is_audio:
+                fallback_url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+                f.seek(0)
+                fb_res = requests.post(fallback_url, files={"document": f}, data={"chat_id": chat_id, "caption": caption}, timeout=180)
+                if fb_res.status_code == 200 and fb_res.json().get("ok"):
+                    return True, "تم الإرسال كمستند فيديو بنجاح!"
             return False, f"رد تيليجرام: {res.text}"
     except Exception as ex:
         return False, str(ex)
