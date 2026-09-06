@@ -540,22 +540,40 @@ def create_bot_app():
 
             def _novel_task():
                 domain = scraper_engine.extract_clean_domain(target_url)
-                novel = database.get_or_create_novel(target_url, title="رواية سحابية", domain=domain)
                 cfg = database.get_domain_config(domain) or {
-                    "toc_link_selector": "a[href*='/txt/'], a[href*='chapter']",
+                    "toc_link_selector": "a[href*='/txt/'], a[href*='chapter'], a[href*='8095_']",
                     "chapter_title_selector": "h1",
-                    "chapter_content_selector": ".txtnav, #chapter-content",
-                    "purge_selectors": ["h1", "script", "style"]
+                    "chapter_content_selector": ".txtnav, #chapter-content, #content, article",
+                    "purge_selectors": ["h1", "script", "style", "nav"]
                 }
-                
+
+                bot.edit_message_text("📑 <b>جاري زحف الفهرس واستخراج قائمة روابط الفصول تلقائياً...</b>", chat_id, status_msg.message_id)
+                try:
+                    chapters_list, detected_title = scraper_engine.crawl_toc_chapters(
+                        target_url,
+                        cfg.get("toc_link_selector") or "a[href*='chapter'], a[href*='/txt/']"
+                    )
+                except Exception as crawl_err:
+                    bot.edit_message_text(f"❌ <b>فشل فحص الفهرس:</b> {crawl_err}", chat_id, status_msg.message_id)
+                    return
+
+                if not chapters_list:
+                    bot.edit_message_text("⚠️ <b>تعذر استخراج روابط الفصول من صفحة الفهرس.</b> قد يحتاج الموقع إلى محددات خاصة أو به حماية.", chat_id, status_msg.message_id)
+                    return
+
+                novel = database.get_or_create_novel(target_url, title=detected_title or "رواية سحابية", domain=domain)
+                database.sync_chapter_manifest(novel["id"], chapters_list)
+
+                bot.edit_message_text(f"🚀 <b>تم العثور على {len(chapters_list)} فصلاً!</b>\nجاري الآن سحب وتجميع الفصول (من {from_ch} إلى {min(to_ch, len(chapters_list))}) في السيرفر...", chat_id, status_msg.message_id)
+
                 # تشغيل السحب في الخلفية
                 session = scraper_engine.start_background_scraping(
                     novel_id=novel["id"],
                     from_chapter=from_ch,
                     to_chapter=to_ch,
                     domain_config=cfg,
-                    min_delay=0.5,
-                    max_delay=1.0,
+                    min_delay=0.3,
+                    max_delay=0.8,
                     headless=True
                 )
 
@@ -566,15 +584,17 @@ def create_bot_app():
                 # تصدير الملف وإرساله
                 full_text, count = database.export_novel_to_text(novel["id"], from_chapter=from_ch, to_chapter=to_ch)
                 if count > 0:
+                    bot.edit_message_text(f"✅ <b>اكتمل سحب {count} فصول بنجاح!</b>\nجاري إنشاء ملف الـ TXT ورفعه...", chat_id, status_msg.message_id)
                     temp_file = os.path.join(media_engine.DOWNLOAD_DIR, f"novel_{novel['id']}_chapters_{from_ch}_to_{to_ch}.txt")
                     with open(temp_file, "w", encoding="utf-8") as f_out:
                         f_out.write(full_text)
 
-                    media_engine.send_to_telegram(BOT_TOKEN, str(chat_id), temp_file, caption=f"📚 تم بنجاح سحب وتصدير {count} فصول كاملة بنص نظيف ومترابط!")
+                    media_engine.send_to_telegram(BOT_TOKEN, str(chat_id), temp_file, caption=f"📚 <b>{novel['title']}</b>\nتم بنجاح سحب وتصدير {count} فصول كاملة بنص نظيف ومترابط!")
                     if os.path.exists(temp_file):
                         os.remove(temp_file)
+                    bot.delete_message(chat_id, status_msg.message_id)
                 else:
-                    bot.send_message(chat_id, "⚠️ لم يتم العثور على فصول مسحوبة في هذا النطاق.")
+                    bot.edit_message_text("⚠️ لم يتم العثور على فصول مسحوبة بنجاح في هذا النطاق.", chat_id, status_msg.message_id)
 
             threading.Thread(target=_novel_task, daemon=True).start()
 
