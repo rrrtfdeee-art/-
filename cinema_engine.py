@@ -29,36 +29,45 @@ def analyze_cinema_content(
     تحليل المحتوى السينمائي (فيلم / مسلسل) بالذكاء الاصطناعي لاستخراج كافة التفاصيل.
     """
     prompt = """
-أنت خبير أرشيف سينمائي وموسوعة أفلام ومسلسلات عالمية وعربية مدعومة بالذكاء الاصطناعي.
-المهمة: قم بالتعرف بدقة على الفيلم أو المسلسل الموصوف أو الموجود في الصورة/النص التالي.
+أنت خبير أرشيف سينمائي وتلفزيوني عالمي، ومتخصص استثنائي في الدراما الآسيوية والمسلسلات الصينية القصيرة (Chinese Mini-Dramas / Short Dramas / 微短剧 / Web Short Series) المنتشرة على منصات مثل:
+(DramaBox, ReelShort, ShortMax, GoodShort, MoboReels, NetShort, Kuaishou, Douyin, Tencent WeTV, iQIYI, Youku, MangoTV, Viki).
+
+المهمة: قم بالتعرف بدقة فائقة على المسلسل أو الفيلم، وخاصة إذا كان مسلسلاً صينياً قصيراً (من نوع: الرئيس التنفيذي المتسلط، زواج المصلحة، الهوية الخفية، عودة الملك/الإله، الانتقام والولادة من جديد، الصعلوك الذي تحول لملياردير، زراعة الخلود).
+استخرج:
+1. الاسم الصيني الأصلي بدقة (بالحروف الصينية Hanzi إن أمكن أو بينيين).
+2. الاسم الإنجليزي والاسم المترجم والشائع بالعربية.
+3. عدد الحلقات الحقيقي (المسلسلات الصينية القصيرة عادة تكون بين 60 إلى 120 حلقة بمدة 1-3 دقائق للحلقة).
+4. المنصة الأصلية للعمل (مثل DramaBox أو ReelShort أو WeTV).
+5. ملخص القصة الدقيق.
 
 قم بإرجاع النتيجة بصيغة JSON حصراً بالشكل التالي دون أي نصوص إضافية:
 {
   "recognized": true,
-  "type": "movie" أو "series" أو "unknown",
-  "title_original": "اسم العمل بلغته الأصلية",
+  "type": "mini_drama" أو "series" أو "movie",
+  "platform": "DramaBox / ReelShort / WeTV / Douyin",
+  "title_original": "اسم العمل بالصينية أو لغته الأصلية",
   "title_arabic": "اسم العمل بالعربي أو الشائع عربياً",
+  "title_english": "English Title",
   "release_year": "سنة الإصدار",
-  "duration": "مدة العرض (مثال: ساعتان و15 دقيقة) للفيلم، أو متوسط مدة الحلقة للمسلسل",
-  "rating": "تقييم العمل (مثال: 8.5/10)",
-  "genres": ["أكشن", "غموض", "دراما"],
+  "duration": "متوسط مدة الحلقة (مثال: 2 دقيقة)",
+  "rating": "تقييم العمل (مثال: 9.2/10)",
+  "genres": ["رئيس تنفيذي", "زواج مدبر", "انتقام", "رومانسية"],
   "story_arabic": "ملخص مشوق ودقيق لقصة العمل باللغة العربية الفصحى (حوالي 3-4 أسطر)",
   "seasons_count": 1,
-  "episodes_per_season": [10],
-  "is_arabic_content": false,
+  "episodes_per_season": [80],
+  "is_chinese_short_drama": true,
   "poster_url": "رابط تقريبي لصورة أو بوستر رسمي بجودة عالية إن وجد",
   "sample_episodes": [
     {
       "season": 1,
       "episode": 1,
-      "title": "عنوان الحلقة الأولى",
-      "summary": "ملخص لأحداث هذه الحلقة",
-      "duration": "45 دقيقة"
+      "title": "الحلقة 1",
+      "summary": "ملخص سريع للحلقة الأولى",
+      "duration": "2 دقيقة"
     }
   ]
 }
 
-إذا كان مسلسلاً، اذكر عدد المواسم بدقة (seasons_count) وعدد الحلقات التقديري لكل موسم.
 إذا لم تستطع التعرف تماماً، ضع "recognized": false مع أفضل تخمين ممكن.
 """
 
@@ -213,7 +222,29 @@ def get_cinema_sources(title: str, c_type: str = "movie", season: int = 1, episo
         "type": "torrent"
     })
 
-    # 3. المنصات الرسمية العالمية والعربية المشهورة (المدفوعة والمجانية)
+    # 3. منصات المسلسلات الصينية والآسيوية القصيرة المشهورة
+    sources.append({
+        "name": "📱 منصة DramaBox (دراما بوكس)",
+        "url": f"https://www.dramaboxdb.com/search?q={encoded_title}",
+        "type": "mini_drama"
+    })
+    sources.append({
+        "name": "🎭 منصة ReelShort الرسمية",
+        "url": f"https://www.reelshort.com/search/{encoded_title}",
+        "type": "mini_drama"
+    })
+    sources.append({
+        "name": "⚡ يوتيوب - مسلسلات صينية مترجمة كاملة",
+        "url": f"https://www.youtube.com/results?search_query={encoded_title}+مسلسل+صيني+قصير+كامل+مترجم",
+        "type": "free_stream"
+    })
+    sources.append({
+        "name": "🌐 ديلي موشن (Dailymotion Mini Dramas)",
+        "url": f"https://www.dailymotion.com/search/{encoded_title}%20chinese%20drama/videos",
+        "type": "free_stream"
+    })
+
+    # 4. المنصات الرسمية العالمية والعربية المشهورة (المدفوعة والمجانية)
     sources.append({
         "name": "👑 منصة شاهد VIP (Shahid)",
         "url": f"https://shahid.mbc.net/ar/search?q={encoded_title}",
