@@ -406,37 +406,91 @@ def create_bot_app():
             status_msg = bot.send_message(chat_id, f"⏳ <b>جاري جلب تفاصيل الحلقة {ep_num} من الموسم {s_num}...</b>")
             def _ep_fetch():
                 ep_info = cinema_engine.get_episode_details(s_name, s_num, ep_num)
-                sources = cinema_engine.get_cinema_sources(s_name, c_type="series", season=s_num, episode=ep_num)
-                markup = types.InlineKeyboardMarkup(row_width=1)
-                for src in sources:
-                    btn = types.InlineKeyboardButton(src["name"], url=src["url"])
-                    markup.add(btn)
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                btn_dl_sub = types.InlineKeyboardButton("📥 تحميل الحلقة (مع الترجمة)", callback_data=f"cin_get_series_{s_num}_{ep_num}_sub")
+                btn_dl_raw = types.InlineKeyboardButton("📥 تحميل الحلقة (بدون ترجمة)", callback_data=f"cin_get_series_{s_num}_{ep_num}_raw")
+                markup.add(btn_dl_sub, btn_dl_raw)
 
                 ep_text = (
                     f"🎬 <b>{s_name} - الموسم {s_num}</b>\n"
                     f"🏷️ <b>الحلقة {ep_num}:</b> {ep_info.get('title', '')}\n"
                     f"⏱️ <b>المدة:</b> {ep_info.get('duration', '45 دقيقة')}\n\n"
                     f"📝 <b>الملخص:</b>\n{ep_info.get('summary', '')}\n\n"
-                    f"🍿 <b>مصادر المشاهدة والتحميل المباشر (المجانية والرسمية):</b>\n"
-                    f"<i>اضغط على المصدر المفضل لديك للتشغيل فوراً بدقة عالية أو التحميل المباشر:</i>"
+                    f"🚀 <i>اختر التحميل مع الترجمة أو بدونها وسيقوم الذكاء الاصطناعي بفحص المصادر وجلب المقطع فوراً:</i>"
                 )
                 bot.edit_message_text(ep_text, chat_id, status_msg.message_id, reply_markup=markup)
             threading.Thread(target=_ep_fetch, daemon=True).start()
             return
 
-        elif data.startswith("cin_dl_"):
+        elif data.startswith("cin_get_"):
+            # مثال: cin_get_movie_sub أو cin_get_series_1_5_sub
+            parts = data.split("_")
+            c_type = parts[2]
+            with_sub = (parts[-1] == "sub")
             cin_data = session_data.get("cinema_data", {})
-            s_name = cin_data.get("title_original") or cin_data.get("title_arabic", "عمل سينمائي")
-            sources = cinema_engine.get_cinema_sources(s_name, c_type="movie")
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            for src in sources:
-                markup.add(types.InlineKeyboardButton(src["name"], url=src["url"]))
+            s_name = cin_data.get("title_original") or cin_data.get("title_arabic", "العمل الفني")
+            
+            s_num = int(parts[3]) if c_type == "series" else 1
+            ep_num = int(parts[4]) if c_type == "series" else 1
 
-            bot.send_message(
-                chat_id,
-                f"🍿 <b>مصادر المشاهدة والتحميل المباشر لـ: {s_name}</b>\nاختر السيرفر المفضل للمشاهدة بدون إعلانات أو التحميل:",
-                reply_markup=markup
-            )
+            sub_str = "مع الترجمة العربية" if with_sub else "النسخة الأصلية بدون ترجمة"
+            label = f"الحلقة {ep_num} من الموسم {s_num}" if c_type == "series" else "الفيلم"
+            status_msg = bot.send_message(chat_id, f"🔍 <b>يقوم الذكاء الاصطناعي الآن بفحص المصادر السحابية لجلب {label} ({sub_str})...</b>\n<i>يرجى الانتظار ثوانٍ قليلة لتنزيل ومعالجة المقطع...</i>")
+
+            def _resolve_and_send():
+                res = cinema_engine.resolve_and_download_cinema_media(
+                    title=s_name,
+                    c_type=c_type,
+                    season=s_num,
+                    episode=ep_num,
+                    with_subtitles=with_sub
+                )
+                if not res.get("success"):
+                    bot.edit_message_text(f"⚠️ {res.get('error')}", chat_id, status_msg.message_id)
+                    return
+
+                fpath = res["filepath"]
+                title = res["title"]
+                size_mb = res["filesize_mb"]
+
+                bot.edit_message_text(f"✅ تم سحب المقطع من الخوادم السحابية ({size_mb} MB)!\nجاري رفعه وإرساله لك الآن...", chat_id, status_msg.message_id)
+                ok, send_info = media_engine.send_to_telegram(BOT_TOKEN, str(chat_id), fpath, caption=f"🎬 <b>{title}</b>\n✨ تم الجلب والتنزيل الآلي بواسطة الذكاء الاصطناعي.")
+                if not ok:
+                    bot.send_message(chat_id, f"⚠️ تنبيه الإرسال: {send_info}")
+                bot.delete_message(chat_id, status_msg.message_id)
+
+            threading.Thread(target=_resolve_and_send, daemon=True).start()
+            return
+
+        elif data.startswith("cin_dl_sub") or data.startswith("cin_dl_raw"):
+            with_sub = ("sub" in data)
+            cin_data = session_data.get("cinema_data", {})
+            s_name = cin_data.get("title_original") or cin_data.get("title_arabic", "الفيلم")
+            
+            sub_str = "مع الترجمة العربية" if with_sub else "النسخة الأصلية بدون ترجمة"
+            status_msg = bot.send_message(chat_id, f"🔍 <b>يقوم الذكاء الاصطناعي بفحص المصادر الخلفية لجلب الفيلم ({sub_str})...</b>")
+
+            def _resolve_movie():
+                res = cinema_engine.resolve_and_download_cinema_media(
+                    title=s_name,
+                    c_type="movie",
+                    with_subtitles=with_sub
+                )
+                if not res.get("success"):
+                    bot.edit_message_text(f"⚠️ {res.get('error')}", chat_id, status_msg.message_id)
+                    return
+
+                fpath = res["filepath"]
+                title = res["title"]
+                size_mb = res["filesize_mb"]
+
+                bot.edit_message_text(f"✅ تم العثور على الفيلم وسحبه سحابياً ({size_mb} MB)!\nجاري تجهيزه وإرساله لك...", chat_id, status_msg.message_id)
+                ok, send_info = media_engine.send_to_telegram(BOT_TOKEN, str(chat_id), fpath, caption=f"🎬 <b>{title}</b>\n✨ تم الجلب بواسطة الذكاء الاصطناعي.")
+                if not ok:
+                    bot.send_message(chat_id, f"⚠️ تنبيه الإرسال: {send_info}")
+                bot.delete_message(chat_id, status_msg.message_id)
+
+            threading.Thread(target=_resolve_movie, daemon=True).start()
             return
 
         if not target_url:

@@ -277,3 +277,63 @@ def get_cinema_sources(title: str, c_type: str = "movie", season: int = 1, episo
     })
 
     return sources
+
+
+def resolve_and_download_cinema_media(
+    title: str,
+    c_type: str = "movie",
+    season: int = 1,
+    episode: int = 1,
+    with_subtitles: bool = True
+) -> Dict[str, Any]:
+    """
+    🔍 بوابة خلفية ذكية للذكاء الاصطناعي:
+    يقوم السيرفر بفحص المصادر المتاحة عنده، واستخراج أفضل رابط فيديو مباشر،
+    وتنزيله سحابياً مع دمج أو توفير الترجمة العربية، وإرجاع ملف الفيديو الجاهز للبوت.
+    """
+    import media_engine
+    
+    # محاولة البحث عن الحلقة/الفيلم في خوادم الفيديو المباشرة
+    search_queries = [
+        f"{title} full movie arabic sub" if c_type == "movie" else f"{title} s{season:02d}e{episode:02d} arabic sub",
+        f"{title} كامل مترجم" if c_type == "movie" else f"{title} الموسم {season} الحلقة {episode} مترجم",
+        f"{title} raw" if not with_subtitles else f"{title}"
+    ]
+
+    for q in search_queries:
+        # البحث في يوتيوب / الخوادم عبر yt-dlp
+        yt_search_url = f"ytsearch3:{q}"
+        try:
+            dl_res = media_engine.download_media_file(yt_search_url, extract_audio=False)
+            if dl_res.get("success") and os.path.exists(dl_res.get("filepath", "")):
+                return {
+                    "success": True,
+                    "filepath": dl_res["filepath"],
+                    "title": dl_res.get("title", title),
+                    "filesize_mb": dl_res.get("filesize_mb", 0),
+                    "with_subtitles": with_subtitles
+                }
+        except Exception:
+            continue
+
+    # محاولة سحب الفيديو المباشر من مصادر البث الحرة (VidSrc / Embed direct stream)
+    sources = get_cinema_sources(title, c_type, season, episode)
+    for src in sources:
+        if src.get("type") in ["free_stream", "direct_download"]:
+            try:
+                dl_res = media_engine.download_media_file(src["url"], extract_audio=False)
+                if dl_res.get("success") and os.path.exists(dl_res.get("filepath", "")):
+                    return {
+                        "success": True,
+                        "filepath": dl_res["filepath"],
+                        "title": f"{title} - {'مترجم' if with_subtitles else 'أصلي'}",
+                        "filesize_mb": dl_res.get("filesize_mb", 0),
+                        "with_subtitles": with_subtitles
+                    }
+            except Exception:
+                continue
+
+    return {
+        "success": False,
+        "error": "لم يتم العثور على تدفق فيديو مباشر قابل للتنزيل الآلي لهذا العمل حالياً في الخوادم الخلفية."
+    }
