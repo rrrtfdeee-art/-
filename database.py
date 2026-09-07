@@ -60,7 +60,7 @@ def init_db(db_path: str = DB_FILE_PATH):
             );
         """)
 
-        # 4. جدول فصول الروايات مع دعم حالة التنزيل والمحتوى
+        # 3. جدول فصول الروايات مع دعم حالة التنزيل والمحتوى
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chapters (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,7 +69,7 @@ def init_db(db_path: str = DB_FILE_PATH):
                 url TEXT NOT NULL,
                 title TEXT,
                 content TEXT,
-                status TEXT DEFAULT 'pending', -- 'pending', 'downloaded', 'failed', 'streamed'
+                status TEXT DEFAULT 'pending', -- 'pending', 'downloaded', 'failed'
                 error_message TEXT,
                 downloaded_at TIMESTAMP,
                 FOREIGN KEY (novel_id) REFERENCES novels (id) ON DELETE CASCADE,
@@ -132,125 +132,120 @@ def save_domain_config(
                 updated_at = excluded.updated_at;
         """, (domain.lower(), toc_link_selector, chapter_title_selector, chapter_content_selector, purge_json, notes, now))
         conn.commit()
-        return True
+    return True
 
 
 def get_all_domains_config(db_path: str = DB_FILE_PATH) -> List[Dict[str, Any]]:
-    """جلب قائمة بجميع الدومينات المحفوظة ومحدداتها."""
+    """جلب قائمة بجميع الدومينات المخزنة في النظام."""
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM domains_config ORDER BY updated_at DESC")
+        cursor.execute("SELECT * FROM domains_config ORDER BY updated_at DESC;")
         rows = cursor.fetchall()
         result = []
         for r in rows:
-            d = dict(r)
+            item = dict(r)
             try:
-                d["purge_selectors"] = json.loads(d["purge_selectors"])
+                item["purge_selectors"] = json.loads(item["purge_selectors"])
             except Exception:
-                d["purge_selectors"] = []
-            result.append(d)
+                item["purge_selectors"] = []
+            result.append(item)
         return result
 
 
 def delete_domain_config(domain: str, db_path: str = DB_FILE_PATH) -> bool:
-    """حذف إعدادات دومين من قاعدة البيانات."""
+    """حذف إعدادات دومين معين من قاعدة البيانات."""
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM domains_config WHERE domain = ?", (domain.lower(),))
         conn.commit()
-        return cursor.rowcount > 0
-
-
-# ==============================================================================
-# إدارة إعدادات التطبيق العامة والمفاتيح (App Settings)
-# ==============================================================================
-
-def get_setting(key: str, default: str = "", db_path: str = DB_FILE_PATH) -> str:
-    """استرجاع قيمة إعداد معين من قاعدة البيانات بأمان تام."""
-    try:
-        with get_connection(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
-            row = cursor.fetchone()
-            return row["value"] if row else default
-    except Exception:
-        return default
-
-
-def save_setting(key: str, value: str, db_path: str = DB_FILE_PATH) -> bool:
-    """حفظ أو تحديث قيمة إعداد معين."""
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    try:
-        with get_connection(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO app_settings (key, value, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET
-                    value = excluded.value,
-                    updated_at = excluded.updated_at;
-            """, (key, str(value), now))
-            conn.commit()
-            return True
-    except Exception:
-        return False
+    return True
 
 
 # ==============================================================================
 # إدارة الروايات والفهارس (Novels & Chapters Management)
 # ==============================================================================
 
-def get_or_create_novel(domain: str, toc_url: str, title: str, db_path: str = DB_FILE_PATH) -> Dict[str, Any]:
-    """جلب رواية موجودة أو إنشاء سجل جديد للرواية."""
+def get_or_create_novel(
+    toc_url: str,
+    title: str = "رواية جديدة",
+    domain: str = "",
+    db_path: str = DB_FILE_PATH
+) -> Dict[str, Any]:
+    """إنشاء أو جلب سجل الرواية بناءً على رابط الفهرس TOC URL."""
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM novels WHERE toc_url = ?", (toc_url,))
         row = cursor.fetchone()
         if row:
+            # إذا كان هناك تحديث للعنوان إذا لم يكن افتراضياً
+            if title and title != "رواية جديدة" and row["title"] != title:
+                cursor.execute("UPDATE novels SET title = ?, updated_at = ? WHERE id = ?", (title, now, row["id"]))
+                conn.commit()
+                cursor.execute("SELECT * FROM novels WHERE id = ?", (row["id"],))
+                row = cursor.fetchone()
             return dict(row)
-
+        
+        # إنشاء سجل جديد
         cursor.execute("""
-            INSERT INTO novels (domain, toc_url, title)
-            VALUES (?, ?, ?)
-        """, (domain.lower(), toc_url, title))
-        conn.commit()
+            INSERT INTO novels (domain, toc_url, title, total_chapters, created_at, updated_at)
+            VALUES (?, ?, ?, 0, ?, ?);
+        """, (domain.lower(), toc_url, title, now, now))
         novel_id = cursor.lastrowid
-
+        conn.commit()
+        
         cursor.execute("SELECT * FROM novels WHERE id = ?", (novel_id,))
         return dict(cursor.fetchone())
 
 
-def sync_chapter_manifest(novel_id: int, chapters_data: List[Dict[str, Any]], db_path: str = DB_FILE_PATH) -> int:
-    """مزامنة وحفظ قائمة روابط وعناوين الفصول المكتشفة من صفحة الفهرس."""
+def sync_chapter_manifest(
+    novel_id: int,
+    chapter_list: List[Dict[str, Any]],
+    db_path: str = DB_FILE_PATH
+) -> int:
+    """
+    تحديث قائمة فصول الرواية المستخرجة من صفحة الفهرس.
+    يتم الاحتفاظ بالفصول التي تم تنزيلها مسبقاً، وإضافة الفصول الجديدة بحالة 'pending'.
+    """
+    total = len(chapter_list)
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
-        inserted_count = 0
-        for ch in chapters_data:
+        for idx, item in enumerate(chapter_list, start=1):
+            ch_num = item.get("chapter_number", idx)
+            ch_url = item.get("url", "")
+            ch_title = item.get("title", f"الفصل {ch_num}")
+
+            # إدخال الفصل إذا لم يكن موجوداً، أو تحديث الرابط والعنوان مع الحفاظ على المحتوى وحالة التنزيل
             cursor.execute("""
                 INSERT INTO chapters (novel_id, chapter_number, url, title, status)
                 VALUES (?, ?, ?, ?, 'pending')
                 ON CONFLICT(novel_id, chapter_number) DO UPDATE SET
                     url = excluded.url,
-                    title = COALESCE(excluded.title, chapters.title);
-            """, (novel_id, ch["chapter_number"], ch["url"], ch.get("title", "")))
-            inserted_count += 1
-
-        cursor.execute("UPDATE novels SET total_chapters = (SELECT COUNT(*) FROM chapters WHERE novel_id = ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?", (novel_id, novel_id))
+                    title = CASE WHEN chapters.status = 'downloaded' AND chapters.title IS NOT NULL AND chapters.title != '' 
+                                 THEN chapters.title 
+                                 ELSE excluded.title END;
+            """, (novel_id, ch_num, ch_url, ch_title))
+        
+        # تحديث إجمالي الفصول للرواية
+        cursor.execute("UPDATE novels SET total_chapters = ?, updated_at = ? WHERE id = ?;", (total, now, novel_id))
         conn.commit()
-        return inserted_count
+        return total
 
 
 def save_chapter_content(
     novel_id: int,
     chapter_number: int,
     title: str,
-    content: Optional[str],
+    content: str,
     status: str = "downloaded",
     error_message: Optional[str] = None,
     db_path: str = DB_FILE_PATH
 ) -> bool:
-    """حفظ محتوى الفصل الذي تم سحبه وتحديث حالته وتاريخه."""
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    """حفظ محتوى الفصل الذي تم سحبه وتحديث حالته فوراً في قاعدة البيانات."""
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") if status == "downloaded" else None
+    
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -260,10 +255,10 @@ def save_chapter_content(
                 status = ?,
                 error_message = ?,
                 downloaded_at = ?
-            WHERE novel_id = ? AND chapter_number = ?
-        """, (title, content, status, error_message, now if status == "downloaded" else None, novel_id, chapter_number))
+            WHERE novel_id = ? AND chapter_number = ?;
+        """, (title, content, status, error_message, now, novel_id, chapter_number))
         conn.commit()
-        return cursor.rowcount > 0
+    return True
 
 
 def get_chapters(
@@ -273,7 +268,7 @@ def get_chapters(
     status: Optional[str] = None,
     db_path: str = DB_FILE_PATH
 ) -> List[Dict[str, Any]]:
-    """جلب فصول رواية مع إمكانية الفلترة بالنطاق أو الحالة."""
+    """جلب قائمة الفصول لرواية معينة بناءً على النطاق والحالة."""
     query = "SELECT * FROM chapters WHERE novel_id = ?"
     params: List[Any] = [novel_id]
 
@@ -287,29 +282,31 @@ def get_chapters(
         query += " AND status = ?"
         params.append(status)
 
-    query += " ORDER BY chapter_number ASC"
+    query += " ORDER BY chapter_number ASC;"
 
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute(query, tuple(params))
-        rows = cursor.fetchall()
-        return [dict(r) for r in rows]
+        cursor.execute(query, params)
+        return [dict(r) for r in cursor.fetchall()]
 
 
 def get_novel_stats(novel_id: int, db_path: str = DB_FILE_PATH) -> Dict[str, int]:
-    """إرجاع إحصائيات سريعة عن فصول الرواية وحالاتها."""
+    """حساب إحصائيات الفصول (إجمالي، تم التنزيل، معلق، فاشل)."""
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT 
-                COUNT(*) as total,
-                SUM(CASE WHEN status = 'downloaded' THEN 1 ELSE 0 END) as downloaded,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'downloaded' THEN 1 ELSE 0 END) AS downloaded,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
             FROM chapters
-            WHERE novel_id = ?
+            WHERE novel_id = ?;
         """, (novel_id,))
         row = cursor.fetchone()
+        if not row:
+            return {"total": 0, "downloaded": 0, "pending": 0, "failed": 0}
+        
         return {
             "total": row["total"] or 0,
             "downloaded": row["downloaded"] or 0,
@@ -319,16 +316,111 @@ def get_novel_stats(novel_id: int, db_path: str = DB_FILE_PATH) -> Dict[str, int
 
 
 def clear_novel_chapters_data(novel_id: int, db_path: str = DB_FILE_PATH) -> bool:
-    """تفريغ نصوص الفصول لرواية كاملة بعد التصدير لتوفير المساحة."""
+    """إعادة تعيين محتوى الفصول وحالتها للرواية لجعلها معلقة (pending) لإعادة السحب."""
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE chapters
-            SET content = NULL, status = 'pending', downloaded_at = NULL, error_message = NULL
-            WHERE novel_id = ?
+            SET content = NULL,
+                status = 'pending',
+                error_message = NULL,
+                downloaded_at = NULL
+            WHERE novel_id = ?;
         """, (novel_id,))
         conn.commit()
-        return cursor.rowcount > 0
+    return True
+
+
+def delete_novel(novel_id: int, db_path: str = DB_FILE_PATH) -> bool:
+    """حذف الرواية وجميع فصولها بالكامل من قاعدة البيانات."""
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM novels WHERE id = ?;", (novel_id,))
+        conn.commit()
+    return True
+
+
+# ==============================================================================
+# توليد ملف التصدير المنظم (Structured Export Generator)
+# ==============================================================================
+
+def export_novel_to_text(
+    novel_id: int,
+    from_chapter: Optional[int] = None,
+    to_chapter: Optional[int] = None,
+    db_path: str = DB_FILE_PATH
+) -> Tuple[str, int]:
+    """
+    تجميع الفصول المنزلة بصيغة النص النظيف المطلوب بدقة:
+    ===CHAPTER_START===
+    TITLE: [Chapter Number] : [Chapter Title]
+    CONTENT:
+    [Clean text paragraphs separated by double newlines]
+    ===CHAPTER_END===
+    
+    ترجع النص الكامل وعدد الفصول التي تم تصديرها.
+    """
+    chapters = get_chapters(novel_id, from_chapter=from_chapter, to_chapter=to_chapter, status="downloaded", db_path=db_path)
+    
+    if not chapters:
+        return "", 0
+
+    output_blocks = []
+    for ch in chapters:
+        ch_num = ch["chapter_number"]
+        ch_title = (ch["title"] or f"الفصل {ch_num}").strip()
+        ch_content = (ch["content"] or "").strip()
+        
+        block = (
+            f"===CHAPTER_START===\n"
+            f"TITLE: {ch_num} : {ch_title}\n"
+            f"CONTENT:\n"
+            f"{ch_content}\n"
+            f"===CHAPTER_END==="
+        )
+        output_blocks.append(block)
+
+    full_text = "\n\n".join(output_blocks)
+    return full_text, len(chapters)
+
+
+# ==============================================================================
+# إدارة إعدادات التطبيق والمفاتيح (App Settings)
+# ==============================================================================
+
+def get_setting(key: str, default: str = "", db_path: str = DB_FILE_PATH) -> str:
+    """استرجاع قيمة إعداد معين من قاعدة البيانات."""
+    try:
+        with get_connection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row["value"] if row else default
+    except Exception:
+        return default
+
+
+def save_setting(key: str, value: str, db_path: str = DB_FILE_PATH) -> bool:
+    """حفظ أو تحديث إعداد في قاعدة البيانات."""
+    try:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with get_connection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at;
+            """, (key, value, now))
+            conn.commit()
+            return True
+    except Exception:
+        return False
+
+
+# تهيئة الجداول تلقائياً عند استيراد الوحدة
+init_db()
 
 
 def clear_single_chapter_content(novel_id: int, chapter_number: int, db_path: str = DB_FILE_PATH) -> bool:
@@ -342,36 +434,6 @@ def clear_single_chapter_content(novel_id: int, chapter_number: int, db_path: st
         """, (novel_id, chapter_number))
         conn.commit()
         return cursor.rowcount > 0
-
-
-def delete_novel(novel_id: int, db_path: str = DB_FILE_PATH) -> bool:
-    """حذف رواية وجميع فصولها بالكامل من قاعدة البيانات."""
-    with get_connection(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM novels WHERE id = ?", (novel_id,))
-        conn.commit()
-        return cursor.rowcount > 0
-
-
-def export_novel_to_text(novel_id: int, from_chapter: int = 1, to_chapter: Optional[int] = None, db_path: str = DB_FILE_PATH) -> Tuple[str, int]:
-    """توليد النص النهائي للرواية مجمعاً بالصيغة القياسية المحددة."""
-    chapters = get_chapters(novel_id, from_chapter=from_chapter, to_chapter=to_chapter, status="downloaded", db_path=db_path)
-    output_blocks = []
-    
-    for ch in chapters:
-        if ch.get("content"):
-            title = ch.get("title", f"الفصل {ch['chapter_number']}")
-            content = ch["content"].strip()
-            block = (
-                "===CHAPTER_START===\n"
-                f"TITLE: {title}\n"
-                f"CONTENT:\n{content}\n"
-                "===CHAPTER_END==="
-            )
-            output_blocks.append(block)
-
-    full_text = "\n\n".join(output_blocks)
-    return full_text, len(output_blocks)
 
 
 # ==============================================================================
