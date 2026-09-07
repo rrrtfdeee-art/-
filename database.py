@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import json
 import sqlite3
 import datetime
@@ -165,28 +166,34 @@ def delete_domain_config(domain: str, db_path: str = DB_FILE_PATH) -> bool:
 # ==============================================================================
 
 def get_setting(key: str, default: str = "", db_path: str = DB_FILE_PATH) -> str:
-    """جلب قيمة إعداد معين."""
-    with get_connection(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
-        row = cursor.fetchone()
-        return row["value"] if row else default
+    """استرجاع قيمة إعداد معين من قاعدة البيانات بأمان تام."""
+    try:
+        with get_connection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row["value"] if row else default
+    except Exception:
+        return default
 
 
 def save_setting(key: str, value: str, db_path: str = DB_FILE_PATH) -> bool:
     """حفظ أو تحديث قيمة إعداد معين."""
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with get_connection(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO app_settings (key, value, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = excluded.updated_at;
-        """, (key, str(value), now))
-        conn.commit()
-        return True
+    try:
+        with get_connection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at;
+            """, (key, str(value), now))
+            conn.commit()
+            return True
+    except Exception:
+        return False
 
 
 # ==============================================================================
@@ -365,3 +372,12 @@ def export_novel_to_text(novel_id: int, from_chapter: int = 1, to_chapter: Optio
 
     full_text = "\n\n".join(output_blocks)
     return full_text, len(output_blocks)
+
+
+# ==============================================================================
+# ⚡ التهيئة التلقائية الفورية للجداول بمجرد استيراد الملف لمنع خطأ no such table
+# ==============================================================================
+try:
+    init_db()
+except Exception:
+    pass
