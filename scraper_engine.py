@@ -177,22 +177,47 @@ class PlaywrightStealthBrowser:
 
     def get_page_html(self, url: str, wait_selector: Optional[str] = None) -> Tuple[str, str]:
         """
-        فتح الرابط وجلب محتوى الـ HTML النهائي وعنوان الصفحة مع تجاوز كشف الحظر 403.
+        فتح الرابط وجلب محتوى الـ HTML وعنوان الصفحة:
+        يستخدم Fast HTTP Request أولاً لتوفير موارد السيرفر والسرعة الفائقة،
+        ويتحول تلقائياً إلى متصفح Playwright الكامل في حال الحاجة لجافاسكربت.
         """
+        parsed_u = urlparse(url)
+        referer_val = f"{parsed_u.scheme or 'https'}://{parsed_u.netloc}/" if parsed_u.netloc else "https://www.google.com/"
+
+        # 1. المسار فائق السرعة عبر requests (يوفر 100% من RAM المتصفح ويعمل خلال 0.5 ثانية)
+        try:
+            req_headers = {
+                "User-Agent": random.choice(self.USER_AGENTS),
+                "Referer": referer_val,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,ar;q=0.6",
+                "Sec-Ch-Ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+                "Upgrade-Insecure-Requests": "1"
+            }
+            resp = requests.get(url, headers=req_headers, timeout=12)
+            if resp.status_code == 200 and len(resp.text) > 600:
+                # التأكد من خلو الرد من صفحات تحدي Cloudflare
+                low_text = resp.text[:1000].lower()
+                if "just a moment" not in low_text and "attention required" not in low_text and "cloudflare" not in low_text:
+                    soup = BeautifulSoup(resp.text[:3500], "html.parser")
+                    pg_title = soup.title.get_text(strip=True) if soup.title else ""
+                    return resp.text, pg_title
+        except Exception:
+            pass
+
+        # 2. المسار الكامل عبر متصفح Playwright مع الـ Stealth
         if not self.context:
             self.start()
 
         page = self.context.new_page()
         try:
-            # حقن Referer النطاق تلقائياً لتفادي الحظر 403 في المواقع المحمية
             try:
-                parsed_u = urlparse(url)
-                if parsed_u.netloc:
-                    referer_val = f"{parsed_u.scheme or 'https'}://{parsed_u.netloc}/"
-                    page.set_extra_http_headers({
-                        "Referer": referer_val,
-                        "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,ar;q=0.6"
-                    })
+                page.set_extra_http_headers({
+                    "Referer": referer_val,
+                    "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,ar;q=0.6"
+                })
             except Exception:
                 pass
 
@@ -200,7 +225,7 @@ class PlaywrightStealthBrowser:
             page.goto(url, wait_until="domcontentloaded", timeout=self.timeout)
             
             # معالجة تلقائية لتحدي Cloudflare ("Just a moment...")
-            for _ in range(12):
+            for _ in range(8):
                 current_title = page.title()
                 if "Just a moment" in current_title or "Cloudflare" in current_title or "Attention Required" in current_title:
                     time.sleep(1.0)
@@ -209,7 +234,6 @@ class PlaywrightStealthBrowser:
 
             if wait_selector:
                 try:
-                    # أخذ أول محدد نظيف لتفادي أخطاء الفواصل المركبة في Playwright
                     clean_wait = wait_selector.split(",")[0].strip()
                     if clean_wait:
                         page.wait_for_selector(clean_wait, timeout=3500)
@@ -219,7 +243,7 @@ class PlaywrightStealthBrowser:
             # تمرير خفيف لمحاكاة المستخدم وتحفيز الـ Lazy Loading
             try:
                 page.evaluate("window.scrollBy(0, 500);")
-                time.sleep(0.5)
+                time.sleep(0.3)
             except Exception:
                 pass
 
