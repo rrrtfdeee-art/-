@@ -23,6 +23,29 @@ from bs4 import BeautifulSoup
 import tldextract
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 
+import requests
+
+DEFAULT_GAS_URL = os.getenv("NSW_PUBLISH_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbxqLaqJru1ag-am7G9Mrwy5Nb7HliZlK5vbIEQD9MeV3wOOquNUvz4d7vWEwZxkBI6zIw/exec")
+
+def upload_single_chapter_to_sheet(novel_name: str, chapter_number: int, title: str, content: str, webapp_url: str = DEFAULT_GAS_URL) -> bool:
+    """ضخ فصل واحد فورياً في جدول Google Sheet بمجرد سحبه (Streaming 0ms)."""
+    payload = {
+        "action": "importSingleRawChapter",
+        "novelName": novel_name,
+        "chapter": {
+            "num": chapter_number,
+            "title": title or f"الفصل {chapter_number}",
+            "content": content
+        }
+    }
+    try:
+        res = requests.post(webapp_url, json=payload, timeout=25).json()
+        return res.get("status") == "success"
+    except Exception as ex:
+        print(f"⚠️ خطأ أثناء تدفق الفصل {chapter_number} للشيت: {ex}")
+        return False
+
+
 # حل مشكلة NotImplementedError على ويندوز في بيئات Streamlit
 if sys.platform == "win32":
     try:
@@ -334,14 +357,6 @@ def normalize_toc_url(url: str) -> str:
         clean_id = re.search(r"/book/(\d+)\.htm", url)
         if clean_id:
             return f"https://www.69shuba.com/book/{clean_id.group(1)}/"
-    # موقع novel543: التأكد أن الرابط ينتهي بـ /dir أو /dir/
-    if "novel543.com" in url:
-        url = url.rstrip("/")
-        if not url.endswith("/dir"):
-            # إذا كان الرابط مثل /1010605889 بدون /dir
-            m = re.search(r"novel543\.com/(\d+)$", url)
-            if m:
-                url = url + "/dir"
     return url
 
 
@@ -369,22 +384,6 @@ def crawl_toc_chapters(
         if not links:
             links = soup.find_all("a", href=re.compile(r"(chapter|ch-|\bch\d+|\bchap\b|/txt/)", re.IGNORECASE))
 
-        # Fallback خاص بـ novel543.com: البحث عن روابط رقمية مثل /1010605889/12345678
-        is_novel543 = "novel543.com" in normalized_url
-        if not links and is_novel543:
-            # استخراج رقم الكتاب من الرابط
-            book_id_match = re.search(r"novel543\.com/(\d+)", normalized_url)
-            if book_id_match:
-                book_id = book_id_match.group(1)
-                links = soup.find_all("a", href=re.compile(rf"/{book_id}/\d+"))
-        
-        # Fallback عام إضافي: البحث عن أي رابط رقمي داخل حاوية القائمة
-        if not links:
-            for container_sel in ["ul.chapters", ".chapter-list", ".list", "#list", ".mulu", ".zjlist", "dd a", ".listmain dd a"]:
-                links = soup.select(container_sel + " a" if " a" not in container_sel else container_sel)
-                if links:
-                    break
-
         raw_chapters = []
         seen_urls = set()
 
@@ -396,9 +395,6 @@ def crawl_toc_chapters(
             full_url = urljoin(normalized_url, href)
             # تجنب تكرار الروابط وتجنب روابط الرئيسية وصفحات الكتب
             if full_url in seen_urls or full_url.rstrip("/").endswith((".com", ".net", ".org", "book")):
-                continue
-            # تجنب روابط /dir نفسها
-            if full_url.rstrip("/").endswith("/dir"):
                 continue
             seen_urls.add(full_url)
 
@@ -493,18 +489,6 @@ def fetch_samples_for_gemini_analysis(
                 sample_chapter_url = urljoin(toc_url, href)
                 break
 
-        # Fallback خاص بـ novel543.com: البحث عن روابط رقمية
-        if not sample_chapter_url and "novel543.com" in toc_url:
-            book_id_match = re.search(r"novel543\.com/(\d+)", toc_url)
-            if book_id_match:
-                book_id = book_id_match.group(1)
-                novel543_links = soup.find_all("a", href=re.compile(rf"/{book_id}/\d+"))
-                for a in novel543_links:
-                    href = a.get("href")
-                    if href and not href.endswith("/dir"):
-                        sample_chapter_url = urljoin(toc_url, href)
-                        break
-
         # إذا لم نجد رابطاً صريحاً، نأخذ أي رابط داخلي صالح
         if not sample_chapter_url:
             for a in soup.find_all("a", href=True):
@@ -539,23 +523,31 @@ class NovelScrapingSession:
     def __init__(
         self,
         novel_id: Optional[int] = None,
+        novel_name: str = "رواية عامة",
         domain_config: Optional[Dict[str, Any]] = None,
-        min_delay: float = 2.0,
-        max_delay: float = 4.0,
+        min_delay: float = 1.0,
+        max_delay: float = 2.0,
         headless: bool = True,
+        thread_count: int = 3,
+        auto_stream_to_sheet: bool = True,
         log_callback: Optional[Callable[[str], None]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None
     ):
         self.novel_id = novel_id
+        self.novel_name = novel_name
         self.domain_config = domain_config or {}
         self.min_delay = min_delay
         self.max_delay = max_delay
         self.headless = headless
+        self.thread_count = thread_count
+        self.auto_stream_to_sheet = auto_stream_to_sheet
         self.log_callback = log_callback or (lambda msg: None)
         self.progress_callback = progress_callback or (lambda current, total, status: None)
         
         self.is_paused = False
         self.is_stopped = False
+        self.processed_count = 0
+        self._lock = threading.Lock()
 
     def log(self, message: str):
         """تسجيل رسالة في كونسول السجلات."""
@@ -580,8 +572,12 @@ class NovelScrapingSession:
 
     def run_range(self, from_chapter: int, to_chapter: int):
         """
-        تنفيذ عملية سحب الفصول في النطاق المحدد مع حفظ كل فصل فورياً في SQLite.
+        تنفيذ عملية السحب عبر 3 خطوط متوازية (3 Parallel Workers)
+        مع التدفق المباشر فصلاً بفصل إلى Google Sheet وتطهير ذاكرة السيرفر فوراً.
         """
+        import queue
+        from database import clear_single_chapter_content
+
         chapters_to_scrape = get_chapters(self.novel_id, from_chapter=from_chapter, to_chapter=to_chapter)
         total_in_range = len(chapters_to_scrape)
 
@@ -589,79 +585,100 @@ class NovelScrapingSession:
             self.log("⚠️ لم يتم العثور على أي فصول في هذا النطاق.")
             return
 
-        self.log(f"🚀 بدء سحب {total_in_range} فصلاً (من الفصل {from_chapter} إلى {to_chapter})...")
+        workers_count = max(1, min(self.thread_count, 3))
+        self.log(f"🚀 [انطلاق 3 خطوط متوازية]: بدء سحب {total_in_range} فصلاً عبر {workers_count} عمال متوازيين مع التدفق الفوري للشيت...")
 
         title_sel = self.domain_config.get("chapter_title_selector", "")
         content_sel = self.domain_config.get("chapter_content_selector", "")
         purge_sels = self.domain_config.get("purge_selectors", [])
 
-        with PlaywrightStealthBrowser(headless=self.headless) as browser:
-            for idx, ch in enumerate(chapters_to_scrape, start=1):
-                # التحقق من إشارات التوقف
-                if self.is_stopped:
-                    self.log("⏹️ توقفت عملية السحب بناءً على طلب المستخدم.")
-                    break
+        task_queue = queue.Queue()
+        for ch in chapters_to_scrape:
+            task_queue.put(ch)
 
-                # التحقق من الإيقاف المؤقت
-                while self.is_paused and not self.is_stopped:
-                    time.sleep(0.5)
+        def _worker_thread(worker_id: int):
+            with PlaywrightStealthBrowser(headless=self.headless) as browser:
+                while not task_queue.empty() and not self.is_stopped:
+                    while self.is_paused and not self.is_stopped:
+                        time.sleep(0.5)
+                    if self.is_stopped:
+                        break
 
-                ch_num = ch["chapter_number"]
-                ch_url = ch["url"]
-                cached_status = ch["status"]
+                    try:
+                        ch = task_queue.get_nowait()
+                    except queue.Empty:
+                        break
 
-                # إذا كان الفصل محملاً مسبقاً ولديه محتوى، يتم تخطيه تلقائياً
-                if cached_status == "downloaded" and ch.get("content"):
-                    self.log(f"⚡ الفصل {ch_num} موجود بالفعل في قاعدة البيانات - تم التخطي (Cached).")
-                    self.progress_callback(idx, total_in_range, f"تم التخطي (مخزن): فصل {ch_num}")
-                    continue
+                    ch_num = ch["chapter_number"]
+                    ch_url = ch["url"]
+                    self.log(f"👷 [خيط {worker_id}] ➔ سحب الفصل {ch_num}...")
 
-                self.log(f"📥 جاري سحب الفصل {ch_num} من: {ch_url}")
-                self.progress_callback(idx, total_in_range, f"جاري سحب فصل {ch_num}...")
+                    try:
+                        raw_html, _ = browser.get_page_html(ch_url, wait_selector=content_sel)
+                        ch_title = extract_chapter_title(raw_html, title_sel, fallback_number=ch_num)
+                        clean_content = clean_chapter_content(raw_html, content_sel, purge_sels)
 
-                try:
-                    # جلب صفحة الفصل عبر Playwright مع إعدادات الـ Stealth
-                    raw_html, _ = browser.get_page_html(ch_url, wait_selector=content_sel)
+                        if not clean_content or len(clean_content) < 50:
+                            raise ValueError("المحتوى المستخرج صغير جداً أو محجوب.")
 
-                    # استخراج العنوان والمحتوى المنظف
-                    ch_title = extract_chapter_title(raw_html, title_sel, fallback_number=ch_num)
-                    clean_content = clean_chapter_content(raw_html, content_sel, purge_sels)
+                        # 1. حفظ أولي في SQLite للتأكيد
+                        save_chapter_content(
+                            novel_id=self.novel_id,
+                            chapter_number=ch_num,
+                            title=ch_title,
+                            content=clean_content,
+                            status="downloaded"
+                        )
 
-                    if not clean_content or len(clean_content) < 50:
-                        raise ValueError("لم يتم استخراج محتوى كافٍ من الصفحة. يرجى التحقق من صحة محدد المحتوى.")
+                        # 2. ⚡ التدفق الفوري فصلاً بفصل إلى Google Sheet مباشرة (Streaming)
+                        if self.auto_stream_to_sheet:
+                            stream_ok = upload_single_chapter_to_sheet(
+                                novel_name=self.novel_name,
+                                chapter_number=ch_num,
+                                title=ch_title,
+                                content=clean_content
+                            )
+                            if stream_ok:
+                                try:
+                                    clear_single_chapter_content(self.novel_id, ch_num)
+                                except Exception:
+                                    pass
+                                self.log(f"⚡ [خيط {worker_id}] ✅ تم ضخ الفصل {ch_num} في Google Sheet وتطهير ذاكرته بنجاح!")
+                            else:
+                                self.log(f"ℹ️ [خيط {worker_id}] تم حفظ الفصل {ch_num} محلياً (سيتم رفعه بالدفعة التراكمية).")
 
-                    # حفظ الفصل فورياً في SQLite
-                    save_chapter_content(
-                        novel_id=self.novel_id,
-                        chapter_number=ch_num,
-                        title=ch_title,
-                        content=clean_content,
-                        status="downloaded"
-                    )
+                        with self._lock:
+                            self.processed_count += 1
+                            cnt = self.processed_count
+                        self.progress_callback(cnt, total_in_range, f"اكتمل فصل {ch_num} ({cnt}/{total_in_range})")
 
-                    words_count = len(clean_content.split())
-                    self.log(f"✅ تم حفظ الفصل {ch_num}: '{ch_title}' بنجاح ({words_count} كلمة).")
+                    except Exception as ex:
+                        err_msg = str(ex)
+                        self.log(f"❌ [خيط {worker_id}] تعذر سحب فصل {ch_num}: {err_msg[:60]}")
+                        save_chapter_content(
+                            novel_id=self.novel_id,
+                            chapter_number=ch_num,
+                            title=ch.get("title"),
+                            content=None,
+                            status="failed",
+                            error_message=err_msg
+                        )
+                    finally:
+                        task_queue.task_done()
 
-                except Exception as ex:
-                    err_msg = str(ex)
-                    self.log(f"❌ خطأ أثناء سحب الفصل {ch_num}: {err_msg}")
-                    save_chapter_content(
-                        novel_id=self.novel_id,
-                        chapter_number=ch_num,
-                        title=ch.get("title") or f"الفصل {ch_num}",
-                        content="",
-                        status="failed",
-                        error_message=err_msg
-                    )
-
-                # تطبيق التأخير البشري العشوائي لمنع الحظر
-                if idx < total_in_range and not self.is_stopped:
                     delay = random.uniform(self.min_delay, self.max_delay)
-                    self.log(f"⏳ انتظار ذكي لمحاكاة التصفح البشري: {delay:.2f} ثانية...")
                     time.sleep(delay)
 
-        self.log("🎉 اكتملت معالجة النطاق المطلوب بالكامل.")
+        threads = []
+        for w_id in range(1, workers_count + 1):
+            th = threading.Thread(target=_worker_thread, args=(w_id,), daemon=True)
+            threads.append(th)
+            th.start()
 
+        for th in threads:
+            th.join()
+
+        self.log(f"🎉 اكتملت معالجة كافة الفصول عبر الخطوط المتوازية بنجاح!")
 
 # سجل مركزي للمهام الخلفية لتمكين استمرار السحب حتى عند مغادرة المستخدم للصفحة
 ACTIVE_BACKGROUND_TASKS: Dict[int, NovelScrapingSession] = {}
@@ -672,20 +689,25 @@ def start_background_scraping(
     from_chapter: int,
     to_chapter: int,
     domain_config: Dict[str, Any],
-    min_delay: float = 0.5,
-    max_delay: float = 1.0,
+    novel_name: str = "رواية عامة",
+    thread_count: int = 3,
+    auto_stream_to_sheet: bool = True,
+    min_delay: float = 1.0,
+    max_delay: float = 2.0,
     headless: bool = True
 ) -> NovelScrapingSession:
     """
-    تشغيل سحب الفصول في خيط مستقل بالخلفية (Background Daemon Thread).
-    يستمر هذا الخيط في العمل وتخزين الفصول في SQLite حتى لو أغلقت صفحة الويب تماماً.
+    تشغيل سحب الفصول عبر 3 خطوط متوازية في الخلفية مع التدفق اللحظي فصلاً بفصل إلى Google Sheet.
     """
     session = NovelScrapingSession(
         novel_id=novel_id,
+        novel_name=novel_name,
         domain_config=domain_config,
         min_delay=min_delay,
         max_delay=max_delay,
-        headless=headless
+        headless=headless,
+        thread_count=thread_count,
+        auto_stream_to_sheet=auto_stream_to_sheet
     )
 
     ACTIVE_BACKGROUND_TASKS[novel_id] = session
@@ -704,4 +726,3 @@ def start_background_scraping(
     th = threading.Thread(target=_worker, daemon=True)
     th.start()
     return session
-
