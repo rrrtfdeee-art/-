@@ -1,15 +1,9 @@
-"""
-==============================================================================
-Smart Novel Scraper - Playwright Anti-Bot Engine & Content Cleaner
-==============================================================================
-هذا الملف مسؤول عن:
-1. إدارة متصفح Playwright مع تقنيات مكافحة الكشف والـ Stealth (Anti-Fingerprinting).
-2. استخراج وفهرسة روابط الفصول من صفحة الفهرس (TOC Crawler).
-3. سحب الفصول مع المحاكاة البشرية والتأخير الزمني العشوائي (Smart Throttling).
-4. تنظيف الـ HTML وحذف العناصر المزعجة وتحويل النصوص إلى فقرات منظمة ومفصولة بأسطر مزدوجة.
-5. التخزين اللحظي في SQLite ودعم ميزات الاستئناف (Resume) والتوقف المؤقت.
-"""
 
+scraper_engine.py
+
+100‎%‎
+# -*- coding: utf-8 -*-
+import os
 import time
 import random
 import re
@@ -23,6 +17,7 @@ from bs4 import BeautifulSoup
 import tldextract
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 
+import os
 import requests
 
 DEFAULT_GAS_URL = os.getenv("NSW_PUBLISH_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbxqLaqJru1ag-am7G9Mrwy5Nb7HliZlK5vbIEQD9MeV3wOOquNUvz4d7vWEwZxkBI6zIw/exec")
@@ -726,3 +721,5 @@ def start_background_scraping(
     th = threading.Thread(target=_worker, daemon=True)
     th.start()
     return session
+
+جارٍ عرض scraper_engine.py.
