@@ -778,7 +778,8 @@ st.subheader("3️⃣ سجل الأحداث المباشر & التصدير ال
 tab_logs, tab_export, tab_preview, tab_media, tab_nsw = st.tabs(["📟 Live Console Log", "📥 تصدير الرواية .TXT", "📖 معاينة الفصول", "🎬 محمل وتجزئة الوسائط", "🩹 استصلاح فصول المدونة"])
 
 with tab_logs:
-    st.markdown(f'<div class="terminal-console">{"\n".join(st.session_state.logs[-18:])}</div>', unsafe_allow_html=True)
+    logs_text = "\n".join(st.session_state.logs[-18:])
+    st.markdown(f'<div class="terminal-console">{logs_text}</div>', unsafe_allow_html=True)
 
 with tab_export:
     if st.session_state.active_novel:
@@ -987,4 +988,4 @@ with tab_nsw:
                 st.error(f"❌ تعذر إصلاح الفصل: {fix_res.get('error')}")
 
 st.markdown('</div>', unsafe_allow_html=True)
-جارٍ عرض app_updated_v2.py.
+جارٍ عرض app.py.
