@@ -654,6 +654,14 @@ if st.session_state.active_novel:
     st.markdown('<div class="scraper-card">', unsafe_allow_html=True)
     st.subheader(f"2️⃣ لوحة تحكم السحب: {novel['title']}")
     
+    # حقل اسم الرواية المعتمد في جدول Google Sheet (العمود C)
+    novel_display_name = st.text_input(
+        "🏷️ اسم الرواية المعتمد في جدول Google Sheet (يوضع في العمود C مع كل فصل):",
+        value=novel.get("title", "رواية عامة"),
+        key=f"novel_display_name_{novel['id']}",
+        help="هذا الاسم سيُدرج في العمود C بجدول TranslateQueue مع كل فصل يتم تفريغه أو بثّه مباشرة."
+    )
+    
     # مقاييس الرواية
     stat_c1, stat_c2, stat_c3, stat_c4 = st.columns(4)
     stat_c1.metric("إجمالي الفصول المكتشفة", total_ch)
@@ -695,7 +703,7 @@ if st.session_state.active_novel:
     export_sheet_btn = st.button("📤 تفريغ الفصول في Google Sheet وتطهير ذاكرة السيرفر", key=f"export_sheet_{novel['id']}", use_container_width=True)
     if export_sheet_btn:
         with st.spinner("⏳ جاري تفريغ الفصول في Google Sheet وحذفها من السيرفر..."):
-            res = nsw_healer_engine.export_novel_to_google_sheet_and_purge(novel["id"], novel["title"])
+            res = nsw_healer_engine.export_novel_to_google_sheet_and_purge(novel["id"], novel_display_name)
             if res.get("success"):
                 st.success(f"🎉 تم تفريغ {res.get('exported_count')} فصلاً في Google Sheet وتطهير السيرفر بنجاح!")
                 st.session_state.chapters_cache = get_chapters(novel["id"])
@@ -741,7 +749,7 @@ if st.session_state.active_novel:
                 from_chapter=from_chap,
                 to_chapter=to_chap,
                 domain_config=cfg,
-                novel_name=novel.get("title", "رواية عامة"),
+                novel_name=novel_display_name,
                 min_delay=min_delay,
                 max_delay=max_delay,
                 headless=headless_mode

@@ -273,8 +273,12 @@ def get_all_known_chapters_across_system() -> Dict[str, Dict[int, Dict[str, Any]
             title = str(c[0].get("v", "")).strip()
             m = re.search(r'\d+', title)
             chap_num = int(m.group(0)) if m else 0
-            novel = str(c[5].get("v", "") if len(c) > 5 and c[5] else "عام").strip()
+            # العمود C (الفهرس 2) هو اسم الرواية الجديد، والعمود F (الفهرس 5) هو الاسم القديم
+            novel = str(c[2].get("v", "") if len(c) > 2 and c[2] else "").strip()
+            if not novel:
+                novel = str(c[5].get("v", "") if len(c) > 5 and c[5] else "عام").strip()
             register(novel, chap_num, "Translate Queue")
+
 
     # 5. فحص المدونة الحية عبر Feed
     try:
