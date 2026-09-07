@@ -976,4 +976,3 @@ with tab_nsw:
                 st.error(f"❌ تعذر إصلاح الفصل: {fix_res.get('error')}")
 
 st.markdown('</div>', unsafe_allow_html=True)
-جارٍ عرض app.py.
