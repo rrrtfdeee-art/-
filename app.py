@@ -29,7 +29,8 @@ from database import (
     delete_novel,
     export_novel_to_text,
     get_setting,
-    save_setting
+    save_setting,
+    update_novel_title
 )
 from gemini_analyzer import (
     analyze_site_dom_with_gemini,
@@ -487,20 +488,25 @@ st.caption("نظام هجين ذكي لسحب فصول الروايات تلقا
 st.markdown('<div class="scraper-card">', unsafe_allow_html=True)
 st.subheader("1️⃣ فحص الرواية وجلب الفهرس")
 
-col_url, col_btn_primary, col_btn_ai = st.columns([3, 1.4, 1.3])
+col_url, col_novel_name = st.columns([2, 1.5])
 with col_url:
     toc_url_input = st.text_input(
-        "رابط صفحة الفهرس (Table of Contents URL)",
+        "🔗 رابط صفحة الفهرس (Table of Contents URL):",
         placeholder="https://www.69shuba.com/book/54809.htm",
         key="toc_url"
     )
+with col_novel_name:
+    custom_novel_title_input = st.text_input(
+        "🏷️ اسم الرواية (الذي سيوضع في العمود C بالشيت):",
+        placeholder="مثال: After Severing Ties",
+        key="custom_novel_title",
+        help="اكتب اسم الرواية هنا ليتم اعتماده وتفريغ الفصول في Google Sheet بهذا الاسم بدلاً من العنوان التلقائي للموقع."
+    )
+
+col_btn_primary, col_btn_ai = st.columns([1, 1])
 with col_btn_primary:
-    st.write("")
-    st.write("")
     fast_load_clicked = st.button("📑 جلب وفهرسة الفصول", use_container_width=True, type="primary")
 with col_btn_ai:
-    st.write("")
-    st.write("")
     force_ai_clicked = st.button("🤖 تحليل متقدم بـ AI", use_container_width=True)
 
 # معالجة استخراج الدومين والتحقق من التخزين المؤقت
@@ -546,13 +552,14 @@ if fast_load_clicked and toc_url_input:
 
             # إذا نجح السحب ووجد الفصول
             if chapters_list and len(chapters_list) > 0:
-                novel = get_or_create_novel(toc_url=toc_url_input, title=novel_title, domain=domain_name)
+                final_title = custom_novel_title_input.strip() if (custom_novel_title_input and custom_novel_title_input.strip()) else novel_title
+                novel = get_or_create_novel(toc_url=toc_url_input, title=final_title, domain=domain_name)
                 total_synced = sync_chapter_manifest(novel["id"], chapters_list)
                 st.session_state.active_novel = novel
                 st.session_state.chapters_cache = get_chapters(novel["id"])
                 st.session_state.show_ai_fallback = False
-                add_log(f"✅ تم بنجاح جلب وفهرسة {total_synced} فصلاً للرواية: '{novel_title}'")
-                st.success(f"🎉 تم جلب {total_synced} فصلاً بنجاح!")
+                add_log(f"✅ تم بنجاح جلب وفهرسة {total_synced} فصلاً للرواية: '{final_title}'")
+                st.success(f"🎉 تم جلب {total_synced} فصلاً بنجاح للرواية: '{final_title}'!")
                 st.rerun()
             else:
                 # إذا تعثر الفحص التلقائي، نقترح تفعيل خطوة الذكاء الاصطناعي
@@ -602,13 +609,14 @@ if (force_ai_clicked or st.session_state.show_ai_fallback) and toc_url_input:
                 toc_sel = analysis_result["toc_link_selector"]
                 chapters_list, novel_title = crawl_toc_chapters(toc_url_input, toc_sel)
                 if chapters_list:
-                    novel = get_or_create_novel(toc_url=toc_url_input, title=novel_title, domain=domain_name)
+                    final_title = custom_novel_title_input.strip() if (custom_novel_title_input and custom_novel_title_input.strip()) else novel_title
+                    novel = get_or_create_novel(toc_url=toc_url_input, title=final_title, domain=domain_name)
                     total_synced = sync_chapter_manifest(novel["id"], chapters_list)
                     st.session_state.active_novel = novel
                     st.session_state.chapters_cache = get_chapters(novel["id"])
                     st.session_state.show_ai_fallback = False
-                    add_log(f"✅ تم استخراج {total_synced} فصلاً بنجاح عبر Gemini AI!")
-                    st.success(f"🎉 تم تحليل الموقع وجلب {total_synced} فصلاً بنجاح!")
+                    add_log(f"✅ تم استخراج {total_synced} فصلاً بنجاح عبر Gemini AI للرواية: '{final_title}'!")
+                    st.success(f"🎉 تم تحليل الموقع وجلب {total_synced} فصلاً بنجاح للرواية: '{final_title}'!")
                     st.rerun()
                 else:
                     st.error("تم تحليل الموقع ولكن لم يتم العثور على روابط فصول. يمكنك تعديل المحددات يدوياً أدناه.")
@@ -657,12 +665,30 @@ if st.session_state.active_novel:
     st.subheader(f"2️⃣ لوحة تحكم السحب: {novel['title']}")
     
     # حقل اسم الرواية المعتمد في جدول Google Sheet (العمود C)
-    novel_display_name = st.text_input(
-        "🏷️ اسم الرواية المعتمد في جدول Google Sheet (يوضع في العمود C مع كل فصل):",
-        value=novel.get("title", "رواية عامة"),
-        key=f"novel_display_name_{novel['id']}",
-        help="هذا الاسم سيُدرج في العمود C بجدول TranslateQueue مع كل فصل يتم تفريغه أو بثّه مباشرة."
-    )
+    col_name_input, col_name_btn = st.columns([3.5, 1])
+    with col_name_input:
+        novel_display_name = st.text_input(
+            "🏷️ اسم الرواية المعتمد في جدول Google Sheet (يوضع في العمود C مع كل فصل):",
+            value=novel.get("title", "رواية عامة"),
+            key=f"novel_display_name_{novel['id']}",
+            help="هذا الاسم سيُدرج في العمود C بجدول TranslateQueue مع كل فصل يتم تفريغه أو بثّه مباشرة."
+        )
+    with col_name_btn:
+        st.write("")
+        st.write("")
+        save_name_btn = st.button("💾 تثبيت وحفظ الاسم", key=f"btn_save_name_{novel['id']}", use_container_width=True)
+
+    if save_name_btn and novel_display_name:
+        update_novel_title(novel["id"], novel_display_name)
+        novel["title"] = novel_display_name
+        st.session_state.active_novel = novel
+        st.success(f"✓ تم حفظ وتثبيت اسم الرواية: '{novel_display_name}' بنجاح!")
+        st.rerun()
+
+    if novel_display_name and novel_display_name.strip() != novel.get("title"):
+        update_novel_title(novel["id"], novel_display_name.strip())
+        novel["title"] = novel_display_name.strip()
+        st.session_state.active_novel = novel
     
     # مقاييس الرواية
     stat_c1, stat_c2, stat_c3, stat_c4 = st.columns(4)
