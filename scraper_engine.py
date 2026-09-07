@@ -17,6 +17,16 @@ import os
 import requests
 
 DEFAULT_GAS_URL = os.getenv("NSW_PUBLISH_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbxqLaqJru1ag-am7G9Mrwy5Nb7HliZlK5vbIEQD9MeV3wOOquNUvz4d7vWEwZxkBI6zIw/exec")
+DEFAULT_DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1546569711381254265/ZPrKjMA3tVj6kjWZzZeEOePb1I0PfopeYcpdYo7r8rFIXvlHk8m2HM1tIwM_HRRoTXv8")
+
+def send_discord_scraper_alert(message: str, webhook_url: str = DEFAULT_DISCORD_WEBHOOK):
+    """إرسال إشعار فوري لكونسول ديسكورد مع دعم تقليم الرسائل الطويلة."""
+    if not webhook_url:
+        return
+    try:
+        requests.post(webhook_url, json={"content": message[:1950]}, timeout=10)
+    except Exception as e:
+        print(f"⚠️ خطأ إرسال إشعار ديسكورد: {e}")
 
 def upload_single_chapter_to_sheet(novel_name: str, chapter_number: int, title: str, content: str, webapp_url: str = DEFAULT_GAS_URL) -> bool:
     """ضخ فصل واحد فورياً في جدول Google Sheet بمجرد سحبه (Streaming 0ms)."""
@@ -711,6 +721,14 @@ class NovelScrapingSession:
         workers_count = max(1, min(self.thread_count, 3))
         self.log(f"🚀 [انطلاق 3 خطوط متوازية]: بدء سحب {total_in_range} فصلاً عبر {workers_count} عمال متوازيين مع التدفق الفوري للشيت...")
 
+        # إشعار ديسكورد الفوري ببدء المهمة
+        send_discord_scraper_alert(
+            f"🚀 **[انطلاق سحب الرواية]:**\n"
+            f"📖 **الرواية:** `{self.novel_name}`\n"
+            f"🔢 **إجمالي الفصول المستهدفة:** `{total_in_range}` فصلاً\n"
+            f"⚡ **وضع التشغيل:** 3 خطوط متوازية في الخلفية مع البث اللحظي في Google Sheet."
+        )
+
         title_sel = self.domain_config.get("chapter_title_selector", "")
         content_sel = self.domain_config.get("chapter_content_selector", "")
         purge_sels = self.domain_config.get("purge_selectors", [])
@@ -775,6 +793,14 @@ class NovelScrapingSession:
                             cnt = self.processed_count
                         self.progress_callback(cnt, total_in_range, f"اكتمل فصل {ch_num} ({cnt}/{total_in_range})")
 
+                        # إشعار مرحلي كل 10 فصول في ديسكورد
+                        if cnt % 10 == 0:
+                            send_discord_scraper_alert(
+                                f"⚡ **[تقدم سحب الرواية]:**\n"
+                                f"📖 **الرواية:** `{self.novel_name}`\n"
+                                f"📊 **المُنجز:** `{cnt} / {total_in_range}` فصلاً تم بثها في Google Sheet بنجاح."
+                            )
+
                     except Exception as ex:
                         err_msg = str(ex)
                         self.log(f"❌ [خيط {worker_id}] تعذر سحب فصل {ch_num}: {err_msg[:60]}")
@@ -802,6 +828,14 @@ class NovelScrapingSession:
             th.join()
 
         self.log(f"🎉 اكتملت معالجة كافة الفصول عبر الخطوط المتوازية بنجاح!")
+
+        # إشعار ديسكورد النهائي باكتمال العملية
+        send_discord_scraper_alert(
+            f"🎉 **[اكتمل سحب وتفريغ الرواية بالكامل]:**\n"
+            f"📖 **الرواية:** `{self.novel_name}`\n"
+            f"✅ **الفصول المنجزة بنجاح:** `{self.processed_count} / {total_in_range}` فصلاً\n"
+            f"🌐 تم تفريغ كافة الفصول في Google Sheet وتطهير ذاكرة السيرفر بنجاح!"
+        )
 
 def parse_custom_chapter_numbers(raw_input: str) -> List[int]:
     """تحليل سلسلة أرقام الفصول المفردة والمخصصة مثل '5, 9, 10, 78' أو '1, 3-6, 12'."""
