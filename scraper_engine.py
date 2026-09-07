@@ -511,12 +511,15 @@ def crawl_toc_chapters(
                 "title": clean_title
             })
 
-        # فحص ما إذا كانت القائمة مرتبة تنازلياً (من الأحدث للأقدم) وعكسها لتصبح تصاعدياً
-        if len(structured_chapters) > 3:
-            first_num = structured_chapters[0]["chapter_number"]
-            last_num = structured_chapters[-1]["chapter_number"]
-            if first_num > last_num:
-                structured_chapters.reverse()
+        # إزالة التكرارات الناتجة عن مربعات 'أحدث الفصول' وفرز الفصول تصاعدياً من الفصل 1
+        if structured_chapters:
+            seen_nums = {}
+            for ch in structured_chapters:
+                num = ch["chapter_number"]
+                if num not in seen_nums:
+                    seen_nums[num] = ch
+
+            structured_chapters = [seen_nums[k] for k in sorted(seen_nums.keys())]
 
         return structured_chapters, novel_title
     finally:
