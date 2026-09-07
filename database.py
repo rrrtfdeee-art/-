@@ -1,4 +1,3 @@
-"""
 ==============================================================================
 Smart Novel Scraper - Database Management Layer (SQLite)
 ==============================================================================
@@ -341,30 +340,10 @@ def clear_novel_chapters_data(novel_id: int, db_path: str = DB_FILE_PATH) -> boo
     return True
 
 
-def get_all_novels(db_path: str = DB_FILE_PATH) -> List[Dict[str, Any]]:
-    """جلب كل الروايات المخزنة على السيرفر مع إحصائيات تفصيلية لكل رواية."""
-    with get_connection(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT 
-                n.id, n.domain, n.toc_url, n.title, n.total_chapters,
-                n.created_at, n.updated_at,
-                COALESCE(SUM(CASE WHEN c.status = 'downloaded' THEN 1 ELSE 0 END), 0) AS downloaded,
-                COALESCE(SUM(CASE WHEN c.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
-                COALESCE(SUM(CASE WHEN c.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
-            FROM novels n
-            LEFT JOIN chapters c ON n.id = c.novel_id
-            GROUP BY n.id
-            ORDER BY n.updated_at DESC;
-        """)
-        return [dict(r) for r in cursor.fetchall()]
-
-
 def delete_novel(novel_id: int, db_path: str = DB_FILE_PATH) -> bool:
     """حذف الرواية وجميع فصولها بالكامل من قاعدة البيانات."""
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM chapters WHERE novel_id = ?;", (novel_id,))
         cursor.execute("DELETE FROM novels WHERE id = ?;", (novel_id,))
         conn.commit()
     return True
@@ -451,3 +430,16 @@ def save_setting(key: str, value: str, db_path: str = DB_FILE_PATH) -> bool:
 
 # تهيئة الجداول تلقائياً عند استيراد الوحدة
 init_db()
+
+
+def clear_single_chapter_content(novel_id: int, chapter_number: int, db_path: str = DB_FILE_PATH) -> bool:
+    """تفريغ نص فصل محدد من SQLite بعد تدفقه بنجاح إلى Google Sheet لتوفير المساحة."""
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE chapters 
+            SET content = '', status = 'streamed'
+            WHERE novel_id = ? AND chapter_number = ?
+        """, (novel_id, chapter_number))
+        conn.commit()
+        return cursor.rowcount > 0
