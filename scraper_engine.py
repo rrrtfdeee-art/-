@@ -1,7 +1,3 @@
-
-scraper_engine.py
-
-100‎%‎
 # -*- coding: utf-8 -*-
 import os
 import time
@@ -722,4 +718,3 @@ def start_background_scraping(
     th.start()
     return session
 
-جارٍ عرض scraper_engine.py.
