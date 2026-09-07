@@ -283,18 +283,25 @@ def get_chapters(
     from_chapter: Optional[int] = None,
     to_chapter: Optional[int] = None,
     status: Optional[str] = None,
+    chapter_numbers: Optional[List[int]] = None,
     db_path: str = DB_FILE_PATH
 ) -> List[Dict[str, Any]]:
-    """جلب قائمة الفصول لرواية معينة بناءً على النطاق والحالة."""
+    """جلب قائمة الفصول لرواية معينة بناءً على النطاق والحالة أو قائمة أرقام مخصصة."""
     query = "SELECT * FROM chapters WHERE novel_id = ?"
     params: List[Any] = [novel_id]
 
-    if from_chapter is not None:
-        query += " AND chapter_number >= ?"
-        params.append(from_chapter)
-    if to_chapter is not None:
-        query += " AND chapter_number <= ?"
-        params.append(to_chapter)
+    if chapter_numbers:
+        placeholders = ",".join(["?"] * len(chapter_numbers))
+        query += f" AND chapter_number IN ({placeholders})"
+        params.extend(chapter_numbers)
+    else:
+        if from_chapter is not None:
+            query += " AND chapter_number >= ?"
+            params.append(from_chapter)
+        if to_chapter is not None:
+            query += " AND chapter_number <= ?"
+            params.append(to_chapter)
+
     if status is not None:
         query += " AND status = ?"
         params.append(status)

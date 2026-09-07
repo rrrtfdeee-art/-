@@ -689,7 +689,32 @@ class NovelScrapingSession:
         self.is_stopped = True
         self.log("⏹️ تم طلب إيقاف عملية السحب.")
 
-    def run_range(self, from_chapter: int, to_chapter: int):
+def parse_custom_chapter_numbers(raw_input: str) -> List[int]:
+    """تحليل سلسلة أرقام الفصول المفردة والمخصصة مثل '5, 9, 10, 78' أو '1, 3-6, 12'."""
+    nums = set()
+    if not raw_input:
+        return []
+    raw = str(raw_input).replace("،", ",").replace(" ", "")
+    parts = raw.split(",")
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        if "-" in p:
+            try:
+                start, end = p.split("-", 1)
+                for i in range(int(start), int(end) + 1):
+                    nums.add(i)
+            except Exception:
+                pass
+        else:
+            try:
+                nums.add(int(p))
+            except Exception:
+                pass
+    return sorted(list(nums))
+
+    def run_range(self, from_chapter: int = 1, to_chapter: int = 1, chapter_numbers: Optional[List[int]] = None):
         """
         تنفيذ عملية السحب عبر 3 خطوط متوازية (3 Parallel Workers)
         مع التدفق المباشر فصلاً بفصل إلى Google Sheet وتطهير ذاكرة السيرفر فوراً.
@@ -697,11 +722,15 @@ class NovelScrapingSession:
         import queue
         from database import clear_single_chapter_content
 
-        chapters_to_scrape = get_chapters(self.novel_id, from_chapter=from_chapter, to_chapter=to_chapter)
+        if chapter_numbers and len(chapter_numbers) > 0:
+            chapters_to_scrape = get_chapters(self.novel_id, chapter_numbers=chapter_numbers)
+        else:
+            chapters_to_scrape = get_chapters(self.novel_id, from_chapter=from_chapter, to_chapter=to_chapter)
+
         total_in_range = len(chapters_to_scrape)
 
         if total_in_range == 0:
-            self.log("⚠️ لم يتم العثور على أي فصول في هذا النطاق.")
+            self.log("⚠️ لم يتم العثور على أي فصول في هذا النطاق أو الأرقام المحددة.")
             return
 
         workers_count = max(1, min(self.thread_count, 3))
@@ -805,15 +834,16 @@ ACTIVE_BACKGROUND_TASKS: Dict[int, NovelScrapingSession] = {}
 
 def start_background_scraping(
     novel_id: int,
-    from_chapter: int,
-    to_chapter: int,
-    domain_config: Dict[str, Any],
+    from_chapter: int = 1,
+    to_chapter: int = 1,
+    domain_config: Dict[str, Any] = None,
     novel_name: str = "رواية عامة",
     thread_count: int = 3,
     auto_stream_to_sheet: bool = True,
     min_delay: float = 1.0,
     max_delay: float = 2.0,
-    headless: bool = True
+    headless: bool = True,
+    chapter_numbers: Optional[List[int]] = None
 ) -> NovelScrapingSession:
     """
     تشغيل سحب الفصول عبر 3 خطوط متوازية في الخلفية مع التدفق اللحظي فصلاً بفصل إلى Google Sheet.
@@ -821,7 +851,7 @@ def start_background_scraping(
     session = NovelScrapingSession(
         novel_id=novel_id,
         novel_name=novel_name,
-        domain_config=domain_config,
+        domain_config=domain_config or {},
         min_delay=min_delay,
         max_delay=max_delay,
         headless=headless,
@@ -838,7 +868,7 @@ def start_background_scraping(
             except Exception:
                 pass
         try:
-            session.run_range(from_chapter, to_chapter)
+            session.run_range(from_chapter, to_chapter, chapter_numbers=chapter_numbers)
         finally:
             ACTIVE_BACKGROUND_TASKS.pop(novel_id, None)
 

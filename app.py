@@ -671,15 +671,36 @@ if st.session_state.active_novel:
 
     st.markdown("---")
 
-    # تحديد نطاق الفصول المراد سحبها مع تفادي أخطاء الحدود
-    col_r1, col_r2 = st.columns(2)
-    max_scope = max(1, total_ch)
-    with col_r1:
-        from_chap = st.number_input("من الفصل رقم:", min_value=1, max_value=max_scope, value=1, key="from_chap_input")
-    with col_r2:
-        min_to = int(from_chap)
-        max_to = max(min_to, max_scope)
-        to_chap = st.number_input("إلى الفصل رقم:", min_value=min_to, max_value=max_to, value=max_to, key="to_chap_input")
+    # تحديد نطاق الفصول أو الأرقام المفردة المراد سحبها
+    scrape_mode = st.radio(
+        "🎯 نمط تحديد الفصول المراد سحبها:",
+        options=["نطاق متسلسل (من ... إلى)", "فصول مخصصة/مفردة (مثال: 5, 9, 10, 78)"],
+        horizontal=True,
+        key=f"scrape_mode_{novel['id']}"
+    )
+
+    from_chap = 1
+    to_chap = max(1, total_ch)
+    custom_chaps_list = None
+
+    if "مخصصة" in scrape_mode:
+        custom_input_str = st.text_input(
+            "📝 أدخل أرقام الفصول المفردة تفصل بينها فاصلة (مثال: 5, 9, 10, 78 أو 1-5, 12, 89):",
+            placeholder="5, 9, 10, 78",
+            key=f"custom_input_{novel['id']}"
+        )
+        custom_chaps_list = scraper_engine.parse_custom_chapter_numbers(custom_input_str)
+        if custom_chaps_list:
+            st.info(f"🎯 **الفصول المستهدفة للسحب ({len(custom_chaps_list)} فصلاً):** `{custom_chaps_list}`")
+    else:
+        col_r1, col_r2 = st.columns(2)
+        max_scope = max(1, total_ch)
+        with col_r1:
+            from_chap = st.number_input("من الفصل رقم:", min_value=1, max_value=max_scope, value=1, key="from_chap_input")
+        with col_r2:
+            min_to = int(from_chap)
+            max_to = max(min_to, max_scope)
+            to_chap = st.number_input("إلى الفصل رقم:", min_value=min_to, max_value=max_to, value=max_to, key="to_chap_input")
 
     # أزرار التحكم في السحب
     col_ctrl1, col_ctrl2, col_ctrl3, col_ctrl4 = st.columns(4)
@@ -737,10 +758,14 @@ if st.session_state.active_novel:
 
     # بدء عملية السحب السحابية في الخلفية
     if start_scrape:
-        all_chaps = get_chapters(novel["id"])
-        target_chapters = [c for c in all_chaps if from_chap <= c["chapter_number"] <= to_chap]
+        if custom_chaps_list and len(custom_chaps_list) > 0:
+            target_chapters = get_chapters(novel["id"], chapter_numbers=custom_chaps_list)
+        else:
+            all_chaps = get_chapters(novel["id"])
+            target_chapters = [c for c in all_chaps if from_chap <= c["chapter_number"] <= to_chap]
+
         if len(target_chapters) == 0:
-            st.warning("لا توجد فصول ضمن النطاق المحدد!")
+            st.warning("لا توجد فصول ضمن النطاق أو الأرقام المحددة!")
         else:
             cfg = st.session_state.domain_config or get_domain_config(novel["domain"])
             add_log(f"🚀 بدء سحب {len(target_chapters)} فصلاً في خيط خلفي مستقل (حتى لو أغلقت الصفحة)...")
@@ -750,6 +775,7 @@ if st.session_state.active_novel:
                 to_chapter=to_chap,
                 domain_config=cfg,
                 novel_name=novel_display_name,
+                chapter_numbers=custom_chaps_list,
                 min_delay=min_delay,
                 max_delay=max_delay,
                 headless=headless_mode
