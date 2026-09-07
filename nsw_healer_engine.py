@@ -1127,3 +1127,129 @@ if __name__ == "__main__":
         fix_single_chapter_x(target or "After Severing Ties", chap_to_fix)
     else:
         run_full_auto_heal(target)
+
+
+
+# ==============================================================================
+# 🚀 6. خط الأتمتة الشامل: سحب الرواية كاملة وتفريغها في Google Sheet ثم تطهير السيرفر
+# ==============================================================================
+
+def export_novel_to_google_sheet_and_purge(novel_id: int, novel_name: str, target_webapp_url: Optional[str] = None) -> Dict[str, Any]:
+    """
+    تفريغ جميع فصول الرواية المسحوبة من SQLite إلى جدول Google Sheet
+    ثم حذف نصوص الفصول من قاعدة بيانات السيرفر لتفريغ الذاكرة فوراً.
+    """
+    from database import get_chapters, clear_novel_chapters_data
+    
+    webapp_url = target_webapp_url or PUBLISH_WEBAPP_URL
+    chapters = get_chapters(novel_id)
+    downloaded_chaps = [c for c in chapters if c.get("content") and len(c.get("content", "").strip()) > 50]
+
+    if not downloaded_chaps:
+        msg = f"⚠️ لا توجد فصول مكتملة المحتوى لرواية '{novel_name}' لتفريغها في الشيت."
+        logger.warning(msg)
+        notify_admin(msg)
+        return {"success": False, "message": msg}
+
+    logger.info(f"📦 بدء تفريغ {len(downloaded_chaps)} فصلاً لرواية '{novel_name}' في Google Sheet...")
+    notify_admin(f"⏳ <i>جاري تصدير وتفريغ {len(downloaded_chaps)} فصلاً لرواية '{novel_name}' إلى جدول Google Sheet...</i>")
+
+    # إرسال الفصول في دفعات لتفادي تجاوز مهلة الـ HTTP (50 فصلاً في الدفعة)
+    batch_size = 50
+    total_exported = 0
+
+    for i in range(0, len(downloaded_chaps), batch_size):
+        batch = downloaded_chaps[i:i + batch_size]
+        payload = {
+            "action": "importRawChaptersBulk",
+            "novelName": novel_name,
+            "chapters": [
+                {
+                    "num": c.get("chapter_number"),
+                    "title": c.get("title") or f"الفصل {c.get('chapter_number')}",
+                    "content": c.get("content")
+                }
+                for c in batch
+            ]
+        }
+
+        try:
+            res = requests.post(webapp_url, json=payload, timeout=60).json()
+            if res.get("status") == "success":
+                total_exported += len(batch)
+                logger.info(f"✅ تم تفريغ الدفعة ({total_exported}/{len(downloaded_chaps)}) في الشيت.")
+            else:
+                err_msg = res.get("message", "خطأ غير معروف في Apps Script")
+                notify_admin(f"⚠️ تعذر تفريغ دفعة في الشيت: {err_msg}")
+        except Exception as ex:
+            logger.error(f"❌ خطأ اتصال بـ Google Apps Script أثناء التصدير: {ex}")
+            notify_admin(f"❌ خطأ تصدير للشيت: {ex}")
+            return {"success": False, "error": str(ex)}
+        
+        time.sleep(1)
+
+    # بعد اكتمال التصدير بنجاح، تطهير نصوص الفصول من قاعدة بيانات SQLite المحلية
+    if total_exported > 0:
+        clear_novel_chapters_data(novel_id)
+        logger.info(f"🧹 تم تطهير وحذف نصوص الفصول لرواية '{novel_name}' من ذاكرة السيرفر المحلية.")
+
+        success_report = (
+            f"🎉 <b>[اكتمل التصدير والتطهير السحابي بنجاح]</b> 🚀\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📖 <b>الرواية:</b> {novel_name}\n"
+            f"📑 <b>إجمالي الفصول المفرغة في Google Sheet:</b> <b>{total_exported}</b> فصلاً\n"
+            f"🧹 <b>حالة ذاكرة السيرفر:</b> تم تفريغ محتوى الفصول من القرص بنسبة 100% لتوفير المساحة.\n"
+            f"⚡ <b>السرعة:</b> الفصول الآن جاهزة في الشيت للاسترجاع والترجمة في أجزاء من الثانية!"
+        )
+        notify_admin(success_report)
+        return {"success": True, "exported_count": total_exported}
+
+    return {"success": False, "message": "لم يتم تصدير أي فصول."}
+
+
+def run_auto_scrape_and_export_pipeline(novel_name: str, source_url: str, novel_key: Optional[str] = None):
+    """
+    المسار المؤتمت بالكامل:
+    1. إنشاء الرواية في SQLite.
+    2. فهرسة الفصول وسحبها بالكامل في الخلفية بمتصفح Playwright الخفي.
+    3. فور الاكتمال، تفريغها في Google Sheet وتطهير ذاكرة السيرفر.
+    """
+    import database
+    import scraper_engine
+    
+    clean_domain = scraper_engine.extract_clean_domain(source_url)
+    logger.info(f"🚀 بدء خط الأتمتة لرواية '{novel_name}' من المصدر: {source_url}")
+    notify_admin(f"🚀 <b>[بدء خط السحب التلقائي]:</b>\n📖 <b>الرواية:</b> {novel_name}\n🌐 <b>المصدر:</b> {clean_domain}\n⏳ جاري فهرسة الفصول وسحبها في الخلفية...")
+
+    novel_id = database.get_or_create_novel(clean_domain, source_url, novel_name)
+    domain_cfg = database.get_domain_config(clean_domain) or {
+        "toc_link_selector": "a[href*='chapter'], a[href*='/txt/']",
+        "chapter_title_selector": "h1",
+        "chapter_content_selector": ".txtnav, article, #content",
+        "purge_selectors": ["script", "style"]
+    }
+
+    # 1. فهرسة الفصول
+    chapters_found = scraper_engine.crawl_toc_chapters(novel_id, source_url, domain_cfg)
+    logger.info(f"📋 تم فهرسة {len(chapters_found)} فصلاً للرواية.")
+
+    # 2. بدء السحب في الخلفية
+    bg_session = scraper_engine.start_background_scraping(
+        novel_id=novel_id,
+        domain_config=domain_cfg,
+        start_chapter=1,
+        end_chapter=len(chapters_found),
+        thread_count=1,
+        min_delay=1.0,
+        max_delay=2.5,
+        use_gemini_cleaner=False
+    )
+
+    # انتظار اكتمال السحب في هذا الخيط الفرعي
+    while bg_session and bg_session.is_running:
+        time.sleep(5)
+
+    logger.info(f"🏁 اكتمل سحب الفصول لرواية '{novel_name}'. جاري بدء التصدير والتفريغ...")
+    
+    # 3. التصدير للشيت والتطهير
+    export_novel_to_google_sheet_and_purge(novel_id, novel_name)
