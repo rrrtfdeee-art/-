@@ -212,7 +212,7 @@ class PlaywrightStealthBrowser:
                     # أخذ أول محدد نظيف لتفادي أخطاء الفواصل المركبة في Playwright
                     clean_wait = wait_selector.split(",")[0].strip()
                     if clean_wait:
-                        page.wait_for_selector(clean_wait, timeout=10000)
+                        page.wait_for_selector(clean_wait, timeout=3500)
                 except Exception:
                     pass
 
@@ -410,7 +410,7 @@ def crawl_toc_chapters(
         # 2. البحث داخل حاويات الفهارس الشائعة
         if not links:
             for container_sel in [
-                ".dir-list", "#dir", ".chapter-list", ".list", "#list", 
+                ".chaplist a", ".chaplist", ".dir-list", "#dir", ".chapter-list", ".list", "#list", 
                 ".mulu", ".zjlist", "dl.chapterlist dd a", "dd a", 
                 ".catalog", "ul.chapters", "#chapterlist", ".read-list"
             ]:

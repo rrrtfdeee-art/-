@@ -85,12 +85,17 @@ def init_db(db_path: str = DB_FILE_PATH):
         # إدراج محددات الدومينات المعتمدة افتراضياً لضمان استمراريتها
         default_domains = [
             ("69shuba.com", ".catalog ul li a", "h1.hide720", ".txtnav", '["script", "style", ".ad", ".bottom-link"]', "دومين معتمد افتراضياً 69shuba"),
-            ("novel543.com", ".dir-list a", "h1", ".content", '["script", "style", ".ad", ".ads", "button"]', "دومين معتمد افتراضياً novel543")
+            ("novel543.com", ".chaplist a", "h1", ".content", '["script", "style", ".ad", ".ads", "button"]', "دومين معتمد افتراضياً novel543")
         ]
         for d_name, d_toc, d_title, d_content, d_purge, d_notes in default_domains:
             cursor.execute("""
-                INSERT OR IGNORE INTO domains_config (domain, toc_link_selector, chapter_title_selector, chapter_content_selector, purge_selectors, notes)
+                INSERT INTO domains_config (domain, toc_link_selector, chapter_title_selector, chapter_content_selector, purge_selectors, notes)
                 VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(domain) DO UPDATE SET
+                    toc_link_selector = excluded.toc_link_selector,
+                    chapter_title_selector = excluded.chapter_title_selector,
+                    chapter_content_selector = excluded.chapter_content_selector,
+                    purge_selectors = excluded.purge_selectors;
             """, (d_name, d_toc, d_title, d_content, d_purge, d_notes))
 
         conn.commit()
