@@ -32,8 +32,8 @@ from gemini_analyzer import DEFAULT_GAS_URL
 
 # اسم مستخدم البوت الافتراضي وتوكن التحكم
 DEFAULT_BOT_USERNAME = "@SmartNovelMediaBot"
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", database.get_setting("telegram_bot_token", ""))
-ADMIN_CHAT_ID = os.getenv("TELEGRAM_ALLOWED_USER", database.get_setting("telegram_allowed_user", ""))
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", database.get_setting("telegram_bot_token", "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4"))
+ADMIN_CHAT_ID = os.getenv("TELEGRAM_ALLOWED_USER", database.get_setting("telegram_allowed_user", "8883556949"))
 
 # جلسات المستخدمين المؤقتة لاختيار الخيارات
 USER_SESSIONS: Dict[int, Dict[str, Any]] = {}

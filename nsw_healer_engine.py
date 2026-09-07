@@ -45,14 +45,15 @@ logger = logging.getLogger("NSWHealer")
 # الثوابت والمعرفات المركزية
 NOVELS_INDEX_SPREADSHEET_ID = "1s-yf1gRHagPIeikEC9_aVIAst7oDaiwoNzLH-hd0Q24"
 PUBLIC_PUBLISHED_SPREADSHEET_ID = "1IFT9mKRFByiPhph-ZaSdUT7c6IPUWpLg6Gj2xa9g5mY"
-TRANSLATE_SPREADSHEET_ID = "1FcehVXh-GLlZGePTm2nm13N932qcFeT0uGuOsXRFXpI"
+TRANSLATE_SPREADSHEET_ID = "1v1V4_rQukDs3oCe8Z4Izvni3uCx91iKmSVNOm4A3mH0"
 PUBLISH_QUEUE_SPREADSHEET_ID = "1HDjYu6EypdiNfoawJ2s7nQcRJiGsfJ5bNefcEy0QhFE"
 GLOSSARY_SPREADSHEET_ID = "1oqKRLyqWdkdUWW5UtvorEteFk3jJXdeUzQGDv-XJ_aE"
 
 PUBLISH_WEBAPP_URL = os.getenv("NSW_PUBLISH_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbxqLaqJru1ag-am7G9Mrwy5Nb7HliZlK5vbIEQD9MeV3wOOquNUvz4d7vWEwZxkBI6zIw/exec")
 TRANSLATE_WEBAPP_URL = os.getenv("NSW_TRANSLATE_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbwk3rNPfyP6lJw5jkXigqUfTgivsNzgDoyhd61lPiRSFZP49jFShKaz-CfnUqlM9OmH/exec")
-TELEGRAM_BOT_TOKEN = os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8527477822:AAG2dkvwdkkhHR_NyzAsfIWwlLBIdPk2Woc")
-ADMIN_CHAT_ID = os.getenv("NSW_TELEGRAM_CHAT_ID", "1974483260")
+TELEGRAM_BOT_TOKEN = os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4")
+ADMIN_CHAT_ID = os.getenv("NSW_TELEGRAM_CHAT_ID", "8883556949")
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1546569711381254265/ZPrKjMA3tVj6kjWZzZeEOePb1I0PfopeYcpdYo7r8rFIXvlHk8m2HM1tIwM_HRRoTXv8")
 
 MIN_SAFE_TEXT_LENGTH = 800
 
@@ -110,14 +111,22 @@ def get_realtime_engine_report() -> str:
 # ==============================================================================
 
 def notify_admin(message: str, parse_mode: str = "HTML"):
-    """إرسال إشعار تليجرام للمشرف."""
-    if not TELEGRAM_BOT_TOKEN or not ADMIN_CHAT_ID:
-        return
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": parse_mode}, timeout=15)
-    except Exception as e:
-        logger.error(f"خطأ إرسال إشعار تليجرام: {e}")
+    """إرسال إشعار فوري مزدوج لكل من تليجرام وديسكورد للمشرف."""
+    # 1. إرسال إلى تليجرام
+    if TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": parse_mode}, timeout=15)
+        except Exception as e:
+            logger.error(f"خطأ إرسال إشعار تليجرام: {e}")
+
+    # 2. إرسال إلى ديسكورد
+    if DISCORD_WEBHOOK_URL:
+        try:
+            clean_msg = message.replace("<b>", "**").replace("</b>", "**").replace("<i>", "*").replace("</i>", "*").replace("<code>", "`").replace("</code>", "`")
+            requests.post(DISCORD_WEBHOOK_URL, json={"content": clean_msg[:1950]}, timeout=10)
+        except Exception as e_d:
+            logger.error(f"خطأ إرسال إشعار ديسكورد: {e_d}")
 
 
 def notify_quota_exhaustion(service_name: str, details: str = "", retry_seconds: int = 0):
@@ -447,7 +456,7 @@ def build_royal_chapter_html_with_nav(novel_name: str, standard_title: str, tran
     paras = [p.strip() for p in converted.splitlines() if p.strip()]
     body_paras = []
     for p in paras:
-        if p.startswith("<div") or p.endsWith("</div>") or p.startswith("<p") or p.endsWith("</p>"):
+        if p.startswith("<div") or p.endswith("</div>") or p.startswith("<p") or p.endswith("</p>"):
             body_paras.append(p)
         else:
             body_paras.append(f"<p>{p}</p>")
@@ -822,7 +831,7 @@ def build_royal_chapter_html(novel_name: str, standard_title: str, translated_co
     paras = [p.strip() for p in converted.splitlines() if p.strip()]
     body_paras = []
     for p in paras:
-        if p.startswith("<div") or p.endsWith("</div>") or p.startswith("<p") or p.endsWith("</p>"):
+        if p.startswith("<div") or p.endswith("</div>") or p.startswith("<p") or p.endswith("</p>"):
             body_paras.append(p)
         else:
             body_paras.append(f"<p>{p}</p>")
