@@ -741,6 +741,7 @@ if st.session_state.active_novel:
                 from_chapter=from_chap,
                 to_chapter=to_chap,
                 domain_config=cfg,
+                novel_name=novel.get("title", "رواية عامة"),
                 min_delay=min_delay,
                 max_delay=max_delay,
                 headless=headless_mode
@@ -753,7 +754,9 @@ if st.session_state.active_novel:
     if is_bg_running and bg_session:
         st.markdown('<div class="badge badge-info">⚡ جاري السحب في الخلفية الآن (يمكنك إغلاق المتصفح بأمان)</div>', unsafe_allow_html=True)
         chaps_in_scope = [c for c in get_chapters(novel["id"]) if from_chap <= c["chapter_number"] <= to_chap]
-        done_cnt = sum(1 for c in chaps_in_scope if c["status"] == "downloaded")
+        done_cnt = sum(1 for c in chaps_in_scope if c["status"] in ("downloaded", "streamed"))
+        if hasattr(bg_session, "processed_count") and bg_session.processed_count > done_cnt:
+            done_cnt = bg_session.processed_count
         tot_cnt = max(1, len(chaps_in_scope))
         progress_val = min(1.0, done_cnt / tot_cnt)
         st.progress(progress_val)
