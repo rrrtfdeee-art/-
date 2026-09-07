@@ -177,13 +177,25 @@ class PlaywrightStealthBrowser:
 
     def get_page_html(self, url: str, wait_selector: Optional[str] = None) -> Tuple[str, str]:
         """
-        فتح الرابط وجلب محتوى الـ HTML النهائي وعنوان الصفحة.
+        فتح الرابط وجلب محتوى الـ HTML النهائي وعنوان الصفحة مع تجاوز كشف الحظر 403.
         """
         if not self.context:
             self.start()
 
         page = self.context.new_page()
         try:
+            # حقن Referer النطاق تلقائياً لتفادي الحظر 403 في المواقع المحمية
+            try:
+                parsed_u = urlparse(url)
+                if parsed_u.netloc:
+                    referer_val = f"{parsed_u.scheme or 'https'}://{parsed_u.netloc}/"
+                    page.set_extra_http_headers({
+                        "Referer": referer_val,
+                        "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,ar;q=0.6"
+                    })
+            except Exception:
+                pass
+
             # الانتقال إلى الصفحة مع معالجة الوقت المحدد
             page.goto(url, wait_until="domcontentloaded", timeout=self.timeout)
             
@@ -312,7 +324,7 @@ def extract_chapter_title(
     title_selector: str,
     fallback_number: int = 1
 ) -> str:
-    """استخراج عنوان الفصل الصافي مع توفير بديل ذكي في حال عدم العثور عليه."""
+    """استخراج عنوان الفصل الصافي مع دعم العناوين الرقمية وتوفير بديل ذكي."""
     if not raw_html:
         return f"الفصل {fallback_number}"
 
@@ -322,8 +334,10 @@ def extract_chapter_title(
     if title_elem:
         raw_title = title_elem.get_text(strip=True)
         if raw_title:
-            # تنظيف أي فواصل أو مسافات غريبة
             clean_title = re.sub(r"\s+", " ", raw_title).strip()
+            # إذا كان العنوان رقماً بحتاً (مثل 1) نحوله إلى صيغة فصل واضحة
+            if re.match(r"^\d+$", clean_title):
+                return f"الفصل {clean_title}"
             return clean_title
 
     # محاولة استخراج العنوان من وسم <title>
@@ -332,6 +346,8 @@ def extract_chapter_title(
         # تنظيف لواحق المواقع مثل "- Read Novel Online"
         clean_title = re.split(r"[-–|—]", page_title)[0].strip()
         if clean_title:
+            if re.match(r"^\d+$", clean_title):
+                return f"الفصل {clean_title}"
             return clean_title
 
     return f"الفصل {fallback_number}"
@@ -342,12 +358,19 @@ def extract_chapter_title(
 # ==============================================================================
 
 def normalize_toc_url(url: str) -> str:
-    """تحويل روابط الفهارس الشائعة إلى الرابط الكامل للفصول (مثل 69shuba)."""
+    """تحويل روابط الفهارس الشائعة إلى الرابط الكامل للفصول (مثل 69shuba و novel543)."""
     # موقع 69shuba: تحويل /book/123.htm إلى /book/123/
     if "69shuba.com/book/" in url and url.endswith(".htm"):
         clean_id = re.search(r"/book/(\d+)\.htm", url)
         if clean_id:
             return f"https://www.69shuba.com/book/{clean_id.group(1)}/"
+    # موقع novel543: التأكد أن الرابط ينتهي بـ /dir
+    if "novel543.com" in url:
+        url = url.rstrip("/")
+        if not url.endswith("/dir"):
+            m = re.search(r"novel543\.com/(\d+)$", url)
+            if m:
+                url = url + "/dir"
     return url
 
 
@@ -357,7 +380,8 @@ def crawl_toc_chapters(
     browser_instance: Optional[PlaywrightStealthBrowser] = None
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
-    سحب صفحة الفهرس واستخراج كافة روابط الفصول وترتيبها تصاعدياً من الفصل الأول إلى الأخير:
+    سحب صفحة الفهرس واستخراج كافة روابط الفصول مع التعرف الذكي على الفصول الرقمية:
+    يدعم المواقع التي تستخدم أرقاماً فقط بدون كلمة 'فصل' أو 'Chapter' وترتيبها تصاعدياً.
     ترجع قائمة الفصول وعنوان الرواية.
     """
     normalized_url = normalize_toc_url(toc_url)
@@ -371,9 +395,40 @@ def crawl_toc_chapters(
         html_content, page_title = browser_instance.get_page_html(normalized_url, wait_selector=toc_link_selector)
         soup = BeautifulSoup(html_content, "lxml") if "lxml" in html_content else BeautifulSoup(html_content, "html.parser")
 
-        links = soup.select(toc_link_selector)
+        links = soup.select(toc_link_selector) if toc_link_selector else []
         if not links:
             links = soup.find_all("a", href=re.compile(r"(chapter|ch-|\bch\d+|\bchap\b|/txt/)", re.IGNORECASE))
+
+        # دعم ميزة التعرف على الفصول الرقمية البحتة (Pure Numeric Recognition):
+        # 1. فحص إذا كان الرابط يحتوي على معرف الرواية الرقمي مثل /1010605889/dir أو novel543
+        if not links:
+            book_id_match = re.search(r"/(\d{5,})", normalized_url)
+            if book_id_match:
+                b_id = book_id_match.group(1)
+                links = soup.find_all("a", href=re.compile(rf"/{b_id}/\d+"))
+
+        # 2. البحث داخل حاويات الفهارس الشائعة
+        if not links:
+            for container_sel in [
+                ".dir-list", "#dir", ".chapter-list", ".list", "#list", 
+                ".mulu", ".zjlist", "dl.chapterlist dd a", "dd a", 
+                ".catalog", "ul.chapters", "#chapterlist", ".read-list"
+            ]:
+                candidate = soup.select(container_sel + " a" if " a" not in container_sel else container_sel)
+                if candidate and len(candidate) > 2:
+                    links = candidate
+                    break
+
+        # 3. البحث عن أي روابط تنتهي بمسارات رقمية (مثل /12345 أو 12345.html)
+        if not links:
+            links = soup.find_all("a", href=re.compile(r"/\d+(?:\.html)?(?:[?#].*)?$"))
+
+        # 4. البحث عن روابط نصوصها أرقام فقط (مثال: <a>1</a>، <a>2</a>)
+        if not links:
+            all_a = soup.find_all("a", href=True)
+            num_links = [a for a in all_a if re.match(r"^\s*\d+\s*$", a.get_text(strip=True))]
+            if len(num_links) > 2:
+                links = num_links
 
         raw_chapters = []
         seen_urls = set()
@@ -385,12 +440,15 @@ def crawl_toc_chapters(
 
             full_url = urljoin(normalized_url, href)
             # تجنب تكرار الروابط وتجنب روابط الرئيسية وصفحات الكتب
-            if full_url in seen_urls or full_url.rstrip("/").endswith((".com", ".net", ".org", "book")):
+            if full_url in seen_urls or full_url.rstrip("/").endswith((".com", ".net", ".org", "book", "index")):
+                continue
+            # تجنب روابط صفحة الفهرس نفسها
+            if full_url.rstrip("/").endswith("/dir"):
                 continue
             seen_urls.add(full_url)
 
             link_text = a_tag.get_text(strip=True) or a_tag.get("title", "").strip()
-            # تجاهل الروابط الفارغة أو التي لا تخص الفصول
+            # تجاهل الروابط الفارغة أو التي تخص تسجيل الدخول
             if len(link_text) < 1 or "login" in link_text.lower() or "register" in link_text.lower():
                 continue
 
@@ -399,48 +457,66 @@ def crawl_toc_chapters(
                 "title": link_text
             })
 
-        # فحص ما إذا كانت القائمة مرتبة تنازلياً (من الأحدث للأقدم) وعكسها لتصبح من الفصل الأول للأخير
-        if len(raw_chapters) > 3:
-            first_title = raw_chapters[0]["title"]
-            last_title = raw_chapters[-1]["title"]
-            
-            first_num_match = re.search(r"(\d+)", first_title)
-            last_num_match = re.search(r"(\d+)", last_title)
-            
-            if first_num_match and last_num_match:
-                f_num = int(first_num_match.group(1))
-                l_num = int(last_num_match.group(1))
-                # إذا كان الرقم الأول أكبر من الأخير (مثلاً 363 ثم 1)، نعكس القائمة
-                if f_num > l_num:
-                    raw_chapters.reverse()
-
         # تنظيف عنوان الرواية من عنوان الصفحة
         novel_title = re.split(r"[-–|—]", page_title)[0].strip() or "رواية غير معنونة"
 
-        # ترقيم الفصول تتابعياً من 1 إلى N
+        # ترقيم الفصول تتابعياً مع التعرف الذكي على الفصول الرقمية (بدون كلمة فصل)
         structured_chapters = []
         for idx, item in enumerate(raw_chapters, start=1):
-            title = item["title"] if item["title"] else f"الفصل {idx}"
-            # استخراج رقم الفصل الحقيقي من العنوان مثل 第477章 أو Chapter 477 أو 477.html
+            raw_t = item["title"].strip()
             parsed_num = None
-            m_cn = re.search(r"第\s*(\d+)\s*章", title)
+            clean_title = raw_t
+
+            # النمط 1: الفصول الصينية 第1章 أو 第 1 节
+            m_cn = re.search(r"第\s*(\d+)\s*[章节回]", raw_t)
             if m_cn:
                 parsed_num = int(m_cn.group(1))
             else:
-                m_any = re.search(r"(?:chapter|chap|ch\.?|الفصل)?\s*(\d+)", title, re.IGNORECASE)
-                if m_any:
-                    parsed_num = int(m_any.group(1))
+                # النمط 2: كلمة فصل أو Chapter متبوعة برقم
+                m_word = re.search(r"(?:chapter|chap|ch\.?|الفصل|فصل)\s*(\d+)", raw_t, re.IGNORECASE)
+                if m_word:
+                    parsed_num = int(m_word.group(1))
                 else:
-                    m_url = re.search(r"_(\d+)\.html|\b(\d+)\.html", item["url"])
-                    if m_url:
-                        parsed_num = int(m_url.group(1) or m_url.group(2))
+                    # النمط 3: التعرف على الفصول الرقمية البحتة (Pure Numbers)
+                    # العنوان عبارة عن رقم فقط مثل "1" أو "2"
+                    m_pure_digit = re.match(r"^(\d+)$", raw_t)
+                    if m_pure_digit:
+                        parsed_num = int(m_pure_digit.group(1))
+                        clean_title = f"الفصل {parsed_num}"
+                    else:
+                        # العنوان يبدأ برقم يليه فاصلة أو عنوان: "1. البداية" أو "001 البداية"
+                        m_prefix_digit = re.match(r"^(\d+)[\.\s\:\-、](.*)$", raw_t)
+                        if m_prefix_digit:
+                            parsed_num = int(m_prefix_digit.group(1))
+                            clean_title = f"الفصل {parsed_num}: {m_prefix_digit.group(2).strip()}"
 
+            # النمط 4: فحص نهاية الرابط لاستخراج رقم تسلسلي معقول (< 20000)
+            if parsed_num is None:
+                m_url_seq = re.search(r"/(\d{1,5})(?:\.html)?$", item["url"])
+                if m_url_seq:
+                    candidate_val = int(m_url_seq.group(1))
+                    if 1 <= candidate_val <= 20000:
+                        parsed_num = candidate_val
+                        if not clean_title or clean_title == raw_t:
+                            clean_title = f"الفصل {parsed_num}"
+
+            # إذا لم يُستخرج أي رقم، نعتمد على ترتيب الرابط الفعلي idx
             chap_num = parsed_num if parsed_num is not None else idx
+            if not clean_title:
+                clean_title = f"الفصل {chap_num}"
+
             structured_chapters.append({
                 "chapter_number": chap_num,
                 "url": item["url"],
-                "title": title
+                "title": clean_title
             })
+
+        # فحص ما إذا كانت القائمة مرتبة تنازلياً (من الأحدث للأقدم) وعكسها لتصبح تصاعدياً
+        if len(structured_chapters) > 3:
+            first_num = structured_chapters[0]["chapter_number"]
+            last_num = structured_chapters[-1]["chapter_number"]
+            if first_num > last_num:
+                structured_chapters.reverse()
 
         return structured_chapters, novel_title
     finally:
@@ -453,7 +529,8 @@ def fetch_samples_for_gemini_analysis(
     browser_instance: Optional[PlaywrightStealthBrowser] = None
 ) -> Tuple[str, str, str]:
     """
-    جلب عينة HTML لصفحة الفهرس وعينة HTML لأول فصل لاكتشاف الـ Selectors عبر Gemini.
+    جلب عينة HTML لصفحة الفهرس وعينة HTML لأول فصل لاكتشاف الـ Selectors عبر Gemini:
+    يدعم المواقع ذات الروابط الرقمية كـ novel543.com.
     ترجع (toc_html, sample_chapter_html, novel_title).
     """
     should_close_browser = False
@@ -480,11 +557,35 @@ def fetch_samples_for_gemini_analysis(
                 sample_chapter_url = urljoin(toc_url, href)
                 break
 
-        # إذا لم نجد رابطاً صريحاً، نأخذ أي رابط داخلي صالح
+        # Fallback للمواقع الرقمية و novel543.com
+        if not sample_chapter_url:
+            book_id_match = re.search(r"/(\d{5,})", normalized_url)
+            if book_id_match:
+                b_id = book_id_match.group(1)
+                num_links = soup.find_all("a", href=re.compile(rf"/{b_id}/\d+"))
+                for a in num_links:
+                    href = a.get("href")
+                    if href and not href.endswith("/dir"):
+                        sample_chapter_url = urljoin(toc_url, href)
+                        break
+
+        # البحث داخل حاويات الفهارس الشائعة
+        if not sample_chapter_url:
+            for container_sel in [".dir-list a", ".chapter-list a", "#list a", "dd a", ".catalog a", ".mulu a"]:
+                c_links = soup.select(container_sel)
+                for a in c_links:
+                    href = a.get("href")
+                    if href and not href.endswith("/dir") and not href.startswith("#"):
+                        sample_chapter_url = urljoin(toc_url, href)
+                        break
+                if sample_chapter_url:
+                    break
+
+        # إذا لم نجد رابطاً صريحاً، نأخذ أي رابط رقمي صالح
         if not sample_chapter_url:
             for a in soup.find_all("a", href=True):
                 href = a["href"]
-                if href and not href.startswith("#") and len(href) > 3 and "home" not in href.lower():
+                if href and not href.startswith("#") and len(href) > 3 and "home" not in href.lower() and not href.endswith("/dir"):
                     sample_chapter_url = urljoin(toc_url, href)
                     break
 
