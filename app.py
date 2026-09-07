@@ -42,6 +42,7 @@ from gemini_analyzer import (
     run_pool_diagnostic,
     DEFAULT_GAS_POOL
 )
+import scraper_engine
 from scraper_engine import (
     extract_clean_domain,
     PlaywrightStealthBrowser,
@@ -51,7 +52,8 @@ from scraper_engine import (
     extract_chapter_title,
     clean_chapter_content,
     start_background_scraping,
-    ACTIVE_BACKGROUND_TASKS
+    ACTIVE_BACKGROUND_TASKS,
+    parse_custom_chapter_numbers
 )
 from media_engine import (
     get_video_info,

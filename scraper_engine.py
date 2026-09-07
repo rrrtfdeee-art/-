@@ -689,31 +689,6 @@ class NovelScrapingSession:
         self.is_stopped = True
         self.log("⏹️ تم طلب إيقاف عملية السحب.")
 
-def parse_custom_chapter_numbers(raw_input: str) -> List[int]:
-    """تحليل سلسلة أرقام الفصول المفردة والمخصصة مثل '5, 9, 10, 78' أو '1, 3-6, 12'."""
-    nums = set()
-    if not raw_input:
-        return []
-    raw = str(raw_input).replace("،", ",").replace(" ", "")
-    parts = raw.split(",")
-    for p in parts:
-        p = p.strip()
-        if not p:
-            continue
-        if "-" in p:
-            try:
-                start, end = p.split("-", 1)
-                for i in range(int(start), int(end) + 1):
-                    nums.add(i)
-            except Exception:
-                pass
-        else:
-            try:
-                nums.add(int(p))
-            except Exception:
-                pass
-    return sorted(list(nums))
-
     def run_range(self, from_chapter: int = 1, to_chapter: int = 1, chapter_numbers: Optional[List[int]] = None):
         """
         تنفيذ عملية السحب عبر 3 خطوط متوازية (3 Parallel Workers)
@@ -827,6 +802,32 @@ def parse_custom_chapter_numbers(raw_input: str) -> List[int]:
             th.join()
 
         self.log(f"🎉 اكتملت معالجة كافة الفصول عبر الخطوط المتوازية بنجاح!")
+
+def parse_custom_chapter_numbers(raw_input: str) -> List[int]:
+    """تحليل سلسلة أرقام الفصول المفردة والمخصصة مثل '5, 9, 10, 78' أو '1, 3-6, 12'."""
+    nums = set()
+    if not raw_input:
+        return []
+    raw = str(raw_input).replace("،", ",").replace(" ", "")
+    parts = raw.split(",")
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        if "-" in p:
+            try:
+                start, end = p.split("-", 1)
+                for i in range(int(start), int(end) + 1):
+                    nums.add(i)
+            except Exception:
+                pass
+        else:
+            try:
+                nums.add(int(p))
+            except Exception:
+                pass
+    return sorted(list(nums))
+
 
 # سجل مركزي للمهام الخلفية لتمكين استمرار السحب حتى عند مغادرة المستخدم للصفحة
 ACTIVE_BACKGROUND_TASKS: Dict[int, NovelScrapingSession] = {}
