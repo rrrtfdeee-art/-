@@ -1,4 +1,4 @@
-""
+# -*- coding: utf-8 -*-
 import os
 import sys
 import time
@@ -460,7 +460,7 @@ with st.sidebar:
         else:
             st.write(f"إجمالي النطاقات المسجلة: {len(saved_domains)}")
             for dom in saved_domains:
-                col_d_name, col_d_del = st.columns([3, 1])
+                col_d_name, col_d_del = st.columns()
                 with col_d_name:
                     st.markdown(f"**🌐 {dom['domain']}**")
                 with col_d_del:
@@ -468,9 +468,7 @@ with st.sidebar:
                         delete_domain_config(dom["domain"])
                         st.success(f"تم حذف {dom['domain']}")
                         st.rerun()
-
-
-# ==============================================================================
+                        # ==============================================================================
 # الواجهة الرئيسية (Main Application View)
 # ==============================================================================
 
@@ -483,7 +481,7 @@ st.caption("نظام هجين ذكي لسحب فصول الروايات تلقا
 st.markdown('<div class="scraper-card">', unsafe_allow_html=True)
 st.subheader("1️⃣ فحص الرواية وجلب الفهرس")
 
-col_url, col_btn_primary, col_btn_ai = st.columns([3, 1.4, 1.3])
+col_url, col_btn_primary, col_btn_ai = st.columns()
 with col_url:
     toc_url_input = st.text_input(
         "رابط صفحة الفهرس (Table of Contents URL)",
@@ -516,14 +514,12 @@ if fast_load_clicked and toc_url_input:
     domain_name = extract_clean_domain(toc_url_input)
     with st.spinner("جاري فحص الموقع واستخراج قائمة الفصول تلقائياً..."):
         try:
-            # 1. إذا كان الدومين محفوظاً مسبقاً، نستخدم محدداته فوراً
             current_config = get_domain_config(domain_name)
             
             if not current_config:
                 add_log(f"🔍 دومين جديد [{domain_name}].. جاري الفحص والاستكشاف الهجين السريع...")
                 toc_html, ch_html, detected_title = fetch_samples_for_gemini_analysis(toc_url_input)
                 
-                # تطبيق خوارزمية الاستكشاف الهجين المحلي السريع
                 h_res = auto_detect_selectors_heuristically(toc_html, ch_html)
                 save_domain_config(
                     domain=domain_name,
@@ -540,7 +536,6 @@ if fast_load_clicked and toc_url_input:
             add_log(f"جاري سحب قائمة الفصول باستخدام المحدد: {toc_sel}")
             chapters_list, novel_title = crawl_toc_chapters(toc_url_input, toc_sel)
 
-            # إذا نجح السحب ووجد الفصول
             if chapters_list and len(chapters_list) > 0:
                 novel = get_or_create_novel(toc_url=toc_url_input, title=novel_title, domain=domain_name)
                 total_synced = sync_chapter_manifest(novel["id"], chapters_list)
@@ -551,7 +546,6 @@ if fast_load_clicked and toc_url_input:
                 st.success(f"🎉 تم جلب {total_synced} فصلاً بنجاح!")
                 st.rerun()
             else:
-                # إذا تعثر الفحص التلقائي، نقترح تفعيل خطوة الذكاء الاصطناعي
                 st.session_state.show_ai_fallback = True
                 add_log("⚠️ لم يتم العثور على فصول بالمحدد الأولي. يمكنك الآن تفعيل الذكاء الاصطناعي لتحليل الصفحة.")
                 st.warning("⚠️ تعذر اكتشاف قائمة الفصول بالنمط السريع. اضغط على 'تحليل متقدم بـ AI' لاستخراج الهيكل بدقة.")
@@ -576,7 +570,7 @@ if (force_ai_clicked or st.session_state.show_ai_fallback) and toc_url_input:
                     chapter_html=ch_html,
                     api_key=effective_key,
                     model_name=ai_model,
-                    gas_url=gas_url_input
+                    gas_url=gas_pool_input
                 )
 
                 domain_name = extract_clean_domain(toc_url_input)
@@ -592,7 +586,6 @@ if (force_ai_clicked or st.session_state.show_ai_fallback) and toc_url_input:
                 st.session_state.domain_config = get_domain_config(domain_name)
                 add_log(f"✅ تم تحليل وتخزين محددات الذكاء الاصطناعي للدومين {domain_name}.")
                 
-                # جلب الفصول بالمحددات الجديدة
                 toc_sel = analysis_result["toc_link_selector"]
                 chapters_list, novel_title = crawl_toc_chapters(toc_url_input, toc_sel)
                 if chapters_list:
@@ -685,7 +678,7 @@ if st.session_state.active_novel:
         st.success("تم تصفير بيانات الفصول بنجاح!")
         st.rerun()
 
-    # زر التفريغ السحابي الفوري في Google Sheet وتطهير الذاكرة
+    # 📤 زر التفريغ السحابي الفوري في Google Sheet وتطهير الذاكرة
     export_sheet_btn = st.button("📤 تفريغ الفصول في Google Sheet وتطهير ذاكرة السيرفر", key=f"export_sheet_{novel['id']}", use_container_width=True)
     if export_sheet_btn:
         with st.spinner("⏳ جاري تفريغ الفصول في Google Sheet وحذفها من السيرفر..."):
@@ -721,7 +714,7 @@ if st.session_state.active_novel:
             st.warning("تم إيقاف السحب بنجاح.")
             st.rerun()
 
-    # بدء عملية السحب السحابية في الخلفية
+    # بدء عملية السحب السحابية في الخلفية (3 خطوط متوازية)
     if start_scrape:
         all_chaps = get_chapters(novel["id"])
         target_chapters = [c for c in all_chaps if from_chap <= c["chapter_number"] <= to_chap]
@@ -729,12 +722,15 @@ if st.session_state.active_novel:
             st.warning("لا توجد فصول ضمن النطاق المحدد!")
         else:
             cfg = st.session_state.domain_config or get_domain_config(novel["domain"])
-            add_log(f"🚀 بدء سحب {len(target_chapters)} فصلاً في خيط خلفي مستقل (حتى لو أغلقت الصفحة)...")
+            add_log(f"🚀 بدء سحب {len(target_chapters)} فصلاً عبر 3 خطوط متوازية مع التدفق المباشر للشيت...")
             bg_sess = start_background_scraping(
                 novel_id=novel["id"],
                 from_chapter=from_chap,
                 to_chapter=to_chap,
                 domain_config=cfg,
+                novel_name=novel["title"],
+                thread_count=3,
+                auto_stream_to_sheet=True,
                 min_delay=min_delay,
                 max_delay=max_delay,
                 headless=headless_mode
@@ -775,7 +771,7 @@ with tab_export:
         novel_id = st.session_state.active_novel["id"]
         novel_title = st.session_state.active_novel["title"]
         
-        col_exp1, col_exp2 = st.columns([2, 2])
+        col_exp1, col_exp2 = st.columns()
         with col_exp1:
             export_from = st.number_input("تصدير من الفصل:", min_value=1, max_value=max(1, total_ch), value=1, key="exp_from")
         with col_exp2:
@@ -849,7 +845,6 @@ with tab_media:
                     fpath = res["filepath"]
                     st.success(f"🎉 تم تحميل: '{res['title']}' بنجاح! (الحجم: {res['filesize_mb']} MB)")
                     
-                    # تجزئة الفيديو إذا كان كبيراً وطلب المستخدم ذلك
                     if auto_split and res["filesize_mb"] > 450:
                         st.info("جاري تجزئة الملف لضمان سهولة التحميل وتجاوز قيود الذاكرة...")
                         parts = split_video_lossless(fpath, max_part_mb=450)
@@ -863,7 +858,6 @@ with tab_media:
                             v_name = os.path.basename(fpath)
                             st.download_button(f"📥 تحميل الملف المكتمل ({v_name})", data=f_data.read(), file_name=v_name, type="primary", use_container_width=True)
 
-                    # إرسال اختياري إلى تيليجرام
                     if tg_bot_token and tg_chat_id:
                         with st.spinner("جاري الإرسال إلى محادثة تيليجرام..."):
                             ok_tg, msg_tg = send_to_telegram(tg_bot_token, tg_chat_id, fpath, caption=f"🎬 {res['title']}")
@@ -878,7 +872,7 @@ with tab_nsw:
     st.markdown("### 🩹 منظومة استصلاح وعلاج الفصول المبتورة (NSW Truncation Healer)")
     st.caption("يقوم هذا النظام بفحص فصول المدونة المنشورة، ورصد أي فصل ناقص أو مبتور، وسحبه من المصدر الأصلي، وترجمته وتدقيقه، وتحديث المنشور في مكانه على Blogger.")
 
-    col_n1, col_n2 = st.columns([2, 1])
+    col_n1, col_n2 = st.columns()
     with col_n1:
         target_novel_filter = st.text_input("اسم الرواية المراد فحصها (اتركه فارغاً لفحص الكل):", value="After Severing Ties")
     with col_n2:
@@ -955,7 +949,7 @@ with tab_nsw:
     st.markdown("#### 🎯 ميزة إصلاح الفصل المخصص X (Fix Specific Chapter)")
     st.caption("حدد اسم الرواية ورقم الفصل، ليقوم السيرفر بسحبه فورياً من المصدر، وترجمته وتدقيقه، وتحديثه في مكانه أو نشره.")
 
-    col_fix_n, col_fix_num = st.columns([3, 1])
+    col_fix_n, col_fix_num = st.columns()
     with col_fix_n:
         fix_novel_inp = st.text_input("اسم الرواية للإصلاح المباشر:", value="After Severing Ties", key="fix_novel_inp")
     with col_fix_num:
