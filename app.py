@@ -32,7 +32,6 @@ from database import (
     get_all_domains_config,
     delete_domain_config,
     get_or_create_novel,
-    get_all_novels,
     sync_chapter_manifest,
     save_chapter_content,
     get_chapters,
@@ -652,92 +651,6 @@ st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ------------------------------------------------------------------------------
-# القسم 1.5: ذاكرة الروايات المحفوظة على السيرفر (Server Novel Storage)
-# ------------------------------------------------------------------------------
-st.markdown('<div class="scraper-card">', unsafe_allow_html=True)
-st.subheader("📦 ذاكرة الروايات المحفوظة على السيرفر")
-st.caption("كل الروايات التي تم سحبها وحفظها مسبقاً في قاعدة بيانات السيرفر. يمكنك استعادة أو تصدير أو حذف أي رواية.")
-
-all_novels = get_all_novels()
-if not all_novels:
-    st.info("🔍 لا توجد روايات محفوظة على السيرفر حالياً. ابدأ بسحب رواية جديدة!")
-else:
-    st.markdown(f'<span class="badge badge-info">📚 إجمالي الروايات المخزنة: {len(all_novels)}</span>', unsafe_allow_html=True)
-    
-    for novel_item in all_novels:
-        n_id = novel_item["id"]
-        n_title = novel_item["title"] or "بدون عنوان"
-        n_domain = novel_item["domain"] or "غير محدد"
-        n_total = novel_item["total_chapters"] or 0
-        n_downloaded = novel_item["downloaded"] or 0
-        n_pending = novel_item["pending"] or 0
-        n_failed = novel_item["failed"] or 0
-        n_date = novel_item.get("created_at", "")[:10] if novel_item.get("created_at") else "-"
-        
-        # تحديد لون الحالة
-        if n_downloaded == n_total and n_total > 0:
-            status_badge = '<span class="badge badge-success">✅ مكتملة</span>'
-        elif n_downloaded > 0:
-            status_badge = f'<span class="badge badge-warning">⏳ جزئي ({n_downloaded}/{n_total})</span>'
-        else:
-            status_badge = '<span class="badge badge-info">📝 معلقة</span>'
-        
-        with st.expander(f"📖 {n_title}  |  🌐 {n_domain}  |  📊 {n_downloaded}/{n_total} فصل", expanded=False):
-            # معلومات الرواية
-            info_col1, info_col2, info_col3, info_col4 = st.columns(4)
-            info_col1.metric("الفصول الكلية", n_total)
-            info_col2.metric("تم التنزيل", n_downloaded)
-            info_col3.metric("معلقة", n_pending)
-            info_col4.metric("فاشلة", n_failed)
-            
-            st.markdown(f'{status_badge} | 📅 تاريخ الإنشاء: **{n_date}** | 🔗 [{n_domain}]({novel_item.get("toc_url", "#")})', unsafe_allow_html=True)
-            
-            # أزرار التحكم
-            btn_col1, btn_col2, btn_col3 = st.columns(3)
-            
-            with btn_col1:
-                if st.button("📂 تحميل واستعادة", key=f"load_novel_{n_id}", use_container_width=True):
-                    loaded_novel = {"id": n_id, "title": n_title, "domain": n_domain, "toc_url": novel_item.get("toc_url", ""), "total_chapters": n_total}
-                    st.session_state.active_novel = loaded_novel
-                    st.session_state.chapters_cache = get_chapters(n_id)
-                    # تحميل إعدادات الدومين
-                    domain_cfg = get_domain_config(n_domain)
-                    if domain_cfg:
-                        st.session_state.domain_config = domain_cfg
-                    add_log(f"📂 تم تحميل الرواية '{n_title}' من ذاكرة السيرفر.")
-                    st.success(f"✅ تم تحميل '{n_title}' بنجاح! يمكنك الآن متابعة السحب أو التصدير.")
-                    st.rerun()
-            
-            with btn_col2:
-                if n_downloaded > 0:
-                    exported_txt, exp_count = export_novel_to_text(n_id)
-                    if exp_count > 0:
-                        file_name = f"{n_title.replace(' ', '_')}_full.txt"
-                        st.download_button(
-                            label=f"💾 تصدير TXT ({exp_count} فصل)",
-                            data=exported_txt.encode("utf-8"),
-                            file_name=file_name,
-                            mime="text/plain; charset=utf-8",
-                            use_container_width=True,
-                            key=f"export_novel_{n_id}"
-                        )
-                else:
-                    st.button("💾 لا توجد فصول للتصدير", key=f"export_novel_{n_id}", disabled=True, use_container_width=True)
-            
-            with btn_col3:
-                if st.button("🗑️ حذف من السيرفر", key=f"delete_novel_{n_id}", use_container_width=True):
-                    delete_novel(n_id)
-                    add_log(f"🗑️ تم حذف الرواية '{n_title}' وجميع فصولها من السيرفر نهائياً.")
-                    if st.session_state.active_novel and st.session_state.active_novel.get("id") == n_id:
-                        st.session_state.active_novel = None
-                        st.session_state.chapters_cache = []
-                    st.success(f"🗑️ تم حذف '{n_title}' نهائياً من السيرفر!")
-                    st.rerun()
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-
-# ------------------------------------------------------------------------------
 # القسم 2: لوحة تحكم السحب والإدارة
 # ------------------------------------------------------------------------------
 if st.session_state.active_novel:
@@ -782,6 +695,18 @@ if st.session_state.active_novel:
         add_log("تم تصفير محتوى الفصول للبدء من جديد.")
         st.success("تم تصفير بيانات الفصول بنجاح!")
         st.rerun()
+
+    # زر التفريغ السحابي الفوري في Google Sheet وتطهير الذاكرة
+    export_sheet_btn = st.button("📤 تفريغ الفصول في Google Sheet وتطهير ذاكرة السيرفر", key=f"export_sheet_{novel['id']}", use_container_width=True)
+    if export_sheet_btn:
+        with st.spinner("⏳ جاري تفريغ الفصول في Google Sheet وحذفها من السيرفر..."):
+            res = nsw_healer_engine.export_novel_to_google_sheet_and_purge(novel["id"], novel["title"])
+            if res.get("success"):
+                st.success(f"🎉 تم تفريغ {res.get('exported_count')} فصلاً في Google Sheet وتطهير السيرفر بنجاح!")
+                st.session_state.chapters_cache = get_chapters(novel["id"])
+                st.rerun()
+            else:
+                st.error(f"❌ تعذر التفريغ: {res.get('message') or res.get('error')}")
 
     # التحقق من وجود عملية سحب نشطة بالخلفية لهذه الرواية
     is_bg_running = novel["id"] in ACTIVE_BACKGROUND_TASKS
@@ -1062,3 +987,4 @@ with tab_nsw:
                 st.error(f"❌ تعذر إصلاح الفصل: {fix_res.get('error')}")
 
 st.markdown('</div>', unsafe_allow_html=True)
+جارٍ عرض app_updated_v2.py.
