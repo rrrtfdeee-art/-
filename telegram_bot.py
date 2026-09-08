@@ -86,6 +86,7 @@ def create_bot_app():
         bot.set_my_commands([
             types.BotCommand("menu", "📑 القائمة الرئيسية وأزرار التحكم"),
             types.BotCommand("repair", "🛡️ الإصلاح الشامل (فجوات + مبتورات + تنقل)"),
+            types.BotCommand("nav", "🔗 صيانة وربط أزرار التنقل (السابق/التالي/الفهرس)"),
             types.BotCommand("status", "📊 حالة المنظومة والمهام اللحظية"),
             types.BotCommand("gaps", "🧩 فحص وسد الفصول المفقودة والمسودات"),
             types.BotCommand("heal", "🩹 استصلاح الفصول المبتورة أو الناقصة"),
@@ -191,6 +192,7 @@ def create_bot_app():
         if is_adm:
             markup = types.InlineKeyboardMarkup(row_width=2)
             btn_repair = types.InlineKeyboardButton("🛡️ الإصلاح الشامل الفائق", callback_data="cb_nsw_repair")
+            btn_nav = types.InlineKeyboardButton("🔗 صيانة أزرار التنقل", callback_data="cb_nsw_nav")
             btn_status = types.InlineKeyboardButton("📊 حالة المنظومة", callback_data="cb_nsw_status")
             btn_gaps = types.InlineKeyboardButton("🧩 سد الفجوات الترقيمية", callback_data="cb_nsw_gaps")
             btn_heal = types.InlineKeyboardButton("🩹 استصلاح المبتورات", callback_data="cb_nsw_heal")
@@ -198,9 +200,10 @@ def create_bot_app():
             btn_stop = types.InlineKeyboardButton("🛑 إيقاف فوري", callback_data="cb_nsw_stop")
             btn_help = types.InlineKeyboardButton("📋 دليل الأوامر", callback_data="cb_nsw_help")
             markup.add(btn_repair)
-            markup.add(btn_status, btn_gaps)
-            markup.add(btn_heal, btn_stage)
-            markup.add(btn_stop, btn_help)
+            markup.add(btn_nav, btn_status)
+            markup.add(btn_gaps, btn_heal)
+            markup.add(btn_stage, btn_stop)
+            markup.add(btn_help)
 
         bot.reply_to(message, text, reply_markup=markup)
 
@@ -472,6 +475,36 @@ def create_bot_app():
                 bot.send_message(message.chat.id, f"❌ خطأ أثناء تجهيز دفعة أوبس: {e}")
         threading.Thread(target=_run, daemon=True).start()
 
+    @bot.message_handler(commands=['nsw_nav', 'nav', 'repair_nav', 'nav_repair'])
+    def nsw_nav_cmd(message):
+        """صيانة وربط أزرار التنقل (السابق/التالي/الفهرس) لكافة فصول الرواية المنشورة والمجدولة."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
+            return
+        parts = message.text.strip().split(None, 2)
+        novel_filter = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
+        start_chap = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 1
+        bot.reply_to(message, (
+            f"🔗 <b>جاري بدء صيانة وربط أزرار التنقل لرواية '{novel_filter}' بدءاً من الفصل {start_chap}...</b>\n"
+            "سيتم فحص جدول النشر وقراءة الروابط وربط كل فصل بالسابق واللاحق والفهرس بدقة متناهية."
+        ))
+        def _run():
+            try:
+                import nsw_healer_engine
+                res = nsw_healer_engine.repair_all_chapter_navigation(novel_filter, start_chapter=start_chap)
+                if res.get("success"):
+                    bot.send_message(message.chat.id, (
+                        f"✅ <b>اكتملت صيانة أزرار التنقل بنجاح!</b> 🎉\n"
+                        f"📖 <b>الرواية:</b> {novel_filter}\n"
+                        f"🔗 <b>الفصول المربوطة:</b> {res.get('linksPatched', 0)} فصلاً\n"
+                        f"🛡️ تم ربط أزرار السابق والتالي والفهرس بنجاح دون أي قفزات."
+                    ))
+                else:
+                    bot.send_message(message.chat.id, f"⚠️ تنبيه: {res.get('error', 'تعذر إتمام صيانة التنقل')}")
+            except Exception as e:
+                bot.send_message(message.chat.id, f"❌ خطأ أثناء صيانة أزرار التنقل: {e}")
+        threading.Thread(target=_run, daemon=True).start()
+
     @bot.message_handler(commands=['nsw_help', 'nsw'])
     def nsw_help_cmd(message):
         if not is_admin(message.from_user.id):
@@ -480,6 +513,7 @@ def create_bot_app():
         text = (
             "📋 <b>أوامر نظام NSW الشامل للنشر والترجمة:</b>\n\n"
             "🛡️ <code>/nsw_repair [رواية]</code> — <b>الإصلاح الشامل الكامل</b> (سد الفجوات + استصلاح المبتورات + صيانة أزرار التنقل دفعة واحدة)\n"
+            "🔗 <code>/nsw_nav [رواية] [فصل_البداية]</code> — <b>صيانة وربط أزرار التنقل</b> (السابق/التالي/الفهرس) من الشيت\n"
             "📊 <code>/nsw_status</code> — حالة المحرك والمهام الآنية\n"
             "🧩 <code>/nsw_gaps [رواية]</code> — فحص وسد الفصول المفقودة فقط\n"
             "🩹 <code>/nsw_heal [رواية]</code> — فحص واستصلاح الفصول المبتورة فقط\n"
@@ -488,7 +522,7 @@ def create_bot_app():
             "🚀 <code>/nsw_publish [رواية] [فصول]</code> — نشر فصول بعينها\n"
             "🛑 <code>/nsw_stop</code> — إيقاف العملية الجارية فوراً\n\n"
             "💡 <b>اختصارات سريعة:</b>\n"
-            "<code>/repair</code> · <code>/status</code> · <code>/gaps</code> · <code>/heal</code> · <code>/stage</code> · <code>/fix</code> · <code>/publish</code> · <code>/stop</code>"
+            "<code>/repair</code> · <code>/nav</code> · <code>/status</code> · <code>/gaps</code> · <code>/heal</code> · <code>/stage</code> · <code>/fix</code> · <code>/publish</code> · <code>/stop</code>"
         )
         bot.reply_to(message, text)
 
@@ -638,6 +672,28 @@ def create_bot_app():
                 except Exception as e:
                     bot.send_message(chat_id, f"❌ خطأ أثناء الاستصلاح: {e}")
             threading.Thread(target=_run_heal, daemon=True).start()
+            return
+
+        elif data == "cb_nsw_nav":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            bot.send_message(chat_id, "🔗 <b>جاري بدء صيانة وربط أزرار التنقل لكافة الفصول...</b>\nسيتم قراءة الروابط من جدول النشر وربط زر السابق بالتالي والفهرس تسلسلياً.")
+            def _run_nav():
+                try:
+                    import nsw_healer_engine
+                    res = nsw_healer_engine.repair_all_chapter_navigation("After Severing Ties")
+                    if res.get("success"):
+                        bot.send_message(chat_id, (
+                            f"✅ <b>اكتملت صيانة أزرار التنقل بنجاح!</b> 🎉\n"
+                            f"🔗 <b>الفصول المربوطة:</b> {res.get('linksPatched', 0)} فصلاً\n"
+                            f"🛡️ تم ربط أزرار السابق والتالي والفهرس بنجاح."
+                        ))
+                    else:
+                        bot.send_message(chat_id, f"⚠️ تنبيه: {res.get('error', 'تعذر إتمام صيانة التنقل')}")
+                except Exception as e:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء صيانة أزرار التنقل: {e}")
+            threading.Thread(target=_run_nav, daemon=True).start()
             return
 
         elif data == "cb_nsw_stage":

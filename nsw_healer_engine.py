@@ -652,19 +652,23 @@ def patch_chapter_navigation_button(post_id: str, prev_url: Optional[str] = None
         logger.error(f"خطأ حقن أزرار التنقل: {e}")
 
 
-def repair_all_chapter_navigation(novel_name: str = "After Severing Ties") -> Dict[str, Any]:
+def repair_all_chapter_navigation(novel_name: str = "After Severing Ties", start_chapter: int = 1, limit: int = 500) -> Dict[str, Any]:
     """استدعاء عملية صيانة وإصلاح أزرار التنقل لكافة فصول الرواية المنشورة في بلوجر."""
-    logger.info(f"🔗 بدء صيانة أزرار التنقل الشاملة لرواية '{novel_name}'...")
+    logger.info(f"🔗 بدء صيانة أزرار التنقل الشاملة لرواية '{novel_name}' بدءاً من الفصل {start_chapter}...")
     try:
-        res = requests.post(PUBLISH_WEBAPP_URL, json={
+        payload = {
             "action": "repairNavigation",
-            "novelName": novel_name
-        }, timeout=45).json()
-        if res.get("status") == "success":
-            data = res.get("data", {})
-            msg = f"🔗 <b>[اكتملت صيانة أزرار التنقل]:</b> تم ربط {data.get('linksPatched', 0)} فصلاً بالتسلسل السليم لرواية {novel_name}."
+            "novelName": novel_name,
+            "startChapter": start_chapter,
+            "limit": limit
+        }
+        res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=55).json()
+        if res.get("status") == "success" or res.get("success"):
+            data = res.get("data", res)
+            patched = data.get("linksPatched", 0)
+            msg = f"🔗 <b>[اكتملت صيانة أزرار التنقل]:</b> تم ربط {patched} فصلاً بالتسلسل السليم لرواية {novel_name}."
             notify_admin(msg)
-            return data
+            return {"success": True, "linksPatched": patched, "data": data}
         else:
             err = res.get("message", "تعذر إتمام صيانة التنقل")
             logger.warning(err)
