@@ -513,6 +513,8 @@ def create_bot_app():
         text = (
             "📋 <b>أوامر نظام NSW الشامل للنشر والترجمة:</b>\n\n"
             "🛡️ <code>/nsw_repair [رواية]</code> — <b>الإصلاح الشامل الكامل</b> (سد الفجوات + استصلاح المبتورات + صيانة أزرار التنقل دفعة واحدة)\n"
+            "🔍 <code>/nsw_audit [رواية]</code> — <b>فحص شامل عند الطلب</b> لمدونة بلوجر والجداول\n"
+            "🗓️ <code>/nsw_weekly</code> — <b>تفعيل الفحص الأسبوعي الدوري</b> (كل إثنين 09:00 ص فقط)\n"
             "🔗 <code>/nsw_nav [رواية] [فصل_البداية]</code> — <b>صيانة وربط أزرار التنقل</b> (السابق/التالي/الفهرس) من الشيت\n"
             "📊 <code>/nsw_status</code> — حالة المحرك والمهام الآنية\n"
             "🧩 <code>/nsw_gaps [رواية]</code> — فحص وسد الفصول المفقودة فقط\n"
@@ -522,9 +524,51 @@ def create_bot_app():
             "🚀 <code>/nsw_publish [رواية] [فصول]</code> — نشر فصول بعينها\n"
             "🛑 <code>/nsw_stop</code> — إيقاف العملية الجارية فوراً\n\n"
             "💡 <b>اختصارات سريعة:</b>\n"
-            "<code>/repair</code> · <code>/nav</code> · <code>/status</code> · <code>/gaps</code> · <code>/heal</code> · <code>/stage</code> · <code>/fix</code> · <code>/publish</code> · <code>/stop</code>"
+            "<code>/repair</code> · <code>/audit</code> · <code>/weekly</code> · <code>/nav</code> · <code>/status</code> · <code>/gaps</code> · <code>/heal</code> · <code>/stage</code> · <code>/fix</code> · <code>/publish</code> · <code>/stop</code>"
         )
         bot.reply_to(message, text)
+
+    @bot.message_handler(commands=['nsw_audit', 'audit'])
+    def nsw_audit_cmd(message):
+        """طلب فحص شامل لمدونة بلوجر والجداول عند الطلب فقط مع تقرير تيليجرام."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
+            return
+        parts = message.text.strip().split(None, 1)
+        novel_filter = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
+        bot.reply_to(message, f"🔍 <b>جاري إجراء الفحص الشامل لمدونة Blogger والجداول لرواية '{novel_filter}' بناءً على طلبك...</b>\nسيصلك التقرير فور الاكتمال.")
+        def _run():
+            try:
+                import requests
+                from nsw_healer_engine import PUBLISH_WEBAPP_URL
+                payload = {
+                    "action": "runFullAudit",
+                    "novelName": novel_filter,
+                    "chatId": str(message.chat.id),
+                    "sendTelegram": True
+                }
+                requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=90)
+            except Exception as e:
+                bot.send_message(message.chat.id, f"❌ خطأ أثناء الفحص: {e}")
+        threading.Thread(target=_run, daemon=True).start()
+
+    @bot.message_handler(commands=['nsw_weekly', 'weekly'])
+    def nsw_weekly_cmd(message):
+        """تفعيل الفحص الأسبوعي التلقائي (كل إثنين الساعة 09:00 ص)"""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
+            return
+        try:
+            import requests
+            from nsw_healer_engine import PUBLISH_WEBAPP_URL
+            payload = {"action": "setupWeeklyAuditSchedule", "chatId": str(message.chat.id)}
+            res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=30).json()
+            if res.get("status") == "success":
+                bot.reply_to(message, "🗓️ <b>تم تفعيل جدول الفحص الأسبوعي الدوري بنجاح!</b>\n⏰ <b>الموعد:</b> كل يوم إثنين الساعة 09:00 ص بتوقيت بغداد.\n🔍 سيتم فحص المدونة والجداول مرة واحدة أسبوعياً دون أي تشغيل تلقائي مزعج.")
+            else:
+                bot.reply_to(message, f"⚠️ تعذر تفعيل الجدول: {res.get('message')}")
+        except Exception as e:
+            bot.reply_to(message, f"❌ خطأ: {e}")
 
     @bot.message_handler(commands=['nsw_stop', 'stop'])
     def nsw_stop_cmd(message):
@@ -729,6 +773,20 @@ def create_bot_app():
                 bot.send_message(chat_id, "🛑 <b>تم تفعيل أمر الإيقاف الفوري بنجاح!</b>")
             except Exception as e:
                 bot.send_message(chat_id, f"❌ خطأ: {e}")
+            return
+
+        elif data in ["TRIGGER_HEAL_GAPS", "heal_truncated_now"]:
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            bot.send_message(chat_id, "🚀 <b>جاري بدء دورة الاستصلاح الشاملة للمبتورات والفجوات بناءً على طلبك...</b>")
+            def _run_full():
+                try:
+                    import nsw_healer_engine
+                    nsw_healer_engine.run_comprehensive_full_repair("After Severing Ties")
+                except Exception as e:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء الاستصلاح: {e}")
+            threading.Thread(target=_run_full, daemon=True).start()
             return
 
         elif data == "cb_nsw_help":
