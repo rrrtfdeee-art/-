@@ -1888,3 +1888,346 @@ def run_auto_scrape_and_export_pipeline(novel_name: str, source_url: str, novel_
     
     # 3. التصدير للشيت والتطهير
     export_novel_to_google_sheet_and_purge(novel_id, novel_name)
+
+
+# ==============================================================================
+# 📅 منظومة إصلاح تواريخ النشر واستنتاج أنماط الجدولة الذكية (Smart Date Repair Engine)
+# ==============================================================================
+
+def get_available_novels_catalog() -> List[Dict[str, Any]]:
+    """
+    جلب دليل الروايات المعتمد على الموقع من الشيت المركزي 1s-yf1g...
+    يعود بقائمة الروايات مع أسمائها، روابط صفحاتها على بلوجر، وصور الأغلفة.
+    """
+    catalog = []
+    try:
+        url = f"https://docs.google.com/spreadsheets/d/{NOVELS_INDEX_SPREADSHEET_ID}/gviz/tq?tqx=out:json"
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        text = res.text
+        if "google.visualization.Query.setResponse(" in text:
+            text = text.split("google.visualization.Query.setResponse(")[1].rsplit(");", 1)[0]
+        data = json.loads(text)
+        for r in data.get("table", {}).get("rows", []):
+            c = r.get("c", [])
+            name = str(c[0].get("v", "") if len(c) > 0 and c[0] else "").strip()
+            cover = str(c[1].get("v", "") if len(c) > 1 and c[1] else "").strip()
+            link = str(c[2].get("v", "") if len(c) > 2 and c[2] else "").strip()
+            orig = str(c[7].get("v", "") if len(c) > 7 and c[7] else "").strip()
+            order = c[6].get("v", 999) if len(c) > 6 and c[6] else 999
+            
+            if name and name not in ["الاسم", "الإسم", "الإسم "] and not name.startswith("عين"):
+                catalog.append({
+                    "name": name,
+                    "cover": cover,
+                    "link": link,
+                    "orig_toc": orig,
+                    "order": int(order) if str(order).isdigit() else 999
+                })
+        catalog.sort(key=lambda x: x["order"])
+    except Exception as e:
+        logger.warning(f"ملاحظة جلب دليل الروايات من الشيت: {e}")
+
+    # مصادر احتياطية مباشرة ومؤكدة
+    if not catalog:
+        catalog = [
+            {"name": "After Severing Ties", "link": "https://www.novelskyworld.com/p/severing-ties.html", "cover": "", "order": 1},
+            {"name": "المزارع الخبير في المدرسة الابتدائية", "link": "https://www.novelskyworld.com/p/the-expert-cultivator-in-elementary.html?m=1", "cover": "", "order": 2},
+            {"name": "نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا", "link": "https://www.novelskyworld.com/p/blog-page_14.html", "cover": "", "order": 3},
+            {"name": "رَمادُ النُّبل وجمرُ التمرد", "link": "https://www.novelskyworld.com/p/blog-page_10.html", "cover": "", "order": 4}
+        ]
+
+    return catalog
+
+
+def resolve_chapter_belonging_novel(chap_info: Dict[str, Any], catalog: Optional[List[Dict[str, Any]]] = None) -> str:
+    """
+    أفضل تسلسل هرمي لفرز ومعرفة انتماء الفصل لأي رواية:
+    1. العمود H في جدول المنشورات (اسم الرواية المباشر).
+    2. رابط صفحة الرواية الأصلي (العمود C من الشيت المركزي) المدمج في زر الفهرس index-btn بالمتن.
+    3. تصنيفات التدوينة (Labels).
+    4. بادئة العنوان (Title Prefix).
+    """
+    if not catalog:
+        catalog = get_available_novels_catalog()
+
+    # 1. فحص العمود H (اسم الرواية المسجل صراحة)
+    row_nov = str(chap_info.get("novel_name") or chap_info.get("novel") or "").strip()
+    if row_nov and row_nov.lower() not in ["none", "null", "عام"]:
+        for n in catalog:
+            if n["name"].lower() in row_nov.lower() or row_nov.lower() in n["name"].lower():
+                return n["name"]
+        return row_nov
+
+    # 2. فحص متن الفصل للبحث عن رابط صفحة الرواية (العمود C) المدمج في زر الفهرس
+    content_html = str(chap_info.get("content") or chap_info.get("raw_content") or "")
+    if content_html:
+        for n in catalog:
+            n_link = n.get("link", "").strip()
+            if n_link and n_link != "#":
+                path_part = n_link.replace("https://www.novelskyworld.com", "").split("?")[0]
+                if path_part and path_part in content_html:
+                    return n["name"]
+
+    # 3. فحص التصنيفات (Labels)
+    labels = chap_info.get("labels", [])
+    if isinstance(labels, str):
+        try:
+            labels = json.loads(labels)
+        except Exception:
+            labels = [labels]
+    labels_str = " ".join(str(l) for l in labels).lower()
+    for n in catalog:
+        if n["name"].lower() in labels_str:
+            return n["name"]
+
+    # 4. فحص بادئة العنوان
+    title = str(chap_info.get("title") or "")
+    for n in catalog:
+        if n["name"].lower() in title.lower():
+            return n["name"]
+
+    return resolve_novel_name_from_title(title, fallback="After Severing Ties")
+
+
+def parse_schedule_pattern_input(text_input: str) -> Dict[str, Any]:
+    """
+    تحليل مدخلات المشرف واستنتاج نمط الجدولة والبداية.
+    يقبل أمثلة مثل:
+    الفصل 400 2027/1/30 09:00
+    الفصل 401 2027/1/30 16:00
+    """
+    lines = [l.strip() for l in text_input.strip().splitlines() if l.strip()]
+    parsed_items = []
+
+    for line in lines:
+        m_ch = re.search(r'(?:الفصل\s*)?(\d+)', line)
+        if not m_ch:
+            continue
+        c_num = int(m_ch.group(1))
+
+        after_chap = line[m_ch.end():].strip()
+        clean_time_str = re.sub(r'(?:الساعة|بتوقيت|مساء|صباحا|م|ص)', '', after_chap).strip()
+        dt_val = parse_any_datetime(clean_time_str)
+        if dt_val:
+            parsed_items.append((c_num, dt_val))
+
+    if not parsed_items:
+        return {"success": False, "error": "لم يتم العثور على أرقام فصول وتواريخ صالحة في النص."}
+
+    parsed_items.sort(key=lambda x: x[0])
+    start_chap = parsed_items[0][0]
+    first_dt = parsed_items[0][1]
+
+    time_slots = []
+    seen_times = set()
+
+    for _, dt_item in parsed_items:
+        t_str = dt_item.strftime("%H:%M")
+        if t_str not in seen_times:
+            seen_times.add(t_str)
+            time_slots.append(t_str)
+
+    if not time_slots:
+        time_slots = [first_dt.strftime("%H:%M")]
+
+    time_slots.sort()
+    base_date = first_dt.date()
+
+    return {
+        "success": True,
+        "start_chapter": start_chap,
+        "base_date": base_date.strftime("%Y-%m-%d"),
+        "time_slots": time_slots,
+        "slots_per_day": len(time_slots),
+        "first_datetime": first_dt.strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+
+def compute_target_datetime_for_chapter(chapter_num: int, pattern: Dict[str, Any]) -> datetime:
+    """حساب التاريخ والوقت المستهدف لأي فصل بناءً على النمط المستنتج."""
+    start_chap = pattern["start_chapter"]
+    base_date = datetime.strptime(pattern["base_date"], "%Y-%m-%d").date()
+    slots = pattern["time_slots"]
+    n_slots = len(slots)
+
+    offset = max(0, chapter_num - start_chap)
+    day_offset = offset // n_slots
+    slot_idx = offset % n_slots
+
+    slot_time_str = slots[slot_idx]
+    hour, minute = map(int, slot_time_str.split(":"))
+
+    target_d = base_date + timedelta(days=day_offset)
+    return datetime(target_d.year, target_d.month, target_d.day, hour, minute, 0)
+
+
+def preview_and_repair_novel_dates(
+    novel_name: str,
+    pattern: Dict[str, Any],
+    dry_run: bool = True
+) -> Dict[str, Any]:
+    """
+    الفحص المسبق وتطبيق إعادة ضبط تواريخ الجدولة لرواية محددة:
+    - فحص الاستثناء الذكي: استثناء أي فصل تاريخه الحالي يطابق التاريخ المحسوب بالفعل.
+    - تعديل الفصول غير المطابقة فقط في الشيت وبلوجر دون هدر أي كوتة.
+    """
+    start_chap = pattern["start_chapter"]
+    catalog = get_available_novels_catalog()
+
+    # 1. جلب فصول الرواية مباشرة وسريعاً من جدول المنشورات المعتمد
+    chaps_map = {}
+    try:
+        pub_rows = query_gviz_sheet(PUBLIC_PUBLISHED_SPREADSHEET_ID)
+        for r in pub_rows:
+            c = r.get("c", [])
+            if len(c) > 1 and c[1]:
+                title = str(c[1].get("v", "")).strip()
+                chap_num = 0
+                try:
+                    chap_num = int(float(c[0].get("v", 0)))
+                except Exception:
+                    pass
+                if not chap_num:
+                    m = re.search(r'\d+', title)
+                    chap_num = int(m.group(0)) if m else 0
+                
+                novel_col = str(c[7].get("v", "") if len(c) > 7 and c[7] else "").strip()
+                row_dict = {
+                    "novel_name": novel_col,
+                    "title": title,
+                    "chapter_number": chap_num,
+                    "content": str(c[2].get("v", "") if len(c) > 2 and c[2] else "")
+                }
+                resolved_novel = resolve_chapter_belonging_novel(row_dict, catalog)
+                if novel_name.lower() in resolved_novel.lower() or resolved_novel.lower() in novel_name.lower():
+                    post_id = str(c[4].get("v", "") if len(c) > 4 and c[4] else "").strip()
+                    pub_date = str(c[3].get("v", "") if len(c) > 3 and c[3] else "").strip()
+                    chaps_map[chap_num] = {
+                        "chapter_number": chap_num,
+                        "title": title,
+                        "post_id": post_id,
+                        "published_date": pub_date,
+                        "novel_name": resolved_novel
+                    }
+    except Exception as e_sheet:
+        logger.warning(f"ملاحظة جلب الفصول من الشيت العام: {e_sheet}")
+
+    # 2. في حال لم نجد فصولاً، استدعاء scanGaps كخطة احتياطية
+    if not chaps_map:
+        try:
+            audit_res = requests.get(f"{PUBLISH_WEBAPP_URL}?action=scanGaps&novelName={requests.utils.quote(novel_name)}", timeout=35).json()
+            raw_all = audit_res.get("allChapters", {})
+            for c_str, c_info in raw_all.items():
+                c_n = int(float(c_str))
+                chaps_map[c_n] = {
+                    "chapter_number": c_n,
+                    "title": c_info.get("title", f"الفصل {c_n}"),
+                    "post_id": c_info.get("postId", ""),
+                    "published_date": c_info.get("publishedDate", ""),
+                    "status": c_info.get("statusDisplay", "")
+                }
+        except Exception as e:
+            logger.warning(f"ملاحظة جلب الفصول من scanGaps: {e}")
+
+    sorted_nums = sorted([n for n in chaps_map.keys() if n >= start_chap])
+    if not sorted_nums:
+        return {"success": False, "error": f"لم يتم العثور على فصول تبدأ من الفصل {start_chap} لرواية '{novel_name}'."}
+
+    to_update = []
+    skipped_compliant = []
+
+    for c_num in sorted_nums:
+        c_info = chaps_map[c_num]
+        post_id = c_info.get("post_id", "")
+        curr_date_raw = c_info.get("published_date", "")
+
+        target_dt = compute_target_datetime_for_chapter(c_num, pattern)
+        curr_dt = parse_any_datetime(curr_date_raw)
+
+        is_match = False
+        if curr_dt:
+            # توحيد نوع التوقيت لتفادي خطأ offset-naive و offset-aware
+            if getattr(curr_dt, 'tzinfo', None) is not None:
+                curr_dt = curr_dt.replace(tzinfo=None)
+            diff_sec = abs((target_dt - curr_dt).total_seconds())
+            if diff_sec <= 60:
+                is_match = True
+
+        item_data = {
+            "chapter_number": c_num,
+            "title": c_info.get("title", f"الفصل {c_num}"),
+            "post_id": post_id,
+            "current_date": curr_dt.strftime("%Y-%m-%d %H:%M:%S") if curr_dt else str(curr_date_raw),
+            "target_date": target_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "target_iso": target_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        }
+
+        if is_match:
+            skipped_compliant.append(item_data)
+        else:
+            to_update.append(item_data)
+
+    if dry_run:
+        return {
+            "success": True,
+            "dry_run": True,
+            "novel_name": novel_name,
+            "start_chapter": start_chap,
+            "total_scanned": len(sorted_nums),
+            "to_update_count": len(to_update),
+            "skipped_count": len(skipped_compliant),
+            "to_update_sample": to_update[:5],
+            "skipped_sample": skipped_compliant[:5],
+            "to_update_list": to_update,
+            "pattern": pattern
+        }
+
+    # تطبيق التعديل الفعلي (Live Execution)
+    logger.info(f"🚀 بدء تطبيق تعديل مواعيد {len(to_update)} فصلاً لرواية '{novel_name}'...")
+    updated_success = []
+    failed_items = []
+
+    for item in to_update:
+        c_n = item["chapter_number"]
+        p_id = item["post_id"]
+        t_iso = item["target_iso"]
+
+        try:
+            payload = {
+                "action": "syncSheetDateToBlogger",
+                "postId": str(p_id),
+                "publishedDate": t_iso,
+                "chapterNumber": c_n
+            }
+            res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=30).json()
+            if res.get("status") == "success" or res.get("published"):
+                updated_success.append(item)
+                logger.info(f"✅ تم تعديل موعد الفصل {c_n} بنجاح إلى: {item['target_date']}")
+            else:
+                failed_items.append((c_n, res.get("message", "فشل التعديل")))
+        except Exception as ex:
+            failed_items.append((c_n, str(ex)))
+
+    summary_msg = (
+        f"🗓️ <b>[تقرير اكتمال إصلاح تواريخ النشر]:</b>\n"
+        f"📖 الرواية: <b>{novel_name}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"• الفصل البدائي: <b>{start_chap}</b>\n"
+        f"• إجمالي الفصول المفحوصة: <b>{len(sorted_nums)}</b> فصل\n"
+        f"• ✅ تم تحديث جدولتها بنجاح: <b>{len(updated_success)}</b> فصل\n"
+        f"• ⭐ فصول مطابقة مسبقاً (تم استثناؤها): <b>{len(skipped_compliant)}</b> فصل\n"
+    )
+    if failed_items:
+        summary_msg += f"• ⚠️ تعذر تحديث: <b>{len(failed_items)}</b> فصل\n"
+    summary_msg += "🛡️ تم حفظ وتثبيت المواعيد في الشيت وبلوجر."
+    notify_admin(summary_msg)
+
+    return {
+        "success": True,
+        "dry_run": False,
+        "novel_name": novel_name,
+        "total_scanned": len(sorted_nums),
+        "updated_count": len(updated_success),
+        "skipped_count": len(skipped_compliant),
+        "failed_count": len(failed_items)
+    }

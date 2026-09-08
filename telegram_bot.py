@@ -75,6 +75,34 @@ def is_admin(user_id: int) -> bool:
     return str(user_id).strip() == str(ADMIN_CHAT_ID).strip()
 
 
+def make_novel_selection_markup(prefix: str, include_all: bool = True) -> types.InlineKeyboardMarkup:
+    """إنشاء لوحة مفاتيح تفاعلية لاختيار الرواية ديناميكياً من الدليل المركزي."""
+    import nsw_healer_engine
+    catalog = nsw_healer_engine.get_available_novels_catalog()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for idx, n in enumerate(catalog):
+        markup.add(types.InlineKeyboardButton(f"📖 {n['name']}", callback_data=f"{prefix}_{idx}"))
+    if include_all:
+        markup.add(types.InlineKeyboardButton("🌐 كافة الروايات المسجلة", callback_data=f"{prefix}_all"))
+    markup.add(types.InlineKeyboardButton("❌ إلغاء", callback_data="CANCEL_ACTION"))
+    return markup
+
+
+def get_novel_from_catalog_idx(idx_str: str) -> Optional[str]:
+    """استرجاع اسم الرواية الحقيقي بناءً على فهرس الاختيار."""
+    if idx_str == "all":
+        return None
+    import nsw_healer_engine
+    catalog = nsw_healer_engine.get_available_novels_catalog()
+    try:
+        idx = int(idx_str)
+        if 0 <= idx < len(catalog):
+            return catalog[idx]["name"]
+    except Exception:
+        pass
+    return "After Severing Ties"
+
+
 def create_bot_app():
     if not telebot or not BOT_TOKEN:
         return None
@@ -86,6 +114,7 @@ def create_bot_app():
         bot.set_my_commands([
             types.BotCommand("menu", "📑 القائمة الرئيسية وأزرار التحكم"),
             types.BotCommand("repair", "🛡️ الإصلاح الشامل (فجوات + مبتورات + تنقل)"),
+            types.BotCommand("fix_dates", "🗓️ إصلاح وتنسيق تواريخ نشر الفصول"),
             types.BotCommand("nav", "🔗 صيانة وربط أزرار التنقل (السابق/التالي/الفهرس)"),
             types.BotCommand("status", "📊 حالة المنظومة والمهام اللحظية"),
             types.BotCommand("gaps", "🧩 فحص وسد الفصول المفقودة والمسودات"),
@@ -192,6 +221,7 @@ def create_bot_app():
         if is_adm:
             markup = types.InlineKeyboardMarkup(row_width=2)
             btn_repair = types.InlineKeyboardButton("🛡️ الإصلاح الشامل الفائق", callback_data="cb_nsw_repair")
+            btn_dates = types.InlineKeyboardButton("🗓️ إصلاح تواريخ النشر", callback_data="cb_fix_dates_start")
             btn_nav = types.InlineKeyboardButton("🔗 صيانة أزرار التنقل", callback_data="cb_nsw_nav")
             btn_status = types.InlineKeyboardButton("📊 حالة المنظومة", callback_data="cb_nsw_status")
             btn_gaps = types.InlineKeyboardButton("🧩 سد الفجوات الترقيمية", callback_data="cb_nsw_gaps")
@@ -200,10 +230,10 @@ def create_bot_app():
             btn_stop = types.InlineKeyboardButton("🛑 إيقاف فوري", callback_data="cb_nsw_stop")
             btn_help = types.InlineKeyboardButton("📋 دليل الأوامر", callback_data="cb_nsw_help")
             markup.add(btn_repair)
-            markup.add(btn_nav, btn_status)
+            markup.add(btn_dates, btn_nav)
             markup.add(btn_gaps, btn_heal)
-            markup.add(btn_stage, btn_stop)
-            markup.add(btn_help)
+            markup.add(btn_status, btn_stage)
+            markup.add(btn_stop, btn_help)
 
         bot.reply_to(message, text, reply_markup=markup)
 
@@ -338,19 +368,81 @@ def create_bot_app():
         except Exception as e:
             bot.reply_to(message, f"⚠️ تعذر جلب التقرير: {e}")
 
+    def _run_nav_repair(chat_id: int, novel_filter: Optional[str], start_chap: int = 1):
+        target_name = novel_filter or "كافة الروايات"
+        bot.send_message(
+            chat_id,
+            f"🔗 <b>جاري بدء صيانة وربط أزرار التنقل ({target_name}) بدءاً من الفصل {start_chap}...</b>\n"
+            "سيتم فحص جدول النشر وقراءة الروابط وربط كل فصل بالسابق واللاحق والفهرس بدقة متناهية."
+        )
+        def _task():
+            try:
+                import nsw_healer_engine
+                res = nsw_healer_engine.repair_all_chapter_navigation(novel_filter, start_chapter=start_chap)
+                if res.get("success"):
+                    bot.send_message(chat_id, (
+                        f"✅ <b>اكتملت صيانة أزرار التنقل بنجاح!</b> 🎉\n"
+                        f"📖 <b>الرواية:</b> {target_name}\n"
+                        f"🔗 <b>الفصول المربوطة:</b> {res.get('linksPatched', 0)} فصلاً\n"
+                        f"🛡️ تم ربط أزرار السابق والتالي والفهرس بنجاح دون أي قفزات."
+                    ))
+                else:
+                    bot.send_message(chat_id, f"⚠️ تنبيه: {res.get('error', 'تعذر إتمام صيانة التنقل')}")
+            except Exception as e:
+                bot.send_message(chat_id, f"❌ خطأ أثناء صيانة أزرار التنقل: {e}")
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _run_full_repair(chat_id: int, novel_filter: Optional[str]):
+        target_name = novel_filter or "After Severing Ties"
+        bot.send_message(
+            chat_id,
+            f"🛡️ <b>تم إطلاق عملية الإصلاح والصيانة الشاملة لرواية '{target_name}'...</b>\n\n"
+            "1️⃣ سد الفجوات المفقودة وترقية المسودات.\n"
+            "2️⃣ استصلاح الفصول المبتورة في مكانها.\n"
+            "3️⃣ ربط أزرار التنقل بالتسلسل التام.\n\n"
+            "⏳ سيصلك تقرير مفصل عند اكتمال كل مرحلة."
+        )
+        def _task():
+            try:
+                import nsw_healer_engine
+                nsw_healer_engine.run_comprehensive_full_repair(novel_filter)
+            except Exception as e:
+                bot.send_message(chat_id, f"❌ خطأ أثناء دورة الإصلاح الشامل: {e}")
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _run_gaps_repair(chat_id: int, novel_filter: Optional[str]):
+        target_name = novel_filter or "كافة الروايات"
+        bot.send_message(
+            chat_id,
+            f"🧩 <b>جاري فحص الفصول المفقودة وملء الفجوات ({target_name})...</b>\n"
+            "سيصلك تقرير عند الاكتمال."
+        )
+        def _task():
+            try:
+                import nsw_healer_engine
+                nsw_healer_engine.run_auto_fill_all_gaps(novel_filter)
+            except Exception as e:
+                bot.send_message(chat_id, f"❌ خطأ أثناء ملء الفجوات: {e}")
+        threading.Thread(target=_task, daemon=True).start()
+
     @bot.message_handler(commands=['nsw_gaps', 'gaps'])
     def nsw_gaps_cmd(message):
         if not is_admin(message.from_user.id):
             bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
             return
-        bot.reply_to(message, "🧩 <b>جاري فحص الفصول المفقودة وملء الفجوات...</b>\nسيصلك تقرير عند الاكتمال.")
-        def _run():
-            try:
-                import nsw_healer_engine
-                nsw_healer_engine.run_auto_fill_all_gaps()
-            except Exception as e:
-                bot.send_message(message.chat.id, f"❌ خطأ أثناء ملء الفجوات: {e}")
-        threading.Thread(target=_run, daemon=True).start()
+        parts = message.text.strip().split(None, 1)
+        if len(parts) <= 1:
+            markup = make_novel_selection_markup("cb_nvgap", include_all=True)
+            bot.reply_to(
+                message,
+                "🧩 <b>[فحص وسد الفجوات الترقيمية]</b>\n\n"
+                "أي رواية ترغب بفحص وسد فجواتها الترقيمية؟\n"
+                "اختر إحدى الروايات أدناه:",
+                reply_markup=markup
+            )
+            return
+        novel_filter = parts[1].strip()
+        _run_gaps_repair(message.chat.id, novel_filter)
 
     @bot.message_handler(commands=['nsw_repair', 'repair', 'full_repair', 'super_repair'])
     def nsw_repair_cmd(message):
@@ -359,15 +451,18 @@ def create_bot_app():
             bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
             return
         parts = message.text.strip().split(None, 1)
-        novel_filter = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
-        bot.reply_to(message, f"🛡️ <b>تم إطلاق عملية الإصلاح والصيانة الشاملة لرواية '{novel_filter}'...</b>\n\n1️⃣ سد الفجوات المفقودة وترقية المسودات.\n2️⃣ استصلاح الفصول المبتورة في مكانها.\n3️⃣ ربط أزرار التنقل بالتسلسل التام.\n\n⏳ سيصلك تقرير مفصل عند اكتمال كل مرحلة.")
-        def _run():
-            try:
-                import nsw_healer_engine
-                nsw_healer_engine.run_comprehensive_full_repair(novel_filter)
-            except Exception as e:
-                bot.send_message(message.chat.id, f"❌ خطأ أثناء دورة الإصلاح الشامل: {e}")
-        threading.Thread(target=_run, daemon=True).start()
+        if len(parts) <= 1:
+            markup = make_novel_selection_markup("cb_nvrep", include_all=True)
+            bot.reply_to(
+                message,
+                "🛡️ <b>[الإصلاح الشامل الكامل]</b>\n\n"
+                "أي رواية ترغب بإجراء دورة الإصلاح والصيانة الشاملة الكاملة لها؟\n"
+                "اختر إحدى الروايات أدناه:",
+                reply_markup=markup
+            )
+            return
+        novel_filter = parts[1].strip()
+        _run_full_repair(message.chat.id, novel_filter)
 
     @bot.message_handler(commands=['nsw_heal', 'heal', 'truncated'])
     def nsw_heal_cmd(message):
@@ -481,6 +576,21 @@ def create_bot_app():
         markup.add(btn_pull, btn_approve_push, btn_status)
         bot.reply_to(message, text, reply_markup=markup)
 
+    @bot.message_handler(commands=['fix_dates', 'dates', 'fix_date', 'date_fix'])
+    def nsw_fix_dates_cmd(message):
+        """إصلاح وتنسيق تواريخ نشر فصول الرواية وفق نمط زمني ذكي."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+            return
+        markup = make_novel_selection_markup("cb_nvdate", include_all=False)
+        bot.reply_to(
+            message,
+            "🗓️ <b>[منظومة إصلاح وتنسيق تواريخ النشر المجدولة]</b>\n\n"
+            "أي رواية ترغب بإصلاح تاريخ فصولها؟\n"
+            "اختر إحدى الروايات المسجلة على الموقع أدناه:",
+            reply_markup=markup
+        )
+
     @bot.message_handler(commands=['nsw_nav', 'nav', 'repair_nav', 'nav_repair'])
     def nsw_nav_cmd(message):
         """صيانة وربط أزرار التنقل (السابق/التالي/الفهرس) لكافة فصول الرواية المنشورة والمجدولة."""
@@ -488,28 +598,19 @@ def create_bot_app():
             bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
             return
         parts = message.text.strip().split(None, 2)
-        novel_filter = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
+        if len(parts) <= 1:
+            markup = make_novel_selection_markup("cb_nvnav", include_all=True)
+            bot.reply_to(
+                message,
+                "🔗 <b>[صيانة وربط أزرار التنقل]</b>\n\n"
+                "أي رواية ترغب بإصلاح روابط أزرار التنقل (السابق/التالي/الفهرس) لفصولها؟\n"
+                "اختر إحدى الروايات أدناه:",
+                reply_markup=markup
+            )
+            return
+        novel_filter = parts[1].strip()
         start_chap = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 1
-        bot.reply_to(message, (
-            f"🔗 <b>جاري بدء صيانة وربط أزرار التنقل لرواية '{novel_filter}' بدءاً من الفصل {start_chap}...</b>\n"
-            "سيتم فحص جدول النشر وقراءة الروابط وربط كل فصل بالسابق واللاحق والفهرس بدقة متناهية."
-        ))
-        def _run():
-            try:
-                import nsw_healer_engine
-                res = nsw_healer_engine.repair_all_chapter_navigation(novel_filter, start_chapter=start_chap)
-                if res.get("success"):
-                    bot.send_message(message.chat.id, (
-                        f"✅ <b>اكتملت صيانة أزرار التنقل بنجاح!</b> 🎉\n"
-                        f"📖 <b>الرواية:</b> {novel_filter}\n"
-                        f"🔗 <b>الفصول المربوطة:</b> {res.get('linksPatched', 0)} فصلاً\n"
-                        f"🛡️ تم ربط أزرار السابق والتالي والفهرس بنجاح دون أي قفزات."
-                    ))
-                else:
-                    bot.send_message(message.chat.id, f"⚠️ تنبيه: {res.get('error', 'تعذر إتمام صيانة التنقل')}")
-            except Exception as e:
-                bot.send_message(message.chat.id, f"❌ خطأ أثناء صيانة أزرار التنقل: {e}")
-        threading.Thread(target=_run, daemon=True).start()
+        _run_nav_repair(message.chat.id, novel_filter, start_chap)
 
     @bot.message_handler(commands=['nsw_help', 'nsw'])
     def nsw_help_cmd(message):
@@ -519,6 +620,7 @@ def create_bot_app():
         text = (
             "📋 <b>أوامر نظام NSW الشامل للنشر والترجمة:</b>\n\n"
             "🛡️ <code>/nsw_repair [رواية]</code> — <b>الإصلاح الشامل الكامل</b> (سد الفجوات + استصلاح المبتورات + صيانة أزرار التنقل دفعة واحدة)\n"
+            "🗓️ <code>/fix_dates</code> — <b>إصلاح وتنسيق تواريخ النشر</b> المجدولة بذكاء وفق نمط زمني\n"
             "🔍 <code>/nsw_audit [رواية]</code> — <b>فحص شامل عند الطلب</b> لمدونة بلوجر والجداول\n"
             "🗓️ <code>/nsw_weekly</code> — <b>تفعيل الفحص الأسبوعي الدوري</b> (كل إثنين 09:00 ص فقط)\n"
             "🔗 <code>/nsw_nav [رواية] [فصل_البداية]</code> — <b>صيانة وربط أزرار التنقل</b> (السابق/التالي/الفهرس) من الشيت\n"
@@ -530,7 +632,7 @@ def create_bot_app():
             "🚀 <code>/nsw_publish [رواية] [فصول]</code> — نشر فصول بعينها\n"
             "🛑 <code>/nsw_stop</code> — إيقاف العملية الجارية فوراً\n\n"
             "💡 <b>اختصارات سريعة:</b>\n"
-            "<code>/repair</code> · <code>/audit</code> · <code>/weekly</code> · <code>/nav</code> · <code>/status</code> · <code>/gaps</code> · <code>/heal</code> · <code>/stage</code> · <code>/fix</code> · <code>/publish</code> · <code>/stop</code>"
+            "<code>/repair</code> · <code>/fix_dates</code> · <code>/audit</code> · <code>/weekly</code> · <code>/nav</code> · <code>/status</code> · <code>/gaps</code> · <code>/heal</code> · <code>/stage</code> · <code>/fix</code> · <code>/publish</code> · <code>/stop</code>"
         )
         bot.reply_to(message, text)
 
@@ -614,6 +716,87 @@ def create_bot_app():
 
         chat_id = message.chat.id
 
+        session_state = USER_SESSIONS.get(chat_id, {}).get("state")
+        if session_state == "WAITING_FIX_DATE_PATTERN":
+            novel_name = USER_SESSIONS.get(chat_id, {}).get("novel_name", "After Severing Ties")
+            import nsw_healer_engine
+            pattern = nsw_healer_engine.parse_schedule_pattern_input(user_text)
+            if not pattern.get("success"):
+                bot.reply_to(
+                    message,
+                    f"⚠️ <b>تعذر استنتاج نمط التاريخ:</b> {pattern.get('error')}\n\n"
+                    "يرجى كتابة التاريخ بهذا الشكل مثلاً:\n"
+                    "<code>الفصل 400 2027/1/30 الساعة 9:00\n"
+                    "الفصل 401 2027/1/30 الساعة 16:00</code>\n\n"
+                    "أو اضغط /menu للإلغاء والعودة للقائمة."
+                )
+                return
+
+            wait_msg = bot.reply_to(message, f"⏳ <b>جاري فحص جدول فصول '{novel_name}' ومقارنة المواعيد (Dry Run)...</b>")
+
+            def _preview_worker():
+                try:
+                    preview = nsw_healer_engine.preview_and_repair_novel_dates(novel_name, pattern, dry_run=True)
+                    if not preview.get("success"):
+                        bot.edit_message_text(f"⚠️ خطأ أثناء الفحص: {preview.get('error')}", chat_id, wait_msg.message_id)
+                        USER_SESSIONS.get(chat_id, {}).pop("state", None)
+                        return
+
+                    USER_SESSIONS[chat_id]["pending_date_fix"] = {
+                        "novel_name": novel_name,
+                        "pattern": pattern
+                    }
+                    USER_SESSIONS[chat_id].pop("state", None)
+
+                    total_scanned = preview.get("total_scanned", 0)
+                    to_update_count = preview.get("to_update_count", 0)
+                    skipped_count = preview.get("skipped_count", 0)
+                    start_ch = pattern.get("start_chapter")
+                    slots = ", ".join(pattern.get("time_slots", []))
+
+                    samples_text = ""
+                    if preview.get("to_update_sample"):
+                        samples_text += "\n\n🔄 <b>أمثلة على الفصول التي سيتم تعديل موعدها:</b>\n"
+                        for it in preview.get("to_update_sample")[:4]:
+                            samples_text += f"• الفصل {it['chapter_number']}: <code>{it['current_date']}</code> ➔ <code>{it['target_date']}</code>\n"
+
+                    if preview.get("skipped_sample"):
+                        samples_text += "\n⭐ <b>أمثلة على فصول مطابقة مسبقاً (تم استثناؤها):</b>\n"
+                        for it in preview.get("skipped_sample")[:3]:
+                            samples_text += f"• الفصل {it['chapter_number']}: مطابق لموعد <code>{it['target_date']}</code>\n"
+
+                    summary = (
+                        f"📋 <b>[نتيجة المعاينة المسبقة لإصلاح تواريخ النشر]:</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📖 <b>الرواية:</b> {novel_name}\n"
+                        f"🔢 <b>الفصل البدائي:</b> {start_ch}\n"
+                        f"⏰ <b>المواعيد اليومية:</b> {slots} ({pattern.get('slots_per_day')} فصول/يوم)\n"
+                        f"📦 <b>إجمالي الفصول المشمولة:</b> {total_scanned} فصلاً\n"
+                        f"⭐ <b>فصول مطابقة مسبقاً (مستثناة):</b> {skipped_count} فصلاً\n"
+                        f"🔄 <b>فصول سيتم تعديل جدولتها:</b> {to_update_count} فصلاً"
+                        f"{samples_text}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                    )
+
+                    if to_update_count == 0:
+                        summary += "🎉 <b>كافة الفصول مطابقة بالفعل للنمط المطلوب! لا يوجد أي فصل بحاجة لتعديل.</b>"
+                        markup = None
+                    else:
+                        summary += "⚠️ <b>هل ترغب باعتماد هذا النمط وتحديث الجداول وبلوجر الآن؟</b>"
+                        markup = types.InlineKeyboardMarkup(row_width=2)
+                        markup.add(
+                            types.InlineKeyboardButton("✅ نعم، طبّق التعديل الآن", callback_data="cb_confirm_date_fix"),
+                            types.InlineKeyboardButton("❌ إلغاء", callback_data="CANCEL_ACTION")
+                        )
+
+                    bot.edit_message_text(summary, chat_id, wait_msg.message_id, reply_markup=markup)
+                except Exception as ex:
+                    bot.edit_message_text(f"❌ حدث خطأ أثناء المعاينة: {ex}", chat_id, wait_msg.message_id)
+                    USER_SESSIONS.get(chat_id, {}).pop("state", None)
+
+            threading.Thread(target=_preview_worker, daemon=True).start()
+            return
+
         # فحص إذا كان المستخدم يكتب نصاً عادياً للبحث عن فيلم / مسلسل
         if not user_text.startswith("http://") and not user_text.startswith("https://"):
             status_msg = bot.reply_to(message, f"🔎 <b>جاري البحث والتعرف على:</b> <i>{user_text}</i>...")
@@ -670,18 +853,86 @@ def create_bot_app():
         # ----------------------------------------------------
         # معالجة أزرار القائمة الرئيسية لمنظومة NSW
         # ----------------------------------------------------
-        if data == "cb_nsw_repair":
+        if data == "cb_fix_dates_start":
             if not is_admin(chat_id):
                 bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
                 return
-            bot.send_message(chat_id, "🛡️ <b>تم إطلاق عملية الإصلاح والصيانة الشاملة...</b>\n\n1️⃣ سد الفجوات وترقية المسودات.\n2️⃣ استصلاح الفصول المبتورة مكانها.\n3️⃣ ربط أزرار التنقل بالتسلسل التام.\n\n⏳ سيصلك تقرير مفصل عند اكتمال كل مرحلة.")
-            def _run_repair():
+            markup = make_novel_selection_markup("cb_nvdate", include_all=False)
+            bot.send_message(
+                chat_id,
+                "🗓️ <b>[منظومة إصلاح وتنسيق تواريخ النشر المجدولة]</b>\n\n"
+                "أي رواية ترغب بإصلاح تاريخ فصولها؟\n"
+                "اختر إحدى الروايات المسجلة على الموقع أدناه:",
+                reply_markup=markup
+            )
+            return
+
+        elif data.startswith("cb_nvdate_"):
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            idx_str = data.replace("cb_nvdate_", "")
+            novel_name = get_novel_from_catalog_idx(idx_str) or "After Severing Ties"
+            USER_SESSIONS[chat_id] = {
+                "state": "WAITING_FIX_DATE_PATTERN",
+                "novel_name": novel_name
+            }
+            prompt_text = (
+                f"📖 <b>الرواية المختارة:</b> <b>{novel_name}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"من فضلك اكتب تاريخ أول فصل في أي تاريخ وبأي نمط ترغب به.\n\n"
+                f"<b>مثال:</b>\n"
+                f"<code>الفصل 400 2027/1/30 الساعة 9:00\n"
+                f"الفصل 401 2027/1/30 الساعة 16:00</code>\n\n"
+                f"💡 <i>المحرك سيستنتج أوقات النشر اليومية وسيطبقها على كافة الفصول التالية، مع استثناء أي فصل تاريخه مضبوط مسبقاً دون إرسال طلب تعديل له!</i>"
+            )
+            cancel_markup = types.InlineKeyboardMarkup()
+            cancel_markup.add(types.InlineKeyboardButton("❌ إلغاء العملية", callback_data="CANCEL_ACTION"))
+            bot.send_message(chat_id, prompt_text, reply_markup=cancel_markup)
+            return
+
+        elif data == "cb_confirm_date_fix":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            pending = session_data.get("pending_date_fix")
+            if not pending:
+                bot.send_message(chat_id, "⚠️ انتهت صلاحية الجلسة أو تم إلغاؤها.")
+                return
+            n_name = pending["novel_name"]
+            pat = pending["pattern"]
+            bot.send_message(chat_id, f"🚀 <b>جاري تطبيق تعديل تواريخ النشر لرواية '{n_name}' على Google Sheet وبلوجر...</b>\nسيصلك تقرير تفصيلي فور الانتهاء.")
+            def _run_date_fix():
                 try:
                     import nsw_healer_engine
-                    nsw_healer_engine.run_comprehensive_full_repair("After Severing Ties")
-                except Exception as e:
-                    bot.send_message(chat_id, f"❌ خطأ أثناء الإصلاح الشامل: {e}")
-            threading.Thread(target=_run_repair, daemon=True).start()
+                    nsw_healer_engine.preview_and_repair_novel_dates(n_name, pat, dry_run=False)
+                except Exception as ex:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء تطبيق تعديل التواريخ: {ex}")
+            threading.Thread(target=_run_date_fix, daemon=True).start()
+            USER_SESSIONS.get(chat_id, {}).pop("pending_date_fix", None)
+            return
+
+        elif data == "cb_nsw_repair":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            markup = make_novel_selection_markup("cb_nvrep", include_all=True)
+            bot.send_message(
+                chat_id,
+                "🛡️ <b>[الإصلاح الشامل الكامل]</b>\n\n"
+                "أي رواية ترغب بإجراء دورة الإصلاح والصيانة الشاملة الكاملة لها؟\n"
+                "اختر إحدى الروايات أدناه:",
+                reply_markup=markup
+            )
+            return
+
+        elif data.startswith("cb_nvrep_"):
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            idx_str = data.replace("cb_nvrep_", "")
+            target_novel = get_novel_from_catalog_idx(idx_str)
+            _run_full_repair(chat_id, target_novel)
             return
 
         elif data == "cb_nsw_status":
@@ -700,19 +951,24 @@ def create_bot_app():
             if not is_admin(chat_id):
                 bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
                 return
-            conf_markup = types.InlineKeyboardMarkup(row_width=2)
-            btn_yes = types.InlineKeyboardButton("✅ نعم، ابدأ سد الفجوات", callback_data="CONFIRM_HEAL_GAPS")
-            btn_no = types.InlineKeyboardButton("❌ إلغاء", callback_data="CANCEL_ACTION")
-            conf_markup.add(btn_yes, btn_no)
+            markup = make_novel_selection_markup("cb_nvgap", include_all=True)
             bot.send_message(
                 chat_id,
-                "⚠️ <b>تأكيد سد الفجوات الترقيمية:</b>\n"
-                "سيقوم المحرك بالتحقق من الفصول المفقودة وجدولتها بمواعيد زمنية دقيقة ومتسلسلة.\n\n"
-                "هل أنت متأكد من رغبتك بالبدء الآن؟",
-                reply_markup=conf_markup
+                "🧩 <b>[فحص وسد الفجوات الترقيمية]</b>\n\n"
+                "أي رواية ترغب بفحص وسد فجواتها الترقيمية؟\n"
+                "اختر إحدى الروايات أدناه:",
+                reply_markup=markup
             )
             return
 
+        elif data.startswith("cb_nvgap_"):
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            idx_str = data.replace("cb_nvgap_", "")
+            target_novel = get_novel_from_catalog_idx(idx_str)
+            _run_gaps_repair(chat_id, target_novel)
+            return
 
         elif data == "cb_nsw_heal":
             if not is_admin(chat_id):
@@ -732,22 +988,23 @@ def create_bot_app():
             if not is_admin(chat_id):
                 bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
                 return
-            bot.send_message(chat_id, "🔗 <b>جاري بدء صيانة وربط أزرار التنقل لكافة الفصول...</b>\nسيتم قراءة الروابط من جدول النشر وربط زر السابق بالتالي والفهرس تسلسلياً.")
-            def _run_nav():
-                try:
-                    import nsw_healer_engine
-                    res = nsw_healer_engine.repair_all_chapter_navigation("After Severing Ties")
-                    if res.get("success"):
-                        bot.send_message(chat_id, (
-                            f"✅ <b>اكتملت صيانة أزرار التنقل بنجاح!</b> 🎉\n"
-                            f"🔗 <b>الفصول المربوطة:</b> {res.get('linksPatched', 0)} فصلاً\n"
-                            f"🛡️ تم ربط أزرار السابق والتالي والفهرس بنجاح."
-                        ))
-                    else:
-                        bot.send_message(chat_id, f"⚠️ تنبيه: {res.get('error', 'تعذر إتمام صيانة التنقل')}")
-                except Exception as e:
-                    bot.send_message(chat_id, f"❌ خطأ أثناء صيانة أزرار التنقل: {e}")
-            threading.Thread(target=_run_nav, daemon=True).start()
+            markup = make_novel_selection_markup("cb_nvnav", include_all=True)
+            bot.send_message(
+                chat_id,
+                "🔗 <b>[صيانة أزرار التنقل]</b>\n\n"
+                "أي رواية ترغب بإصلاح روابط أزرار التنقل (السابق/التالي/الفهرس) لفصولها؟\n"
+                "اختر إحدى الروايات أدناه:",
+                reply_markup=markup
+            )
+            return
+
+        elif data.startswith("cb_nvnav_"):
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            idx_str = data.replace("cb_nvnav_", "")
+            target_novel = get_novel_from_catalog_idx(idx_str)
+            _run_nav_repair(chat_id, target_novel, start_chap=1)
             return
 
         elif data == "cb_nsw_stage" or data == "cb_opus_status":
@@ -853,7 +1110,7 @@ def create_bot_app():
                 bot.send_message(chat_id, f"❌ خطأ: {e}")
             return
 
-        elif data in ["TRIGGER_HEAL_GAPS", "heal_truncated_now", "cb_nsw_repair"]:
+        elif data in ["TRIGGER_HEAL_GAPS", "heal_truncated_now"]:
             if not is_admin(chat_id):
                 bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
                 return
@@ -874,17 +1131,12 @@ def create_bot_app():
             if not is_admin(chat_id):
                 bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
                 return
-            bot.send_message(chat_id, "🚀 <b>جاري بدء دورة الاستصلاح الشاملة بناءً على تأكيدك...</b>\n📅 كافة الفصول المضافة ستُجدول في مواعيدها الطبيعية.")
-            def _run_full():
-                try:
-                    import nsw_healer_engine
-                    nsw_healer_engine.run_comprehensive_full_repair("After Severing Ties")
-                except Exception as e:
-                    bot.send_message(chat_id, f"❌ خطأ أثناء الاستصلاح: {e}")
-            threading.Thread(target=_run_full, daemon=True).start()
+            _run_full_repair(chat_id, None)
             return
 
         elif data == "CANCEL_ACTION":
+            USER_SESSIONS.get(chat_id, {}).pop("state", None)
+            USER_SESSIONS.get(chat_id, {}).pop("pending_date_fix", None)
             bot.send_message(chat_id, "🛑 تم إلغاء العملية بأمان. لن يتم إجراء أي تعديل أو نشر.")
             return
 
