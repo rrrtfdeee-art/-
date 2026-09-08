@@ -2228,21 +2228,32 @@ def preview_and_repair_novel_dates(
             p_id = item["post_id"]
             t_iso = item["target_iso"]
 
-            try:
-                payload = {
-                    "action": "syncSheetDateToBlogger",
-                    "postId": str(p_id),
-                    "publishedDate": t_iso,
-                    "chapterNumber": c_n
-                }
-                res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=25).json()
-                if res.get("status") == "success" or res.get("published") or res.get("success"):
-                    updated_success.append(item)
-                    logger.info(f"✅ تم تعديل موعد الفصل {c_n} بنجاح إلى: {item['target_date']}")
-                else:
-                    failed_items.append((c_n, res.get("message", "فشل التعديل")))
-            except Exception as ex:
-                failed_items.append((c_n, str(ex)))
+            # محاولة الإرسال مع إعادة المحاولة في حال تأخر استجابة جوجل
+            success_item = False
+            last_err = ""
+            for attempt in range(2):
+                try:
+                    payload = {
+                        "action": "syncSheetDateToBlogger",
+                        "postId": str(p_id),
+                        "publishedDate": t_iso,
+                        "chapterNumber": c_n
+                    }
+                    res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=60).json()
+                    if res.get("status") == "success" or res.get("published") or res.get("success"):
+                        updated_success.append(item)
+                        logger.info(f"✅ تم تعديل موعد الفصل {c_n} بنجاح إلى: {item['target_date']}")
+                        success_item = True
+                        break
+                    else:
+                        last_err = res.get("message", "فشل التعديل")
+                except Exception as ex:
+                    last_err = str(ex)
+                    import time
+                    time.sleep(1)
+
+            if not success_item:
+                failed_items.append((c_n, last_err))
 
     # فحص ما إذا كان سبب الفشل هو عدم نشر النسخة الجديدة في Apps Script
     is_gas_outdated = any("غير معروف" in str(err) for _, err in failed_items)
