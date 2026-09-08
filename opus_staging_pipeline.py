@@ -177,9 +177,13 @@ def fetch_pending_chapters_for_opus_review(
                     # جلب المحتوى الصافي من بلوجر
                     clean_text = ""
                     if post_id:
-                        # جلب التدوينة من Blogger عبر Apps Script
                         try:
-                            post_fetch_url = f"{PUBLISH_WEBAPP_URL}?action=scanGaps"
+                            post_res = requests.get(f"{PUBLISH_WEBAPP_URL}?action=getPost&postId={post_id}", timeout=20)
+                            if post_res.status_code == 200:
+                                p_data = post_res.json()
+                                raw_c = p_data.get("data", {}).get("content", "")
+                                if raw_c:
+                                    clean_text = strip_html_to_clean_story(raw_c)
                         except Exception:
                             pass
 
@@ -232,10 +236,10 @@ def apply_opus_review_and_sync(
 
     # 2. التحديث حسب المصدر
     # الحالة أ: المنشور موجود على بلوجر (مجدول أو حي) ➔ إرسال طلب PATCH لتحديث المحتوى فقط
-    if post_id and ("Blogger" in source or post_id.isdigit()):
+    if post_id and ("Blogger" in source or str(post_id).isdigit()):
         patch_payload = {
             "action": "updatePostContent",
-            "postId": post_id,
+            "postId": str(post_id),
             "content": royal_html,
             "title": f"{novel_name} - {final_title}"
         }
@@ -253,9 +257,8 @@ def apply_opus_review_and_sync(
         except Exception as e:
             result["blogger_updated"] = False
             result["error"] = str(e)
-
-    # 3. توثيق المزامنة في الشيتين دائماً
-    try:
+    else:
+        # الحالة ب: إنشاء ونشر جديد
         sync_payload = {
             "action": "createPost",
             "publishType": "chapter",
@@ -265,7 +268,21 @@ def apply_opus_review_and_sync(
             "content": royal_html,
             "labels": [novel_name, "آخر الفصول"]
         }
-    except Exception:
-        pass
+        if pub_date:
+            sync_payload["publishDate"] = pub_date
+
+        try:
+            res = requests.post(PUBLISH_WEBAPP_URL, json=sync_payload, timeout=35).json()
+            if res.get("status") == "success":
+                result["published"] = True
+                result["post_id"] = str(res.get("data", {}).get("id", ""))
+                result["post_url"] = str(res.get("data", {}).get("url", ""))
+                logger.info(f"✅ تم إنشاء ونشر الفصل {c_num} على بلوجر بنجاح.")
+            else:
+                result["published"] = False
+                result["error"] = res.get("message", "فشل نشر الفصل")
+        except Exception as e:
+            result["published"] = False
+            result["error"] = str(e)
 
     return result
