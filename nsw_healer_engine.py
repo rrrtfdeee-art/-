@@ -2345,38 +2345,42 @@ def preview_and_repair_novel_dates(
     updated_success = []
     failed_items = []
 
-    # 1. محاولة التحديث الدفعي السريع (Bulk Update) بطلب واحد متكامل
-    bulk_payload = {
-        "action": "bulkSyncDatesToBlogger",
-        "updates": [
-            {
-                "postId": str(item["post_id"]),
-                "publishedDate": item["target_iso"],
-                "chapterNumber": item["chapter_number"]
-            }
-            for item in to_update if item.get("post_id")
-        ]
-    }
-    use_bulk = False
-    try:
-        bulk_res = requests.post(PUBLISH_WEBAPP_URL, json=bulk_payload, timeout=50).json()
-        if bulk_res.get("success") or bulk_res.get("status") == "success":
-            use_bulk = True
-            updated_success = to_update
-            logger.info(f"⚡ تم بنجاح تعديل مواعيد {len(to_update)} فصلاً دفعة واحدة عبر Bulk Sync!")
-    except Exception as e_bulk:
-        logger.warning(f"ملاحظة التعديل الدفعي: {e_bulk}")
+    # 1. التحديث الدفعي الذكي المجمع عبر دفعات آمنة (Batches of 35) لتجنب timeout جوجل آب سكريبت
+    batch_size = 35
+    valid_updates = [item for item in to_update if item.get("post_id")]
+    
+    for b_idx in range(0, len(valid_updates), batch_size):
+        chunk = valid_updates[b_idx:b_idx + batch_size]
+        bulk_payload = {
+            "action": "bulkSyncDatesToBlogger",
+            "updates": [
+                {
+                    "postId": str(it["post_id"]),
+                    "publishedDate": it["target_iso"],
+                    "chapterNumber": it["chapter_number"]
+                }
+                for it in chunk
+            ]
+        }
+        batch_success = False
+        try:
+            resp = requests.post(PUBLISH_WEBAPP_URL, json=bulk_payload, timeout=90)
+            bulk_res = resp.json() if resp.status_code == 200 else {}
+            if bulk_res.get("success") or bulk_res.get("status") == "success":
+                updated_success.extend(chunk)
+                batch_success = True
+                logger.info(f"⚡ تم بنجاح تعديل دفعة من {len(chunk)} فصول ({b_idx+1} إلى {min(b_idx+batch_size, len(valid_updates))}) دفعة واحدة!")
+            else:
+                logger.warning(f"تنبيه استجابة الدفعة {b_idx}: {bulk_res.get('message')}")
+        except Exception as e_bulk:
+            logger.warning(f"خطأ مهلة في الدفعة {b_idx}: {e_bulk}")
 
-    if not use_bulk:
-        for item in to_update:
-            c_n = item["chapter_number"]
-            p_id = item["post_id"]
-            t_iso = item["target_iso"]
-
-            # محاولة الإرسال مع إعادة المحاولة في حال تأخر استجابة جوجل
-            success_item = False
-            last_err = ""
-            for attempt in range(2):
+        # إذا تعذرت الدفعة ككتلة، يتم إرسال فصول هذه الدفعة فقط فردياً بهدوء ودون إرسال تنبيهات منفردة
+        if not batch_success:
+            for item in chunk:
+                c_n = item["chapter_number"]
+                p_id = item["post_id"]
+                t_iso = item["target_iso"]
                 try:
                     payload = {
                         "action": "syncSheetDateToBlogger",
@@ -2384,21 +2388,13 @@ def preview_and_repair_novel_dates(
                         "publishedDate": t_iso,
                         "chapterNumber": c_n
                     }
-                    res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=60).json()
+                    res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=40).json()
                     if res.get("status") == "success" or res.get("published") or res.get("success"):
                         updated_success.append(item)
-                        logger.info(f"✅ تم تعديل موعد الفصل {c_n} بنجاح إلى: {item['target_date']}")
-                        success_item = True
-                        break
                     else:
-                        last_err = res.get("message", "فشل التعديل")
+                        failed_items.append((c_n, res.get("message", "فشل التعديل")))
                 except Exception as ex:
-                    last_err = str(ex)
-                    import time
-                    time.sleep(1)
-
-            if not success_item:
-                failed_items.append((c_n, last_err))
+                    failed_items.append((c_n, str(ex)))
 
     # فحص ما إذا كان سبب الفشل هو عدم نشر النسخة الجديدة في Apps Script
     is_gas_outdated = any("غير معروف" in str(err) for _, err in failed_items)
