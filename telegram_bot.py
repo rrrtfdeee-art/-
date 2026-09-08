@@ -81,6 +81,23 @@ def create_bot_app():
 
     bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
+    # تسجيل قائمة الأوامر في زر Menu الرسمي بتطبيق تيليجرام
+    try:
+        bot.set_my_commands([
+            types.BotCommand("menu", "📑 القائمة الرئيسية وأزرار التحكم"),
+            types.BotCommand("repair", "🛡️ الإصلاح الشامل (فجوات + مبتورات + تنقل)"),
+            types.BotCommand("status", "📊 حالة المنظومة والمهام اللحظية"),
+            types.BotCommand("gaps", "🧩 فحص وسد الفصول المفقودة والمسودات"),
+            types.BotCommand("heal", "🩹 استصلاح الفصول المبتورة أو الناقصة"),
+            types.BotCommand("stage", "🎭 تجهيز دفعة الـ 20 فصلاً لـ Claude Opus"),
+            types.BotCommand("fix", "🎯 إصلاح أو ترجمة فصل فردي محدد"),
+            types.BotCommand("publish", "🚀 نشر فصول مخصصة"),
+            types.BotCommand("stop", "🛑 إيقاف فوري طارئ للمحرك"),
+            types.BotCommand("help", "📋 عرض دليل الأوامر والمساعدة"),
+        ])
+    except Exception as cmd_err:
+        print(f"[Telegram Bot] Warning setting commands menu: {cmd_err}")
+
     # ----------------------------------------------------
     # أوامر المشرف (Admin Control Commands)
     # ----------------------------------------------------
@@ -152,24 +169,40 @@ def create_bot_app():
         database.save_setting("telegram_public_mode", "false")
         bot.reply_to(message, "🔒 <b>تم تفعيل الوضع الخاص!</b> البوت مقفل الآن ومتاح لك وللمستخدمين المصرح لهم فقط.")
 
-    @bot.message_handler(commands=['start', 'help'])
-    @bot.message_handler(func=lambda msg: msg.text and msg.text.strip() in ['ابدأ', 'ابدا', 'مرحبا', 'start', 'help'])
+    @bot.message_handler(commands=['start', 'help', 'menu'])
+    @bot.message_handler(func=lambda msg: msg.text and msg.text.strip().lower() in ['ابدأ', 'ابدا', 'مرحبا', 'start', 'help', 'menu', 'قائمة', 'القائمة', 'الاوامر', 'الأوامر', 'القائمة الرئيسية', 'اوامر'])
     def send_welcome(message):
         if not is_user_authorized(message):
             bot.reply_to(message, "⛔ <b>عذراً، هذا البوت خاص وغير متاح للعامة.</b>\nتواصل مع مالك البوت للحصول على إذن الاستخدام.")
             return
 
-        admin_hint = "\n\n👑 <i>بصفتك المشرف، اكتب /admin للتحكم في الصلاحيات.</i>" if is_admin(message.from_user.id) else ""
+        is_adm = is_admin(message.from_user.id)
+        admin_hint = "\n👑 <b>أنت في وضع المشرف (Admin Mode).</b>" if is_adm else ""
         text = (
-            "👋 <b>مرحباً بك في بوت Smart Scraper & Media AI!</b>\n\n"
-            "هذا البوت مجهز لتنفيذ المهام التالية نيابة عنك وبأعلى سرعة:\n"
-            "📚 <b>سحب الروايات:</b> أرسل رابط فهرس الرواية لسحب الفصول وتجميعها بملف TXT كامل.\n"
-            "🎬 <b>تحميل الفيديوهات:</b> أرسل رابط يوتيوب، تيك توك، أو تويتر لتحميله MP4 أو تحويله لـ MP3 مع التجزئة التلقائية.\n"
-            "🧠 <b>الذكاء الاصطناعي:</b> مدعوم بنموذج Google Gemini 3.8 Flash السحابي."
+            "👋 <b>مرحباً بك في مركز تحكم Novelskyworld & Media AI!</b>\n\n"
+            "هذا البوت مجهز لإدارة منظومة النشر والترجمة وسحب الوسائط بأعلى دقة:\n"
+            "🛡️ <b>منظومة NSW:</b> فحص وسد الفجوات، واستصلاح المبتورات، وصيانة أزرار التنقل.\n"
+            "📚 <b>سحب الروايات:</b> أرسل رابط فهرس أي رواية لسحب فصولها وتصديرها بملف TXT كامل.\n"
+            "🎬 <b>تحميل الوسائط:</b> أرسل رابط فيديو (يوتيوب/تيك توك/تويتر) أو اطلب كشف الأفلام."
             f"{admin_hint}\n\n"
-            "<i>فقط قم بمشاركة أو لصق أي رابط هنا للبدء مباشرة!</i>"
+            "👇 <b>استخدم الأزرار التفاعلية أدناه للتحكم السريع:</b>"
         )
-        bot.reply_to(message, text)
+        markup = None
+        if is_adm:
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            btn_repair = types.InlineKeyboardButton("🛡️ الإصلاح الشامل الفائق", callback_data="cb_nsw_repair")
+            btn_status = types.InlineKeyboardButton("📊 حالة المنظومة", callback_data="cb_nsw_status")
+            btn_gaps = types.InlineKeyboardButton("🧩 سد الفجوات الترقيمية", callback_data="cb_nsw_gaps")
+            btn_heal = types.InlineKeyboardButton("🩹 استصلاح المبتورات", callback_data="cb_nsw_heal")
+            btn_stage = types.InlineKeyboardButton("🎭 صقل أوبس (Opus)", callback_data="cb_nsw_stage")
+            btn_stop = types.InlineKeyboardButton("🛑 إيقاف فوري", callback_data="cb_nsw_stop")
+            btn_help = types.InlineKeyboardButton("📋 دليل الأوامر", callback_data="cb_nsw_help")
+            markup.add(btn_repair)
+            markup.add(btn_status, btn_gaps)
+            markup.add(btn_heal, btn_stage)
+            markup.add(btn_stop, btn_help)
+
+        bot.reply_to(message, text, reply_markup=markup)
 
     @bot.message_handler(content_types=['photo', 'video'])
     def handle_incoming_media(message):
@@ -286,6 +319,200 @@ def create_bot_app():
     def handle_novel_command(message):
         bot.reply_to(message, "📚 <b>محرك سحب الروايات:</b>\nأرسل رابط صفحة الرواية أو الفهرس لسحب كافة الفصول بدقة وتصديرها بملف TXT نظيف.")
 
+    # ================================================================
+    # أوامر إدارة NSW (نظام النشر والترجمة على Blogger)
+    # ================================================================
+
+    @bot.message_handler(commands=['nsw_status', 'status'])
+    def nsw_status_cmd(message):
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+            return
+        try:
+            import nsw_healer_engine
+            report = nsw_healer_engine.get_realtime_engine_report()
+            bot.reply_to(message, report)
+        except Exception as e:
+            bot.reply_to(message, f"⚠️ تعذر جلب التقرير: {e}")
+
+    @bot.message_handler(commands=['nsw_gaps', 'gaps'])
+    def nsw_gaps_cmd(message):
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
+            return
+        bot.reply_to(message, "🧩 <b>جاري فحص الفصول المفقودة وملء الفجوات...</b>\nسيصلك تقرير عند الاكتمال.")
+        def _run():
+            try:
+                import nsw_healer_engine
+                nsw_healer_engine.run_auto_fill_all_gaps()
+            except Exception as e:
+                bot.send_message(message.chat.id, f"❌ خطأ أثناء ملء الفجوات: {e}")
+        threading.Thread(target=_run, daemon=True).start()
+
+    @bot.message_handler(commands=['nsw_repair', 'repair', 'full_repair', 'super_repair'])
+    def nsw_repair_cmd(message):
+        """أمر الإصلاح والصيانة الشامل: سد الفجوات + استصلاح المبتورات + صيانة أزرار التنقل دفعة واحدة."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
+            return
+        parts = message.text.strip().split(None, 1)
+        novel_filter = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
+        bot.reply_to(message, f"🛡️ <b>تم إطلاق عملية الإصلاح والصيانة الشاملة لرواية '{novel_filter}'...</b>\n\n1️⃣ سد الفجوات المفقودة وترقية المسودات.\n2️⃣ استصلاح الفصول المبتورة في مكانها.\n3️⃣ ربط أزرار التنقل بالتسلسل التام.\n\n⏳ سيصلك تقرير مفصل عند اكتمال كل مرحلة.")
+        def _run():
+            try:
+                import nsw_healer_engine
+                nsw_healer_engine.run_comprehensive_full_repair(novel_filter)
+            except Exception as e:
+                bot.send_message(message.chat.id, f"❌ خطأ أثناء دورة الإصلاح الشامل: {e}")
+        threading.Thread(target=_run, daemon=True).start()
+
+    @bot.message_handler(commands=['nsw_heal', 'heal', 'truncated'])
+    def nsw_heal_cmd(message):
+        """فحص واستصلاح الفصول المبتورة أو الناقصة على Blogger."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
+            return
+        parts = message.text.strip().split(None, 1)
+        novel_filter = parts[1].strip() if len(parts) > 1 else None
+        
+        target_name = novel_filter or "كافة الروايات"
+        bot.reply_to(message, f"🩹 <b>جاري فحص واستصلاح الفصول المبتورة ({target_name})...</b>\nسيتم التحقق من المتن العربي واستصلاح أي فصل ناقص.")
+        def _run():
+            try:
+                import nsw_healer_engine
+                nsw_healer_engine.run_full_auto_heal(novel_filter)
+            except Exception as e:
+                bot.send_message(message.chat.id, f"❌ خطأ أثناء الاستصلاح: {e}")
+        threading.Thread(target=_run, daemon=True).start()
+
+    @bot.message_handler(commands=['nsw_fix', 'fix'])
+    def nsw_fix_cmd(message):
+        """مثال: /nsw_fix اسم الرواية 456"""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
+            return
+        parts = message.text.strip().split()
+        cmd = parts[0]  # /nsw_fix أو /fix
+        rest = parts[1:] if len(parts) > 1 else []
+
+        if len(rest) >= 2 and rest[-1].isdigit():
+            chap_num = int(rest[-1])
+            novel_name = " ".join(rest[:-1])
+        elif len(rest) == 1 and rest[0].isdigit():
+            chap_num = int(rest[0])
+            novel_name = "After Severing Ties"
+        else:
+            novel_name = " ".join(rest) if rest else "After Severing Ties"
+            chap_num = 1
+            bot.reply_to(message, (
+                "⚠️ <b>مثال على استخدام الأمر:</b>\n"
+                "<code>/nsw_fix اسم الرواية 456</code>\n"
+                "أو: <code>/fix 456</code> (للرواية الافتراضية)"
+            ))
+            return
+
+        bot.reply_to(message, f"🎯 <b>جاري إصلاح الفصل {chap_num} من رواية '{novel_name}'...</b>")
+        def _run():
+            try:
+                import nsw_healer_engine
+                nsw_healer_engine.fix_single_chapter_x(novel_name, chap_num)
+            except Exception as e:
+                bot.send_message(message.chat.id, f"❌ خطأ: {e}")
+        threading.Thread(target=_run, daemon=True).start()
+
+    @bot.message_handler(commands=['nsw_publish', 'publish'])
+    def nsw_publish_cmd(message):
+        """مثال: /nsw_publish اسم الرواية 1,5,10-20"""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
+            return
+        parts = message.text.strip().split(None, 2)
+        if len(parts) < 3:
+            bot.reply_to(message, (
+                "⚠️ <b>الاستخدام:</b>\n"
+                "<code>/nsw_publish اسم الرواية 1,5,10-20</code>\n"
+                "لنشر فصول محددة أو نطاقات منفصلة."
+            ))
+            return
+        novel_name = parts[1]
+        chapters_str = parts[2]
+        bot.reply_to(message, f"🚀 <b>جاري نشر الفصول المحددة لرواية '{novel_name}'...</b>\n📋 الفصول: <code>{chapters_str}</code>")
+        def _run():
+            try:
+                import nsw_healer_engine
+                nsw_healer_engine.publish_specific_chapters(novel_name, chapters_str)
+            except AttributeError:
+                bot.send_message(message.chat.id, "⚠️ دالة النشر المنفرد غير متاحة بعد في محرك NSW.")
+            except Exception as e:
+                bot.send_message(message.chat.id, f"❌ خطأ أثناء النشر: {e}")
+        threading.Thread(target=_run, daemon=True).start()
+
+    @bot.message_handler(commands=['nsw_stage', 'stage', 'opus_stage', 'opus'])
+    def nsw_stage_cmd(message):
+        """تجهيز وجلب دفعة فصول (حتى 20 فصلاً) لصقلها واعتمادها عبر Claude Opus."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
+            return
+        parts = message.text.strip().split(None, 1)
+        novel_filter = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
+        bot.reply_to(message, f"🎭 <b>جاري تجهيز دفعة فصول Claude Opus (حتى 20 فصلاً) لرواية '{novel_filter}'...</b>\nسيتم تجريد النصوص برمجياً من الأكواد واستخراج المتن الصافي.")
+        def _run():
+            try:
+                import opus_staging_pipeline
+                batch = opus_staging_pipeline.fetch_pending_chapters_for_opus_review(max_chapters=20, novel_name=novel_filter)
+                if not batch:
+                    bot.send_message(message.chat.id, "ℹ️ لا توجد فصول حالياً بانتظار الاعتماد أو الجدولة لهذه الرواية.")
+                    return
+                report = f"✅ <b>تم تجهيز دفعة فصول ({len(batch)} فصل) للصقل الأدبي:</b>\n"
+                for ch in batch:
+                    report += f"• الفصل <b>{ch['chapter_number']}</b> ({ch['char_count']} حرف) ➔ مصدر: <code>{ch['source']}</code>\n"
+                report += "\n💡 <i>المتون مجردة وجاهزة للصقل وإعادة التغليف الملكي التلقائي.</i>"
+                bot.send_message(message.chat.id, report)
+            except Exception as e:
+                bot.send_message(message.chat.id, f"❌ خطأ أثناء تجهيز دفعة أوبس: {e}")
+        threading.Thread(target=_run, daemon=True).start()
+
+    @bot.message_handler(commands=['nsw_help', 'nsw'])
+    def nsw_help_cmd(message):
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
+            return
+        text = (
+            "📋 <b>أوامر نظام NSW الشامل للنشر والترجمة:</b>\n\n"
+            "🛡️ <code>/nsw_repair [رواية]</code> — <b>الإصلاح الشامل الكامل</b> (سد الفجوات + استصلاح المبتورات + صيانة أزرار التنقل دفعة واحدة)\n"
+            "📊 <code>/nsw_status</code> — حالة المحرك والمهام الآنية\n"
+            "🧩 <code>/nsw_gaps [رواية]</code> — فحص وسد الفصول المفقودة فقط\n"
+            "🩹 <code>/nsw_heal [رواية]</code> — فحص واستصلاح الفصول المبتورة فقط\n"
+            "🎭 <code>/nsw_stage [رواية]</code> — تجهيز دفعة الـ 20 فصلاً لـ Claude Opus\n"
+            "🎯 <code>/nsw_fix [رواية] [رقم]</code> — إصلاح وترجمة فصل محدد\n"
+            "🚀 <code>/nsw_publish [رواية] [فصول]</code> — نشر فصول بعينها\n"
+            "🛑 <code>/nsw_stop</code> — إيقاف العملية الجارية فوراً\n\n"
+            "💡 <b>اختصارات سريعة:</b>\n"
+            "<code>/repair</code> · <code>/status</code> · <code>/gaps</code> · <code>/heal</code> · <code>/stage</code> · <code>/fix</code> · <code>/publish</code> · <code>/stop</code>"
+        )
+        bot.reply_to(message, text)
+
+    @bot.message_handler(commands=['nsw_stop', 'stop'])
+    def nsw_stop_cmd(message):
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
+            return
+        try:
+            import nsw_healer_engine
+            nsw_healer_engine.request_stop()
+            nsw_healer_engine.set_engine_state(
+                "🛑 متوقف بأمر المشرف",
+                "إيقاف فوري",
+                "تم إيقاف كافة العمليات الجارية"
+            )
+            bot.reply_to(message, (
+                "🛑 <b>تم تفعيل أمر الإيقاف الفوري بنجاح!</b>\n\n"
+                "⚡ توقف المحرك فوراً وتم إلغاء أي سحب أو ترجمة أو نشر جاري.\n"
+                "▶️ لاستئناف العمل يمكنك إرسال: <code>/nsw_gaps</code> أو <code>/nsw_fix</code> في أي وقت."
+            ))
+        except Exception as e:
+            bot.reply_to(message, f"❌ خطأ: {e}")
+
     @bot.message_handler(func=lambda msg: True)
     def handle_incoming_link(message):
         if not is_user_authorized(message):
@@ -355,6 +582,105 @@ def create_bot_app():
         target_url = session_data.get("url")
         data = call.data
         bot.answer_callback_query(call.id, "جاري المعالجة...")
+
+        # ----------------------------------------------------
+        # معالجة أزرار القائمة الرئيسية لمنظومة NSW
+        # ----------------------------------------------------
+        if data == "cb_nsw_repair":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            bot.send_message(chat_id, "🛡️ <b>تم إطلاق عملية الإصلاح والصيانة الشاملة...</b>\n\n1️⃣ سد الفجوات وترقية المسودات.\n2️⃣ استصلاح الفصول المبتورة مكانها.\n3️⃣ ربط أزرار التنقل بالتسلسل التام.\n\n⏳ سيصلك تقرير مفصل عند اكتمال كل مرحلة.")
+            def _run_repair():
+                try:
+                    import nsw_healer_engine
+                    nsw_healer_engine.run_comprehensive_full_repair("After Severing Ties")
+                except Exception as e:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء الإصلاح الشامل: {e}")
+            threading.Thread(target=_run_repair, daemon=True).start()
+            return
+
+        elif data == "cb_nsw_status":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            try:
+                import nsw_healer_engine
+                rep = nsw_healer_engine.get_realtime_engine_report()
+                bot.send_message(chat_id, rep)
+            except Exception as e:
+                bot.send_message(chat_id, f"⚠️ تعذر جلب التقرير: {e}")
+            return
+
+        elif data == "cb_nsw_gaps":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            bot.send_message(chat_id, "🧩 <b>جاري فحص الفصول المفقودة وسد الفجوات...</b>")
+            def _run_gaps():
+                try:
+                    import nsw_healer_engine
+                    nsw_healer_engine.run_auto_fill_all_gaps("After Severing Ties")
+                except Exception as e:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء سد الفجوات: {e}")
+            threading.Thread(target=_run_gaps, daemon=True).start()
+            return
+
+        elif data == "cb_nsw_heal":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            bot.send_message(chat_id, "🩹 <b>جاري فحص واستصلاح الفصول المبتورة على Blogger...</b>")
+            def _run_heal():
+                try:
+                    import nsw_healer_engine
+                    nsw_healer_engine.run_full_auto_heal("After Severing Ties")
+                except Exception as e:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء الاستصلاح: {e}")
+            threading.Thread(target=_run_heal, daemon=True).start()
+            return
+
+        elif data == "cb_nsw_stage":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            bot.send_message(chat_id, "🎭 <b>جاري تجهيز دفعة الـ 20 فصلاً لـ Claude Opus...</b>")
+            def _run_stage():
+                try:
+                    import opus_staging_pipeline
+                    batch = opus_staging_pipeline.fetch_pending_chapters_for_opus_review(max_chapters=20, novel_name="After Severing Ties")
+                    if not batch:
+                        bot.send_message(chat_id, "ℹ️ لا توجد فصول حالياً بانتظار الاعتماد أو الجدولة لهذه الرواية.")
+                        return
+                    report = f"✅ <b>تم تجهيز دفعة فصول ({len(batch)} فصل) للصقل الأدبي:</b>\n"
+                    for ch in batch:
+                        report += f"• الفصل <b>{ch['chapter_number']}</b> ({ch['char_count']} حرف) ➔ مصدر: <code>{ch['source']}</code>\n"
+                    report += "\n💡 <i>المتون مجردة وجاهزة للصقل وإعادة التغليف التلقائي.</i>"
+                    bot.send_message(chat_id, report)
+                except Exception as e:
+                    bot.send_message(chat_id, f"❌ خطأ: {e}")
+            threading.Thread(target=_run_stage, daemon=True).start()
+            return
+
+        elif data == "cb_nsw_stop":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            try:
+                import nsw_healer_engine
+                nsw_healer_engine.request_stop()
+                nsw_healer_engine.set_engine_state("🛑 متوقف بأمر المشرف", "إيقاف فوري", "تم إيقاف العمليات")
+                bot.send_message(chat_id, "🛑 <b>تم تفعيل أمر الإيقاف الفوري بنجاح!</b>")
+            except Exception as e:
+                bot.send_message(chat_id, f"❌ خطأ: {e}")
+            return
+
+        elif data == "cb_nsw_help":
+            try:
+                nsw_help_cmd(call.message)
+            except Exception as e:
+                bot.send_message(chat_id, f"❌ خطأ: {e}")
+            return
 
         # ----------------------------------------------------
         # معالجة استعراض سينما ومسلسلات (Cinema Callbacks)
@@ -601,8 +927,28 @@ def create_bot_app():
     return bot
 
 
+import socket
+
+_BOT_SOCKET_LOCK = None
+
+def acquire_bot_lock() -> bool:
+    """ضمان تشغيل نسخة واحدة فقط من البوت على مستوى الجهاز لمنع تكرار Polling وخطأ 409 Conflict."""
+    global _BOT_SOCKET_LOCK
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(('127.0.0.1', 49250))
+        _BOT_SOCKET_LOCK = s
+        return True
+    except Exception:
+        print("[Telegram Bot] ⚠️ هناك نسخة أخرى من البوت تعمل بالفعل. تم تخطي التشغيل لمنع خطأ 409 Conflict.")
+        return False
+
+
 def run_telegram_bot_loop():
-    """تشغيل حلقة استماع البوت السحابية المستمرة."""
+    """تشغيل حلقة استماع البوت السحابية المستمرة مع قفل تفادي الازدواجية."""
+    if not acquire_bot_lock():
+        return
+
     bot = create_bot_app()
     if not bot:
         print("[Telegram Bot] لم يتم تعيين TELEGRAM_BOT_TOKEN أو مكتبة telebot غير متوفرة.")

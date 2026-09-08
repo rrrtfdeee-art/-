@@ -67,13 +67,21 @@ from media_engine import (
 )
 import nsw_bot_bridge
 import nsw_healer_engine
+import telegram_bot as _tg_bot_module
 
-# إطلاق جسر بوت إدارة الموقع تلقائياً في الخلفية مرة واحدة فقط
-if "nsw_bridge_started" not in st.session_state:
+# إطلاق بوت تليجرام الذكي (البوت الرئيسي) في الخلفية مرة واحدة فقط
+# ملاحظة: nsw_bot_bridge معطل لتجنب التعارض مع البوت الرئيسي على نفس التوكن
+if "tg_bot_started" not in st.session_state:
     try:
-        nsw_bot_bridge.start_bridge_thread()
-        st.session_state.nsw_bridge_started = True
-    except Exception as _br_err:
+        import threading as _tg_threading
+        _tg_thread = _tg_threading.Thread(
+            target=_tg_bot_module.run_telegram_bot_loop,
+            daemon=True,
+            name="TelegramBotPolling"
+        )
+        _tg_thread.start()
+        st.session_state.tg_bot_started = True
+    except Exception as _tg_err:
         pass
 
 # ==============================================================================
@@ -999,11 +1007,17 @@ with tab_nsw:
     st.markdown("#### 🧩 كشف وسد فجوات الفصول المفقودة (Automatic Gap-Filler)")
     st.caption("يفحص كافة الجداول وبلوجر، وإذا وجد قفزة في الترقيم، يسحب الفصل المفقود ويترجمه وينشره ويربط أزرار السابق والتالي تلقائياً.")
 
-    col_g1, col_g2 = st.columns(2)
+    col_g1, col_g2, col_g3 = st.columns([1.5, 2, 1.5])
     with col_g1:
         scan_gaps_clicked = st.button("🔍 فحص الفجوات المفقودة", use_container_width=True)
     with col_g2:
         fill_gaps_clicked = st.button("🚀 ملء الفجوات المفقودة ونشرها", use_container_width=True, type="primary")
+    with col_g3:
+        stop_gaps_clicked = st.button("🛑 إيقاف فوري للعملية", use_container_width=True)
+
+    if stop_gaps_clicked:
+        nsw_healer_engine.request_stop()
+        st.error("🛑 تم إرسال أمر الإيقاف الفوري! سيتوقف محرك الفجوات لحظياً.")
 
     if scan_gaps_clicked:
         with st.spinner("جاري فحص كافة الجداول وبلوجر لكشف الفجوات..."):
@@ -1023,7 +1037,7 @@ with tab_nsw:
                 st.balloons()
                 st.success(f"🎉 تم بنجاح ملء ونشر {filled_cnt} فصول مفقودة وتحديث أزرار التنقل!")
             else:
-                st.info("لا توجد فجوات مفقودة لملئها حالياً.")
+                st.info("لا توجد فجوات مفقودة لملئها حالياً أو تم إيقاف العملية.")
 
     st.markdown("---")
     st.markdown("#### 🎯 ميزة إصلاح الفصل المخصص X (Fix Specific Chapter)")

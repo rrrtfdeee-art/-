@@ -96,22 +96,19 @@ class PlaywrightStealthBrowser:
         self.context: Optional[BrowserContext] = None
 
     def __enter__(self):
-        self.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
     def start(self):
-        """تشغيل المتصفح وتجهيز بيئة الـ Stealth."""
+        """تشغيل المتصفح وتجهيز بيئة الـ Stealth دون تصادم مع أي حلقة asyncio سابقة."""
+        if self.browser:
+            return
+
         if sys.platform == "win32":
             try:
-                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
+                asyncio.set_event_loop(None)
             except Exception:
                 pass
 
@@ -218,7 +215,7 @@ class PlaywrightStealthBrowser:
             pass
 
         # 2. المسار الكامل عبر متصفح Playwright مع الـ Stealth
-        if not self.context:
+        if not self.context or not self.browser:
             self.start()
 
         page = self.context.new_page()
@@ -422,7 +419,6 @@ def crawl_toc_chapters(
     should_close_browser = False
     if browser_instance is None:
         browser_instance = PlaywrightStealthBrowser(headless=True)
-        browser_instance.start()
         should_close_browser = True
 
     try:

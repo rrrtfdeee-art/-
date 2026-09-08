@@ -217,6 +217,14 @@ def auto_detect_selectors_heuristically(toc_html: str, chapter_html: str) -> Dic
     }
 
 
+ALLOWED_MODELS_POOL = [
+    "gemini-3.5-flash-lite",  # 500 RPD, 15 RPM
+    "gemini-3.1-flash-lite",  # 500 RPD, 15 RPM
+    "gemini-3.8-flash",       # 20 RPD, 5 RPM
+    "gemini-3.7-flash",       # 20 RPD, 5 RPM
+]
+BLOCKED_ZERO_QUOTA_MODELS = {"gemini-2.5-pro", "gemini-3.1-pro", "gemini-2-flash", "gemini-2-flash-lite"}
+
 def call_gemini_api(
     prompt: str,
     api_key: Optional[str] = None,
@@ -226,9 +234,19 @@ def call_gemini_api(
 ) -> str:
 
     """
-    إرسال الطلب إلى Gemini مع دعم مجمع الوسائط المتعددة (Multi-GAS Pool & Automatic Failover).
+    إرسال الطلب إلى Gemini مع دعم مجمع الوسائط المتعددة (Multi-GAS Pool & Automatic Failover)
+    وسلسلة تبديل النماذج الذكية المعتمدة على جدول الحصص (Gemini_API_Rate_Limits.xlsx).
     """
     clean_model = model_name.replace("models/", "").strip()
+    # حماية النماذج: منع النماذج ذات الحصة الصفرية (مثل Pro) وتحويلها للنموذج الأساسي
+    if clean_model in BLOCKED_ZERO_QUOTA_MODELS or "pro" in clean_model.lower():
+        clean_model = "gemini-3.5-flash-lite"
+
+    models_to_try = [clean_model]
+    for m in ALLOWED_MODELS_POOL:
+        if m != clean_model:
+            models_to_try.append(m)
+
     stored_key = (api_key or "").strip() or database.get_setting("gemini_api_key", os.getenv("GEMINI_API_KEY", ""))
 
     # تجهيز قائمة الوسائط
@@ -239,59 +257,64 @@ def call_gemini_api(
 
     last_error = ""
 
-    # 1. إذا كان مفتاح Gemini API متوفراً، نستخدم SDK الرسمي أو الاتصال المباشر أولاً
-    if stored_key:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=stored_key)
-            g_model = genai.GenerativeModel(f"models/{clean_model}" if not clean_model.startswith("models/") else clean_model)
-            resp = g_model.generate_content(prompt)
-            if resp and resp.text:
-                return resp.text.strip()
-        except Exception as sdk_err:
-            last_error = f"SDK Error: {sdk_err}"
-            # محاولة REST API المباشر
+    # تجربة سلسلة النماذج النشطة بالتتابع
+    for cur_model in models_to_try:
+        # 1. إذا كان مفتاح Gemini API متوفراً، نستخدم SDK الرسمي أو الاتصال المباشر أولاً
+        if stored_key:
             try:
-                direct_url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={stored_key}"
-                direct_payload = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"temperature": 0.1}
-                }
-                direct_res = requests.post(direct_url, json=direct_payload, timeout=timeout)
-                if direct_res.status_code == 200:
-                    res_json = direct_res.json()
-                    candidates = res_json.get("candidates", [])
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        return "".join(p.get("text", "") for p in parts)
-            except Exception as e_direct:
-                last_error = f"Direct REST Error: {e_direct}"
+                import google.generativeai as genai
+                genai.configure(api_key=stored_key)
+                g_model = genai.GenerativeModel(f"models/{cur_model}" if not cur_model.startswith("models/") else cur_model)
+                resp = g_model.generate_content(prompt)
+                if resp and resp.text:
+                    return resp.text.strip()
+            except Exception as sdk_err:
+                last_error = f"SDK Error ({cur_model}): {sdk_err}"
+                # محاولة REST API المباشر
+                try:
+                    direct_url = f"https://generativelanguage.googleapis.com/v1beta/models/{cur_model}:generateContent?key={stored_key}"
+                    direct_payload = {
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"temperature": 0.1}
+                    }
+                    direct_res = requests.post(direct_url, json=direct_payload, timeout=timeout)
+                    if direct_res.status_code == 200:
+                        res_json = direct_res.json()
+                        candidates = res_json.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            return "".join(p.get("text", "") for p in parts)
+                    elif direct_res.status_code in (429, 403):
+                        last_error = f"Direct REST Quota/Rate ({cur_model}): code {direct_res.status_code}"
+                        continue  # تجربة النموذج التالي في السلسلة فوراً
+                except Exception as e_direct:
+                    last_error = f"Direct REST Error ({cur_model}): {e_direct}"
 
-    # 2. في حال عدم وجود مفتاح أو فشل الاتصال المباشر، تجربة وسائط GAS
-    for endpoint in endpoints_to_try:
-        try:
-            payload = {
-                "apiKey": stored_key,
-                "model": clean_model,
-                "prompt": prompt
-            }
-            res = requests.post(endpoint, json=payload, timeout=timeout)
-            if res.status_code != 200:
-                last_error = f"وسيط {endpoint[:45]}... رد بكود {res.status_code}"
+        # 2. في حال عدم وجود مفتاح أو فشل الاتصال المباشر، تجربة وسائط GAS
+        for endpoint in endpoints_to_try:
+            try:
+                payload = {
+                    "apiKey": stored_key,
+                    "model": cur_model,
+                    "prompt": prompt
+                }
+                res = requests.post(endpoint, json=payload, timeout=timeout)
+                if res.status_code != 200:
+                    last_error = f"وسيط {endpoint[:45]}... رد بكود {res.status_code}"
+                    continue
+                
+                data = res.json()
+                if "error" in data:
+                    last_error = f"خطأ من الوسيط: {data['error']}"
+                    continue
+                
+                # نجاح الاستجابة
+                text_val = data.get("text", "")
+                if text_val:
+                    return text_val
+            except Exception as e_endpoint:
+                last_error = str(e_endpoint)
                 continue
-            
-            data = res.json()
-            if "error" in data:
-                last_error = f"خطأ من الوسيط: {data['error']}"
-                continue
-            
-            # نجاح الاستجابة
-            text_val = data.get("text", "")
-            if text_val:
-                return text_val
-        except Exception as e_endpoint:
-            last_error = str(e_endpoint)
-            continue
 
     raise RuntimeError(f"تعذر استلام الرد من جميع مصادر الذكاء الاصطناعي المتاحة: {last_error}")
 

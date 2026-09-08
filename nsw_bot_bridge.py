@@ -27,8 +27,8 @@ if hasattr(sys.stdout, 'reconfigure'):
     except Exception:
         pass
 
-TELEGRAM_BOT_TOKEN = os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8527477822:AAG2dkvwdkkhHR_NyzAsfIWwlLBIdPk2Woc")
-ADMIN_CHAT_ID = os.getenv("NSW_TELEGRAM_CHAT_ID", "1974483260")
+TELEGRAM_BOT_TOKEN = os.getenv("NSW_TELEGRAM_BOT_TOKEN", os.getenv("TELEGRAM_BOT_TOKEN", "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4"))
+ADMIN_CHAT_ID = os.getenv("NSW_TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_ALLOWED_USER", "8883556949"))
 GAS_WEBAPP_URL = os.getenv("NSW_GAS_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbwk3rNPfyP6lJw5jkXigqUfTgivsNzgDoyhd61lPiRSFZP49jFShKaz-CfnUqlM9OmH/exec")
 SINGLETON_PORT = 49282
 

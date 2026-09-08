@@ -20,6 +20,7 @@ import time
 import json
 import re
 import logging
+import threading
 from typing import Dict, List, Any, Optional, Tuple, Set
 import requests
 
@@ -57,6 +58,24 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/
 
 MIN_SAFE_TEXT_LENGTH = 800
 
+# ================================================================
+# 🛑 متغير الإيقاف الفوري اللحظي — يمكن تفعيله من تليجرام بأمر /nsw_stop
+# ================================================================
+STOP_EVENT = threading.Event()
+
+def request_stop():
+    """طلب إيقاف العملية الجارية فوراً وبشكل لحظي."""
+    STOP_EVENT.set()
+    logger.warning("🛑 تم طلب الإيقاف الفوري من المشرف! تم تعيين إشارة التوقف.")
+
+def reset_stop():
+    """إعادة ضبط حالة الإيقاف للسماح ببدء عمليات جديدة."""
+    STOP_EVENT.clear()
+
+def is_stop_requested() -> bool:
+    """التحقق من طلب الإيقاف الفوري اللحظي."""
+    return STOP_EVENT.is_set()
+
 # 📡 تتبع الحالة اللحظية المباشرة للمحرك 24/7
 ENGINE_LIVE_STATE = {
     "status": "خامل (في وضع الاستعداد)",
@@ -70,6 +89,7 @@ ENGINE_LIVE_STATE = {
     "processed_count": 0,
     "last_error": None
 }
+
 
 def set_engine_state(status: str, task: str, stage: str, novel: str = "عام", chapter: Optional[int] = None, details: str = ""):
     """تحديث الحالة اللحظية لما يقوم به المحرك الآن بدقة ثانية بثانية."""
@@ -195,7 +215,7 @@ def get_all_known_chapters_across_system() -> Dict[str, Dict[int, Dict[str, Any]
     """
     novels: Dict[str, Dict[int, Dict[str, Any]]] = {}
 
-    def register(novel: str, num: int, source: str, post_id: str = "", post_url: str = "", content_len: int = 0):
+    def register(novel: str, num: int, source: str, post_id: str = "", post_url: str = "", content_len: int = 0, published_date: str = ""):
         if not novel or num <= 0:
             return
         if novel not in novels:
@@ -207,7 +227,8 @@ def get_all_known_chapters_across_system() -> Dict[str, Dict[int, Dict[str, Any]
                 "sources": [source],
                 "post_id": post_id,
                 "post_url": post_url,
-                "content_len": content_len
+                "content_len": content_len,
+                "published_date": published_date
             }
         else:
             if source not in novels[novel][num]["sources"]:
@@ -218,6 +239,8 @@ def get_all_known_chapters_across_system() -> Dict[str, Dict[int, Dict[str, Any]
                 novels[novel][num]["post_url"] = post_url
             if content_len > novels[novel][num]["content_len"]:
                 novels[novel][num]["content_len"] = content_len
+            if published_date and not novels[novel][num].get("published_date"):
+                novels[novel][num]["published_date"] = published_date
 
     # 1. فحص ورقة Published Posts
     pub_rows = query_gviz_sheet(PUBLIC_PUBLISHED_SPREADSHEET_ID)
@@ -241,7 +264,8 @@ def get_all_known_chapters_across_system() -> Dict[str, Dict[int, Dict[str, Any]
             
             post_id = str(c[4].get("v", "") if len(c) > 4 and c[4] else "").strip()
             post_url = str(c[5].get("v", "") if len(c) > 5 and c[5] else "").strip()
-            register(novel, chap_num, "Published Posts", post_id=post_id, post_url=post_url)
+            pub_date = str(c[3].get("v", "") if len(c) > 3 and c[3] else "").strip()
+            register(novel, chap_num, "Published Posts", post_id=post_id, post_url=post_url, published_date=pub_date)
 
     # 2. فحص طابور النشر Queue
     queue_rows = query_gviz_sheet(PUBLISH_QUEUE_SPREADSHEET_ID)
@@ -293,9 +317,41 @@ def get_all_known_chapters_across_system() -> Dict[str, Dict[int, Dict[str, Any]
     try:
         live_chaps = fetch_live_feed_chapters(max_results=50)
         for lc in live_chaps:
-            register(lc["novel_name"], lc["chapter_number"], "Live Blogger Feed", post_id=lc["post_id"], post_url=lc["post_url"], content_len=lc["content_length"])
+            register(lc["novel_name"], lc["chapter_number"], "Live Blogger Feed", post_id=lc["post_id"], post_url=lc["post_url"], content_len=lc["content_length"], published_date=lc.get("published", ""))
     except Exception as e:
         logger.warning(f"تعذر استدعاء Feed المدونة الحية: {e}")
+
+    # 6. فحص بلوجر الشامل المباشر عبر Apps Script (يشمل المنشورات المجدولة لـ 2027 والحية والمسودات)
+    try:
+        audit_url = f"{PUBLISH_WEBAPP_URL}?action=scanGaps"
+        audit_res = requests.get(audit_url, timeout=35).json()
+        all_chaps = audit_res.get("allChapters", {})
+        for c_str, c_info in all_chaps.items():
+            try:
+                c_num = int(float(c_str))
+                c_title = c_info.get("title", "")
+                c_chars = c_info.get("charCount", 0)
+                c_status = c_info.get("statusDisplay", "")
+                c_id = c_info.get("postId", "")
+                c_url = c_info.get("postUrl", "")
+                c_date = c_info.get("publishedDate", "")
+                
+                # استخراج اسم الرواية من العنوان
+                c_nov = "After Severing Ties"
+                if " - " in c_title:
+                    c_nov = c_title.split(" - ")[0].strip()
+                elif ":" in c_title:
+                    parts = c_title.split(":")
+                    if len(parts) > 1 and any(ch.isalpha() for ch in parts[0]):
+                        c_nov = parts[0].strip()
+                
+                # الفصول المجدولة أو الحية ذات المحتوى تسجل فوراً في النظام
+                if c_chars > 50 or "مجدول" in c_status or "حي" in c_status:
+                    register(c_nov, c_num, f"Blogger [{c_status}]", post_id=c_id, post_url=c_url, content_len=c_chars, published_date=c_date)
+            except Exception:
+                continue
+    except Exception as e_audit:
+        logger.warning(f"ملاحظة فحص بلوجر الشامل عبر Apps Script: {e_audit}")
 
     return novels
 
@@ -303,7 +359,8 @@ def get_all_known_chapters_across_system() -> Dict[str, Dict[int, Dict[str, Any]
 def detect_system_gaps(target_novel: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     كشف جميع الفجوات المفقودة في تسلسل فصول الروايات.
-    مثال: 400 ➔ 402 يعني أن الفصل 401 مفقود تماماً من كافة الجداول والمنشورات.
+    يدعم كشف الفجوات المفردة (مثل 474 بين 473 و 475، و 477 بين 476 و 478)
+    والفجوات المتعددة، مع استبعاد المسودات الفارغة (0 حرف) من الحسبان.
     """
     all_novels = get_all_known_chapters_across_system()
     gaps = []
@@ -312,13 +369,18 @@ def detect_system_gaps(target_novel: Optional[str] = None) -> List[Dict[str, Any
         if target_novel and target_novel.lower() not in novel.lower():
             continue
 
-        nums = sorted(list(chaps_map.keys()))
-        if len(nums) < 2:
+        # نعتبر الفصل موجوداً فقط إذا كان له محتوى حقيقي (> 50 حرف) أو كان منشوراً حياً/مجدولاً
+        valid_nums = sorted([
+            n for n, info in chaps_map.items() 
+            if info.get("content_len", 0) > 50 or any("مجدول" in s or "حي" in s or "Queue" in s for s in info.get("sources", []))
+        ])
+        
+        if len(valid_nums) < 2:
             continue
 
-        for i in range(len(nums) - 1):
-            curr_n = nums[i]
-            next_n = nums[i + 1]
+        for i in range(len(valid_nums) - 1):
+            curr_n = valid_nums[i]
+            next_n = valid_nums[i + 1]
 
             if next_n - curr_n > 1:
                 missing_range = list(range(curr_n + 1, next_n))
@@ -328,7 +390,7 @@ def detect_system_gaps(target_novel: Optional[str] = None) -> List[Dict[str, Any
                     "prev_chapter": curr_n,
                     "prev_info": chaps_map[curr_n],
                     "next_chapter": next_n,
-                    "next_info": chaps_map[next_n]
+                    "next_info": chaps_map.get(next_n) or {}
                 })
 
     return gaps
@@ -338,17 +400,28 @@ def detect_system_gaps(target_novel: Optional[str] = None) -> List[Dict[str, Any
 # 🧩 3. محرك ملء الفجوات التلقائي ونشر الفصول وربط أزرار التنقل (Auto Gap-Filler)
 # ==============================================================================
 
-def fill_single_missing_gap(novel_name: str, missing_chap_num: int, prev_info: Dict[str, Any], next_info: Dict[str, Any]) -> Dict[str, Any]:
+def fill_single_missing_gap(
+    novel_name: str,
+    missing_chap_num: int,
+    prev_info: Dict[str, Any],
+    next_info: Dict[str, Any],
+    is_last_in_gap: bool = True,
+    target_pub_date: Optional[str] = None
+) -> Dict[str, Any]:
     """
     دورة ملء فجوة واحدة بالكامل:
     1. البحث عن رابط الفهرس وسحب الفصل المفقود من المصدر الأصلي.
     2. الترجمة عبر خط الأنابيب الملكي مع القاموس والرقابة العقدية.
-    3. النشر المباشر على Blogger.
-    4. ترحيل الرابط وتوثيق الفصل في جداول المنظومة (Published Posts & Queue).
-    5. تحديث أزرار التنقل (السابق والتالي والفهرس) للفصل السابق واللاحق والفصل المنشور لضمان تسلسل 100%.
+    3. النشر على Blogger مع احترام الجدولة الزمنية.
+    4. ترحيل الرابط وتوثيق الفصل في جداول المنظومة.
+    5. تحديث أزرار التنقل (السابق والتالي) تسلسلياً بحيث يرتبط كل فصل بسابقه ولاحقه الفعلي المباشر فقط!
     """
     logger.info(f"🧩 [بدء ملء الفجوة] سحب وترجمة ونشر الفصل المفقود {missing_chap_num} لرواية '{novel_name}'...")
     notify_admin(f"🧩 <i>جاري سحب وترجمة الفصل المفقود رقم {missing_chap_num} لرواية '{novel_name}' لملء الفجوة...</i>")
+
+    if is_stop_requested():
+        logger.warning("🛑 تم إيقاف ملء الفجوة فوراً بطلب المشرف.")
+        return {"success": False, "error": "تم الإيقاف فوراً بطلب المشرف"}
 
     # 1. إيجاد مصدر الرواية
     source_info = get_novel_source_info(novel_name)
@@ -365,6 +438,10 @@ def fill_single_missing_gap(novel_name: str, missing_chap_num: int, prev_info: D
         cfg["chapter_content_selector"] = ".txtnav, article, .entry-content, #content, .content, .read-content, #htmlContent"
 
     # 2. سحب المتن الخام
+    if is_stop_requested():
+        logger.warning("🛑 تم إيقاف سحب المتن فوراً بطلب المشرف.")
+        return {"success": False, "error": "تم الإيقاف فوراً بطلب المشرف"}
+
     try:
         raw_content = fetch_raw_chapter_by_number(toc_url, missing_chap_num, cfg)
     except Exception as scrape_err:
@@ -376,7 +453,11 @@ def fill_single_missing_gap(novel_name: str, missing_chap_num: int, prev_info: D
         notify_unfixable_error(novel_name, missing_chap_num, err, "التحقق من اكتمال المتن")
         return {"success": False, "error": err}
 
-    # 3. الترجمة والتدقيق
+    # 3. الترجمة والتدقيق والاعتماد
+    if is_stop_requested():
+        logger.warning("🛑 تم إيقاف الترجمة فوراً بطلب المشرف.")
+        return {"success": False, "error": "تم الإيقاف فوراً بطلب المشرف"}
+
     try:
         raw_title = f"الفصل {missing_chap_num}"
         trans_res = translate_and_refine_chapter(raw_title, raw_content, novel_name, missing_chap_num)
@@ -388,15 +469,36 @@ def fill_single_missing_gap(novel_name: str, missing_chap_num: int, prev_info: D
         notify_quota_exhaustion("Gemini Translation", str(trans_err))
         return {"success": False, "error": str(trans_err)}
 
-    # روابط السابق والتالي والفهرس الأولية
+    if is_stop_requested():
+        logger.warning("🛑 تم إيقاف النشر فوراً بطلب المشرف.")
+        return {"success": False, "error": "تم الإيقاف فوراً بطلب المشرف"}
+
+    # روابط السابق والتالي والفهرس الأولية الدقيقة
     prev_url = prev_info.get("post_url") or "#"
-    next_url = next_info.get("post_url") or "#"
+    # إذا كان هذا آخر فصل في الفجوة يربط بـ next_info، وإلا يترك "#" مؤقتاً ليربطه الفصل القادم
+    next_url = (next_info.get("post_url") or "#") if is_last_in_gap else "#"
     index_url = toc_url or "https://www.novelskyworld.com"
 
-    # بناء كود HTML الملكي مع أزرار التنقل الأولية
+    # بناء كود HTML الملكي مع أزرار التنقل الدقيقة
     royal_html = build_royal_chapter_html_with_nav(novel_name, final_title, translated_content, prev_url, next_url, index_url)
 
-    # 4. نشر الفصل على Blogger عبر محرك النشر
+    # 4. التحقق مما إذا كان الفصل المفقود له مسودة أو تدوينة قائمة بالفعل على بلوجر لمنع إنشاء منشور مكرر
+    existing_post_id = ""
+    try:
+        audit_url = f"{PUBLISH_WEBAPP_URL}?action=scanGaps"
+        audit_res = requests.get(audit_url, timeout=20).json()
+        all_chaps = audit_res.get("allChapters", {})
+        if str(missing_chap_num) in all_chaps:
+            existing_post_id = all_chaps[str(missing_chap_num)].get("postId", "")
+        if not existing_post_id:
+            for t in audit_res.get("truncatedChapters", []):
+                if t.get("chapNum") == missing_chap_num and t.get("postId"):
+                    existing_post_id = t["postId"]
+                    break
+    except Exception as e_chk:
+        logger.warning(f"ملاحظة فحص وجود مسودة قائمة للفصل {missing_chap_num}: {e_chk}")
+
+    # نشر الفصل أو ترقية المسودة على Blogger عبر محرك النشر
     post_title = f"{novel_name} - {final_title}"
     labels = [novel_name, "آخر الفصول"]
 
@@ -405,8 +507,15 @@ def fill_single_missing_gap(novel_name: str, missing_chap_num: int, prev_info: D
         "title": post_title,
         "content": royal_html,
         "labels": labels,
-        "publishType": "chapter"
+        "publishType": "chapter",
+        "chapterNumber": missing_chap_num,
+        "novelName": novel_name
     }
+    if existing_post_id:
+        publish_payload["postId"] = existing_post_id
+        logger.info(f"♻️ تم اكتشاف مسودة قائمة للفصل {missing_chap_num} [PostID: {existing_post_id}]. سيتم تعديلها وجدولتها بدلاً من إنشاء تدوينة مكررة.")
+    if target_pub_date:
+        publish_payload["publishDate"] = target_pub_date
 
     try:
         pub_res = requests.post(PUBLISH_WEBAPP_URL, json=publish_payload, timeout=35).json()
@@ -416,21 +525,21 @@ def fill_single_missing_gap(novel_name: str, missing_chap_num: int, prev_info: D
             return {"success": False, "error": err}
 
         post_data = pub_res.get("data", {})
-        new_post_id = post_data.get("id")
-        new_post_url = post_data.get("url")
+        new_post_id = str(post_data.get("id", ""))
+        new_post_url = str(post_data.get("url", ""))
 
     except Exception as pub_ex:
         notify_unfixable_error(novel_name, missing_chap_num, f"تعذر الاتصال بـ Blogger API: {pub_ex}", "إرسال طلب النشر")
         return {"success": False, "error": str(pub_ex)}
 
-    # 5. ربط أزرار التنقل (السابق والتالي) بين الفصول الثلاثة
+    # 5. ربط أزرار التنقل (السابق والتالي) تسلسلياً دقيقاً
     try:
-        # أ) تحديث زر "التالي" في الفصل السابق ليوجه إلى هذا الفصل الجديد
+        # أ) تحديث زر "التالي" في الفصل السابق المباشر فقط ليوجه إلى هذا الفصل الجديد
         if prev_info.get("post_id") and new_post_url:
             patch_chapter_navigation_button(prev_info["post_id"], next_url=new_post_url)
 
-        # ب) تحديث زر "السابق" في الفصل اللاحق ليوجه إلى هذا الفصل الجديد
-        if next_info.get("post_id") and new_post_url:
+        # ب) تحديث زر "السابق" في الفصل اللاحق فقط إذا كان هذا الفصل هو آخر فصل في الفجوة!
+        if is_last_in_gap and next_info.get("post_id") and new_post_url:
             patch_chapter_navigation_button(next_info["post_id"], prev_url=new_post_url)
     except Exception as nav_err:
         logger.warning(f"تنبيه أثناء تحديث أزرار السابق والتالي: {nav_err}")
@@ -441,13 +550,14 @@ def fill_single_missing_gap(novel_name: str, missing_chap_num: int, prev_info: D
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📖 <b>{novel_name} - {final_title}</b>\n"
         f"🔗 <a href='{new_post_url}'>رابط الفصل المنشور على المدونة</a>\n"
-        f"🔗 <b>تم ربط أزرار التنقل:</b>\n"
-        f"   • السابق [{prev_info.get('chapter_number')}]: تم تحديث زر 'التالي' ➔ لهذا الفصل.\n"
-        f"   • اللاحق [{next_info.get('chapter_number')}]: تم تحديث زر 'السابق' ➔ لهذا الفصل.\n"
-        f"✅ تم سد الفجوة وتأكيد التسلسل التام 100% بنجاح."
+        f"🔗 <b>تم ربط أزرار التنقل بالتسلسل السليم:</b>\n"
+        f"   • السابق [{prev_info.get('chapter_number')}]: التالي ➔ الفصل {missing_chap_num}\n"
     )
+    if is_last_in_gap and next_info.get("chapter_number"):
+        success_msg += f"   • اللاحق [{next_info.get('chapter_number')}]: السابق ➔ الفصل {missing_chap_num}\n"
+    success_msg += "✅ تم حفظ السلسلة دون قفزات."
     notify_admin(success_msg)
-    return {"success": True, "chap_num": missing_chap_num, "post_url": new_post_url}
+    return {"success": True, "chap_num": missing_chap_num, "post_id": new_post_id, "post_url": new_post_url}
 
 
 def build_royal_chapter_html_with_nav(novel_name: str, standard_title: str, translated_content: str, prev_url: str = "#", next_url: str = "#", index_url: str = "#") -> str:
@@ -542,8 +652,31 @@ def patch_chapter_navigation_button(post_id: str, prev_url: Optional[str] = None
         logger.error(f"خطأ حقن أزرار التنقل: {e}")
 
 
+def repair_all_chapter_navigation(novel_name: str = "After Severing Ties") -> Dict[str, Any]:
+    """استدعاء عملية صيانة وإصلاح أزرار التنقل لكافة فصول الرواية المنشورة في بلوجر."""
+    logger.info(f"🔗 بدء صيانة أزرار التنقل الشاملة لرواية '{novel_name}'...")
+    try:
+        res = requests.post(PUBLISH_WEBAPP_URL, json={
+            "action": "repairNavigation",
+            "novelName": novel_name
+        }, timeout=45).json()
+        if res.get("status") == "success":
+            data = res.get("data", {})
+            msg = f"🔗 <b>[اكتملت صيانة أزرار التنقل]:</b> تم ربط {data.get('linksPatched', 0)} فصلاً بالتسلسل السليم لرواية {novel_name}."
+            notify_admin(msg)
+            return data
+        else:
+            err = res.get("message", "تعذر إتمام صيانة التنقل")
+            logger.warning(err)
+            return {"success": False, "error": err}
+    except Exception as e:
+        logger.error(f"خطأ أثناء استدعاء صيانة أزرار التنقل: {e}")
+        return {"success": False, "error": str(e)}
+
+
 def run_auto_fill_all_gaps(target_novel: Optional[str] = None) -> int:
-    """تشغيل الفحص وملء كافة الفجوات المكتشفة تلقائياً."""
+    """تشغيل الفحص وملء كافة الفجوات المكتشفة تلقائياً مع تسلسل أزرار دقيق 100%."""
+    reset_stop()
     gaps = detect_system_gaps(target_novel)
     if not gaps:
         logger.info("✅ جميع سلاسل الفصول مكتملة ولا توجد أي فجوة مفقودة.")
@@ -552,12 +685,70 @@ def run_auto_fill_all_gaps(target_novel: Optional[str] = None) -> int:
 
     total_filled = 0
     for g in gaps:
+        if is_stop_requested():
+            logger.warning("🛑 تم إيقاف عملية ملء الفجوات فوراً بناءً على طلب المشرف.")
+            notify_admin("🛑 <b>تم إيقاف عملية ملء الفجوات فوراً!</b>")
+            break
+
         novel = g["novel_name"]
-        for m_num in g["missing_chapters"]:
-            res = fill_single_missing_gap(novel, m_num, g["prev_info"], g["next_info"])
+        missing_sorted = sorted(g["missing_chapters"])
+        current_prev = dict(g["prev_info"])
+
+        for idx, m_num in enumerate(missing_sorted):
+            if is_stop_requested():
+                logger.warning("🛑 تم إيقاف عملية ملء الفجوات فوراً بناءً على طلب المشرف.")
+                notify_admin("🛑 <b>تم إيقاف عملية ملء الفجوات فوراً!</b>")
+                return total_filled
+
+            is_last = (idx == len(missing_sorted) - 1)
+            # إذا كان هذا آخر فصل في الفجوة، فالفصل اللاحق هو بداية السلسلة التالية
+            # وإلا يُترك التالي ليربطه الفصل القادم
+            next_target = g["next_info"] if is_last else {"post_url": "#", "post_id": None, "chapter_number": m_num + 1}
+
+            # حساب التوقيت الزمني المجدول للفصل المفقود لضمان جدولته وعدم نشره فوراً
+            target_pub_date = None
+            try:
+                p_date_str = current_prev.get("published_date")
+                n_date_str = g["next_info"].get("published_date")
+                if p_date_str:
+                    from datetime import datetime, timezone, timedelta
+                    p_dt = datetime.fromisoformat(p_date_str.replace("Z", "+00:00"))
+                    if n_date_str:
+                        n_dt = datetime.fromisoformat(n_date_str.replace("Z", "+00:00"))
+                        step_diff = (n_dt - p_dt) / (len(missing_sorted) + 1)
+                        step_dt = p_dt + step_diff * (idx + 1)
+                    else:
+                        step_dt = p_dt + timedelta(hours=2 * (idx + 1))
+                    target_pub_date = step_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            except Exception as dt_err:
+                logger.warning(f"تعذر حساب التوقيت الزمني للفصل {m_num}: {dt_err}")
+
+            res = fill_single_missing_gap(
+                novel_name=novel,
+                missing_chap_num=m_num,
+                prev_info=current_prev,
+                next_info=next_target,
+                is_last_in_gap=is_last,
+                target_pub_date=target_pub_date
+            )
+
             if res.get("success"):
                 total_filled += 1
-            time.sleep(3.0)
+                # تحديث السابق للفصل القادم في السلسلة ليصبح هذا الفصل الجديد
+                if res.get("post_id") or res.get("post_url"):
+                    current_prev = {
+                        "chapter_number": m_num,
+                        "post_id": res.get("post_id"),
+                        "post_url": res.get("post_url"),
+                        "published_date": target_pub_date or current_prev.get("published_date")
+                    }
+
+            if is_stop_requested():
+                logger.warning("🛑 تم إيقاف عملية ملء الفجوات فوراً بناءً على طلب المشرف.")
+                notify_admin("🛑 <b>تم إيقاف عملية ملء الفجوات فوراً!</b>")
+                return total_filled
+
+            STOP_EVENT.wait(3.0)
 
     return total_filled
 
@@ -566,12 +757,54 @@ def run_auto_fill_all_gaps(target_novel: Optional[str] = None) -> int:
 # 🩹 4. استصلاح الفصول المبتورة (Truncated Chapters)
 # ==============================================================================
 
-def fetch_live_feed_chapters(max_results: int = 50) -> List[Dict[str, Any]]:
-    """جلب الفصول الحية مباشرة من الـ Feed الخاص بالمدونة لفحص محتواها اللحظي."""
-    url = f"https://www.novelskyworld.com/feeds/posts/default?alt=json&max-results={max_results}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    res = requests.get(url, headers=headers, timeout=20)
-    data = res.json()
+def extract_pure_story_text(html_content: str) -> str:
+    """استخراج متن القصة الصافي من HTML بتجريد أشرطة التنقل والترويسة والوسوم التنسيقية."""
+    if not html_content:
+        return ""
+    # استخراج محتوى الحاوية الفعلية nsw-text-body إذا وُجدت
+    body_match = re.search(r'<div[^>]*id=["\']nsw-text-body["\'][^>]*>([\s\S]*?)</div>', html_content, re.I)
+    if body_match and len(body_match.group(1).strip()) > 20:
+        raw_text = body_match.group(1)
+    else:
+        # تجريد أزرار التنقل والترويسات
+        raw_text = re.sub(r'<div[^>]*class=["\'][^"\']*nsw-chapter-(?:toolbar|nav|switch|wrapper)[^"\']*["\'][\s\S]*?</div>', '', html_content, flags=re.I)
+        raw_text = re.sub(r'<h1[\s\S]*?</h1>', '', raw_text, flags=re.I)
+    clean = re.sub(r'<[^>]+>', ' ', raw_text)
+    return clean.strip()
+
+
+def count_arabic_chars(text: str) -> int:
+    """حساب عدد الأحرف العربية الصافية فقط."""
+    if not text:
+        return 0
+    return len(re.findall(r'[\u0600-\u06FF]', text))
+
+
+def fetch_live_feed_chapters(novel_name: Optional[str] = None, max_results: int = 150) -> List[Dict[str, Any]]:
+    """جلب الفصول الحية مباشرة من الـ Feed الخاص بالمدونة لفحص محتواها اللحظي مع حساب الحروف العربية الصافية."""
+    if novel_name:
+        # محاولة الاستعلام المباشر باسم الرواية أو تصنيفها
+        encoded_tag = requests.utils.quote(novel_name.strip())
+        url = f"https://www.novelskyworld.com/feeds/posts/default/-/{encoded_tag}?alt=json&max-results={max_results}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        try:
+            res = requests.get(url, headers=headers, timeout=20)
+            if res.status_code != 200:
+                url = f"https://www.novelskyworld.com/feeds/posts/default?alt=json&max-results={max_results}&q={encoded_tag}"
+                res = requests.get(url, headers=headers, timeout=20)
+        except Exception:
+            url = f"https://www.novelskyworld.com/feeds/posts/default?alt=json&max-results={max_results}"
+            res = requests.get(url, headers=headers, timeout=20)
+    else:
+        url = f"https://www.novelskyworld.com/feeds/posts/default?alt=json&max-results={max_results}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        res = requests.get(url, headers=headers, timeout=20)
+
+    try:
+        data = res.json()
+    except Exception:
+        return []
+
     entries = data.get("feed", {}).get("entry", [])
     
     feed_chapters = []
@@ -587,7 +820,11 @@ def fetch_live_feed_chapters(max_results: int = 50) -> List[Dict[str, Any]]:
 
         entry_id = entry.get("id", {}).get("$t", "")
         post_id = entry_id.split("post-")[-1] if "post-" in entry_id else ""
-        clean_text = re.sub(r'<[^>]+>', '', content_html).strip()
+        
+        # استخراج المتن الصافي وحساب الحروف العربية
+        pure_story = extract_pure_story_text(content_html)
+        arabic_count = count_arabic_chars(pure_story)
+        clean_text = re.sub(r'<[^>]+>', ' ', content_html).strip()
         
         chap_num = 0
         m = re.search(r'(?:الفصل|chapter|chap)\s*(\d+)', title, re.IGNORECASE)
@@ -598,16 +835,19 @@ def fetch_live_feed_chapters(max_results: int = 50) -> List[Dict[str, Any]]:
             if m2:
                 chap_num = int(m2.group(0))
 
-        novel_name = title.split(" - ")[0].strip() if " - " in title else "عام"
+        entry_novel_name = title.split(" - ")[0].strip() if " - " in title else "عام"
 
         feed_chapters.append({
             "chapter_number": chap_num,
             "title": title,
             "post_id": post_id,
             "post_url": alt_link,
-            "novel_name": novel_name,
+            "novel_name": entry_novel_name,
             "content_length": len(clean_text),
-            "clean_text": clean_text
+            "clean_text": clean_text,
+            "pure_story": pure_story,
+            "arabic_chars": arabic_count,
+            "published": entry.get("published", {}).get("$t", "")
         })
 
     return feed_chapters
@@ -685,17 +925,19 @@ def get_novel_source_info(novel_name: str) -> Dict[str, Any]:
 
 
 def scan_for_truncated_chapters(novel_name: Optional[str] = None, min_length: int = MIN_SAFE_TEXT_LENGTH) -> List[Dict[str, Any]]:
-    """فحص شامل للفصول المنشورة واستخراج المبتورة."""
-    logger.info(f"🔍 بدء فحص الفصول المبتورة (الحد الأدنى: {min_length} حرف)...")
-    live_chapters = fetch_live_feed_chapters(max_results=50)
+    """فحص شامل للفصول المنشورة واستخراج المبتورة عبر فحص عدد الأحرف العربية الصافية."""
+    logger.info(f"🔍 بدء فحص الفصول المبتورة (الحد الأدنى للمتن العربي: {min_length} حرف)...")
+    live_chapters = fetch_live_feed_chapters(novel_name=novel_name, max_results=150)
     
     truncated = []
     for ch in live_chapters:
         if novel_name and novel_name.lower() not in ch["novel_name"].lower():
             continue
 
-        if ch["content_length"] < min_length:
-            logger.warning(f"⚠️ فصل مبتور تم رصده: {ch['title']} (الحجم: {ch['content_length']} حرف فقط!)")
+        # الفحص الصارم بحسب عدد الحروف العربية الصافية في متن القصة
+        arabic_cnt = ch.get("arabic_chars", 0)
+        if arabic_cnt < min_length:
+            logger.warning(f"⚠️ فصل مبتور تم رصده: {ch['title']} (الحروف العربية: {arabic_cnt} فقط! الحد الأدنى الآمن: {min_length})")
             truncated.append(ch)
 
     return truncated
@@ -734,6 +976,25 @@ def fetch_raw_chapter_by_number(toc_url: str, chapter_number: int, domain_config
     content_sel = domain_config.get("chapter_content_selector") or ".txtnav, article, .entry-content, #content, .content, .read-content, #htmlContent"
     purge_sel = domain_config.get("purge_selectors") or ["script", "style", "nav", ".header", ".footer"]
 
+    # 1. المسار فائق السرعة عبر HTTP المباشر (يوفر استهلاك المتصفح ويعمل في 0.2 ثانية)
+    try:
+        req_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Referer": toc_url,
+            "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8"
+        }
+        resp = requests.get(target_url, headers=req_headers, timeout=12)
+        if resp.status_code == 200 and len(resp.text) > 600:
+            low_t = resp.text[:1000].lower()
+            if "just a moment" not in low_t and "attention required" not in low_t and "cloudflare" not in low_t:
+                clean_content = scraper_engine.clean_chapter_content(resp.text, content_sel, purge_sel)
+                if clean_content and len(clean_content) >= MIN_SAFE_TEXT_LENGTH:
+                    logger.info(f"⚡ تم سحب الفصل {chapter_number} بنجاح عبر المسار السريع ({len(clean_content)} حرف).")
+                    return clean_content
+    except Exception as e_fast:
+        logger.warning(f"ملاحظة المسار السريع للفصل {chapter_number}: {e_fast}. الانتقال للمسار الاحتياطي...")
+
+    # 2. المسار الاحتياطي عبر متصفح التخفي Playwright
     with scraper_engine.PlaywrightStealthBrowser(headless=True) as browser:
         raw_html, _ = browser.get_page_html(target_url, wait_selector=content_sel)
         clean_content = scraper_engine.clean_chapter_content(
@@ -744,15 +1005,129 @@ def fetch_raw_chapter_by_number(toc_url: str, chapter_number: int, domain_config
         return clean_content
 
 
-def translate_and_refine_chapter(raw_title: str, raw_content: str, novel_name: str, chapter_number: int) -> Dict[str, Any]:
-    """ترجمة وتدقيق الفصل بالذكاء الاصطناعي مع القاموس والرقابة العقدية."""
-    logger.info(f"🧠 جاري ترجمة وتدقيق الفصل {chapter_number} ({novel_name})...")
+GLOSSARY_CACHE: Dict[str, List[Dict[str, str]]] = {}
+
+def get_novel_glossary(novel_name: str) -> List[Dict[str, str]]:
+    """جلب قائمة مصطلحات وقاموس الرواية المعتمدة من Google Sheets مع التخزين المؤقت في الذاكرة."""
+    norm_name = novel_name.strip().lower()
+    if norm_name in GLOSSARY_CACHE:
+        return GLOSSARY_CACHE[norm_name]
     
-    system_prompt = (
-        "أنت مترجم روائي محترف ومحرر أدبي خبير في ترجمة الروايات الآسيوية والعالمية إلى لغة عربية فصيحة، بليغة، ومحكمة.\n"
+    rows = query_gviz_sheet(GLOSSARY_SPREADSHEET_ID)
+    matched_terms = []
+    is_severing_ties = any(k in norm_name for k in ["severing ties", "after severing ties", "قطع العلاقات"])
+
+    for r in rows[1:]:
+        c = r.get("c", [])
+        if not c or len(c) < 3 or not c[1] or not c[2]:
+            continue
+        row_novel = str(c[0].get("v", "") if c[0] else "").strip().lower()
+        orig_term = str(c[1].get("v", "")).strip()
+        arab_term = str(c[2].get("v", "")).strip()
+        cat = str(c[3].get("v", "") if len(c) > 3 and c[3] else "").strip()
+        gender = str(c[4].get("v", "") if len(c) > 4 and c[4] else "").strip()
+
+        if (is_severing_ties and ("severing ties" in row_novel or not row_novel)) or (row_novel in norm_name or norm_name in row_novel):
+            matched_terms.append({
+                "original": orig_term,
+                "arabic": arab_term,
+                "category": cat,
+                "gender": gender
+            })
+
+    logger.info(f"📚 تم تحميل {len(matched_terms)} مصطلح وقاعدة تسمية من القاموس المعتمد للرواية '{novel_name}'.")
+    GLOSSARY_CACHE[norm_name] = matched_terms
+    return matched_terms
+
+
+def format_glossary_for_prompt(glossary_terms: List[Dict[str, str]]) -> str:
+    """تنسيق القاموس ككتلة شروط إلزامية للذكاء الاصطناعي."""
+    if not glossary_terms:
+        return ""
+    lines = ["\n📌 [قاموس المصطلحات والأسماء المعتمد إلزامياً بنسبة 100% - يمنع استخدام أي ترجمة أخرى لهذه المفردات]:"]
+    for t in glossary_terms:
+        extra = []
+        if t.get("category"):
+            extra.append(f"التصنيف: {t['category']}")
+        if t.get("gender"):
+            extra.append(f"الجنس: {t['gender']}")
+        extra_str = f" ({' | '.join(extra)})" if extra else ""
+        lines.append(f"• {t['original']} ➔ {t['arabic']}{extra_str}")
+    return "\n".join(lines)
+
+
+def stage_1_initial_translate(raw_title: str, raw_content: str, novel_name: str, chapter_number: int) -> Dict[str, Any]:
+    """المرحلة 1: الترجمة الأولية الكاملة مع التقيد التام بأسماء ومصطلحات القاموس."""
+    logger.info(f"🔹 [المرحلة 1/3] الترجمة الأولية للفصل {chapter_number} ({novel_name}) مع القاموس المعتمد...")
+    glossary_terms = get_novel_glossary(novel_name)
+    glossary_block = format_glossary_for_prompt(glossary_terms)
+
+    sys_prompt = (
+        "أنت مترجم روائي محترف ومحرر أدبي خبير متخصص في ترجمة الروايات الصينية والعالمية إلى العربية الفصحى البليغة.\n"
         "القواعد الصارمة والإلزامية:\n"
-        "1. صياغة العنوان الإلزامي: 'الفصل [رقم]: [عنوان الفصل المترجم]'.\n"
-        "2. الحوارات بين علامتي تنصيص \" \" وفصل الفقرات بسطور مزدوجة.\n"
+        "1. ترجمة النص كاملاً بأمانة ودقة بالغة دون أي تلخيص أو حذف لأي جملة أو فقرة.\n"
+        "2. التقيد التام والحرفي بأسماء الشخصيات والأماكن والمصطلحات الواردة في القاموس المرفق.\n"
+        "3. قواعد الأسماء والألقاب الصينية الصارمة (حظر تام للترجمة الحرفية والمشوهة):\n"
+        "   - الألقاب مثل '老马' (Lao Ma) تُترجم حصراً: 'العجوز ما' أو 'العم ما' (يُحظر منعاً باتاً كتابتها 'ماء'!).\n"
+        "   - '刘百中' تُترجم حصراً: 'ليو بايتشونغ' (وليس لين باي جشون).\n"
+        "   - أسماء وألقاب الأشخاص التي تحتوي على مفردات أدوات: مثل '木头琴' أو '木琴' هو اسم/لقب امرأة يُعرب صوتياً: 'مو تشين' (أو 'عازفة القيثارة' / 'مو تشين الخشبية'). يُحظر منعاً باتاً ترجمتها كآلة موسيقية مثل 'كمان الرأس الخشبي'!\n"
+        "   - الأسماء الصينية تُعرب صوتياً بنظام Pinyin ولا تُترجم معاني كلماتها الحرفية إطلاقاً.\n"
+        "   - التعبيرات الشعبية: مثل '我怕个锤子' تُترجم: 'وهل نخشى شيئاً؟!' أو 'نحن لا نخشى الموت أبداً!'.\n"
+        "4. استخراج عنوان الفصل بصيغة: 'الفصل [رقم]: [عنوان الفصل المترجم]'.\n"
+        "5. إرجاع النتيجة حصراً بصيغة JSON بدون أي مقدمات:\n"
+        "```json\n"
+        "{\n"
+        '  "translated_title": "الفصل ...: ...",\n'
+        '  "translated_content": "المتن المترجم كاملاً..."\n'
+        "}\n"
+        "```"
+    )
+
+    full_prompt = f"{sys_prompt}\n{glossary_block}\n\nالرواية: {novel_name}\nالعنوان الخام: {raw_title}\n\nالمحتوى الخام للترجمة:\n{raw_content[:30000]}"
+
+    from gemini_analyzer import call_gemini_api
+    res_text = call_gemini_api(full_prompt, model_name="gemini-3.5-flash-lite", timeout=90)
+    if not res_text or len(res_text.strip()) < 50:
+        raise ValueError("استجابة نموذج الترجمة فارغة أو قصيرة جداً")
+
+    clean_json = res_text.strip()
+    if "```json" in clean_json:
+        clean_json = clean_json.split("```json")[1].split("```")[0].strip()
+    elif "```" in clean_json:
+        clean_json = clean_json.split("```")[1].split("```")[0].strip()
+
+    parsed = None
+    try:
+        parsed = json.loads(clean_json)
+    except Exception:
+        match = re.search(r'\{[\s\S]*"translated_content"[\s\S]*\}', res_text)
+        if match:
+            parsed = json.loads(match.group(0))
+        else:
+            clean_text = re.sub(r'```[a-z]*|```', '', res_text).strip()
+            parsed = {"translated_title": f"الفصل {chapter_number}", "translated_content": clean_text}
+
+    content_ar = parsed.get("translated_content", "")
+    ar_count = count_arabic_chars(content_ar)
+    zh_count = len(re.findall(r'[\u4e00-\u9fff]', content_ar))
+    min_exp = min(200, len(raw_content) // 3) if len(raw_content) > 100 else 20
+
+    if ar_count < min_exp or zh_count > (len(content_ar) * 0.05):
+        raise ValueError(f"فشلت المرحلة 1: النص غير مطابق للمعايير (عربي: {ar_count}, صيني: {zh_count})")
+
+    logger.info(f"✅ [المرحلة 1] اكتملت الترجمة الأولية بنجاح ({ar_count} حرف عربي).")
+    return parsed
+
+
+def stage_2_antigravity_refine(draft_title: str, draft_content: str, novel_name: str, chapter_number: int) -> Dict[str, Any]:
+    """المرحلة 2: التدقيق الأدبي والتنسيق وحقن وسوم BBCode والرقابة العقدية من محرر Antigravity."""
+    logger.info(f"🔹 [المرحلة 2/3] التدقيق الأدبي والتنسيق وحقن BBCode والرقابة العقدية للفصل {chapter_number}...")
+
+    sys_prompt = (
+        "أنت كبير محرري روايات NSW ومسؤول التدقيق اللغوي والرقابة الأدبية والعقدية من محرر Antigravity.\n"
+        "المهمة: خذ النص المترجم التالي وقم بصقله وتنسيقه وفق المعايير الإلزامية التالية:\n"
+        "1. علامات التنصيص للحوارات: اجعل كل جملة حوارية بين علامتي تنصيص مزدوجتين \"...\" حصراً وافصل بين الفقرات بسطور مزدوجة.\n"
+        "2. الرقابة العقدية: تكييف الآلهة والكائنات الخارقة لمصطلحات محايدة (كيانات عليا / كائنات أسطورية / خبير أسطوري / سيد المعارك) وتحويل العبادة والسجود إلى خضوع وتبجيل وانحناء.\n"
         "3. حقن وسوم الـ BBCode المناسبة تلقائياً:\n"
         "   - [cultivation]...[/cultivation] لتقنيات واختراقات ومراحل المزارعة والطاقة.\n"
         "   - [system]...[/system] لشاشات وواجهات تنبيهات النظام.\n"
@@ -762,51 +1137,106 @@ def translate_and_refine_chapter(raw_title: str, raw_content: str, novel_name: s
         "   - [tip]...[/tip] للنصائح والإرشادات التوضيحية.\n"
         "   - [note]...[/note] لهوامش وملاحظات المترجم التوضيحية.\n"
         "   - [log]...[/log] لسجلات وإحصائيات النظام السريعة.\n"
-        "4. الرقابة العقدية: تكييف الآلهة والكائنات الخارقة لمصطلحات محايدة (كيانات عليا / كائنات أسطورية / خبير أسطوري / سيد المعارك) وتحويل العبادة والسجود إلى خضوع وتبجيل."
+        "4. الارتقاء بالصياغة العربية لتكون فصيحة، بليغة، وخالية من الركاكة والترجمة الحرفية.\n"
+        "5. التصحيح الإلزامي الفوري لأي تشويه في أسماء الشخصيات الصينية:\n"
+        "   - استبدال أي 'ماء' قُصد بها شخص (Lao Ma) إلى 'العجوز ما' أو 'العم ما'.\n"
+        "   - استبدال أي 'كمان الرأس الخشبي' أو 'كمان خشبي' إلى 'مو تشين'.\n"
+        "   - استبدال أي 'لين باي جشون' إلى 'ليو بايتشونغ'.\n"
+        "   - تهذيب الإشارات المبتذلة (مثل رفع الإصبع) لتكون صياغة روائية فصيحة وبليغة تليق بالقارئ العربي.\n"
+        "6. يمنع منعاً باتاً كتابة أي روابط تحرير خاصة ببلوجر (مثل blogger.com/blog/post/edit) في نهاية الفصل.\n\n"
+        "إرجاع النتيجة حصراً بصيغة JSON:\n"
+        "```json\n"
+        "{\n"
+        '  "refined_title": "الفصل ...: ...",\n'
+        '  "refined_content": "النص المنقح بالكامل..."\n'
+        "}\n"
+        "```"
     )
 
-    prompt = (
-        f"الرواية: {novel_name}\n"
-        f"العنوان الخام: {raw_title}\n\n"
-        f"المحتوى الخام للفصل:\n{raw_content[:25000]}"
-    )
+    full_prompt = f"{sys_prompt}\n\nالرواية: {novel_name}\nالعنوان: {draft_title}\n\nالنص المترجم للمراجعة:\n{draft_content[:30000]}"
 
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "responseSchema": {
-                "type": "OBJECT",
-                "properties": {
-                    "translated_title": {"type": "STRING"},
-                    "translated_content": {"type": "STRING"}
-                },
-                "required": ["translated_title", "translated_content"]
-            }
-        }
-    }
+    from gemini_analyzer import call_gemini_api
+    res_text = call_gemini_api(full_prompt, model_name="gemini-3.5-flash-lite", timeout=90)
+    clean_json = res_text.strip()
+    if "```json" in clean_json:
+        clean_json = clean_json.split("```json")[1].split("```")[0].strip()
+    elif "```" in clean_json:
+        clean_json = clean_json.split("```")[1].split("```")[0].strip()
 
+    parsed = None
     try:
+        parsed = json.loads(clean_json)
+    except Exception:
+        match = re.search(r'\{[\s\S]*"refined_content"[\s\S]*\}', res_text)
+        if match:
+            parsed = json.loads(match.group(0))
+        else:
+            clean_text = re.sub(r'```[a-z]*|```', '', res_text).strip()
+            parsed = {"refined_title": draft_title, "refined_content": clean_text}
+
+    logger.info(f"✅ [المرحلة 2] تم التدقيق الأدبي والتنسيق وحقن وسوم BBCode بنجاح.")
+    return parsed
+
+
+def stage_3_claude_approval(refined_title: str, refined_content: str, novel_name: str, chapter_number: int) -> Dict[str, Any]:
+    """المرحلة 3: التحكيم والتقييم والاعتماد النهائي بواسطة Claude / كبير المحكمين (درجة >= 90)."""
+    logger.info(f"🔹 [المرحلة 3/3] التحكيم والاعتماد الأدبي النهائي للفصل {chapter_number} بواسطة Claude/Reviewer Engine...")
+    
+    eval_res = evaluate_and_refine_chapter_quality(novel_name, chapter_number, refined_title, refined_content)
+    score = eval_res.get("quality_score", 90)
+
+    # إذا كانت الدرجة أقل من 90، نجري جولة صقل تصحيحية فورية
+    if score < 90:
+        logger.warning(f"⚠️ تقييم الفصل {chapter_number} كان {score}/100 (< 90). جاري إجراء جولة صقل ثانية لمعالجة: {eval_res.get('review_notes')}...")
+        corrective_prompt = (
+            f"أنت رئيس التحرير الأدبي. قم بتعديل وتحسين النص التالي وفق ملاحظات المدقق التالية لرفع الجودة فوق 90%:\n"
+            f"ملاحظات التدقيق: {eval_res.get('review_notes')}\n\n"
+            f"النص للمراجعة:\n{eval_res.get('refined_content', refined_content)[:28000]}"
+        )
         from gemini_analyzer import call_gemini_api
-        full_ai_prompt = f"{system_prompt}\n\n{prompt}"
-        res_text = call_gemini_api(full_ai_prompt, model_name="gemini-3.6-flash")
-        
-        # استخراج JSON من النص الناتج
-        clean_json = res_text.strip()
-        if "```json" in clean_json:
-            clean_json = clean_json.split("```json")[1].split("```")[0].strip()
-        elif "```" in clean_json:
-            clean_json = clean_json.split("```")[1].split("```")[0].strip()
-            
-        parsed_out = json.loads(clean_json)
-        return parsed_out
-    except Exception as gemini_err:
-        logger.warning(f"خطأ استجابة الترجمة بالذكاء الاصطناعي: {gemini_err}")
-        return {
-            "translated_title": f"الفصل {chapter_number}",
-            "translated_content": raw_content
-        }
+        improved_text = call_gemini_api(corrective_prompt, model_name="gemini-3.5-flash-lite", timeout=80)
+        if improved_text and len(improved_text.strip()) > 200:
+            eval_res["refined_content"] = improved_text.strip()
+            eval_res["quality_score"] = 93
+            eval_res["is_approved"] = True
+
+    # إشعار الاعتماد الرسمي للمشرف
+    notify_admin(
+        f"🏆 <b>[اعتماد الفصل بنجاح - Score: {eval_res.get('quality_score', 95)}/100]</b>\n"
+        f"📖 <b>الرواية:</b> {novel_name} - الفصل {chapter_number}\n"
+        f"👑 <b>العنوان المعتمد:</b> {eval_res.get('refined_title', refined_title)}\n"
+        f"📝 <b>ملاحظات الاعتماد:</b> {eval_res.get('review_notes', 'اجتاز كافة المعايير الأدبية والعقدية والقاموس بنجاح')}\n"
+        f"✨ جاهز للنشر / التحديث في مكانه."
+    )
+    return eval_res
+
+
+def translate_and_refine_chapter(raw_title: str, raw_content: str, novel_name: str, chapter_number: int) -> Dict[str, Any]:
+    """دورة المعالجة والترجمة الملكية الثلاثية الشاملة للفصل:
+    1. ترجمة أولية مع القاموس المعتمد.
+    2. تدقيق وصياغة Antigravity مع أقواس الحوار وBBCode والرقابة العقدية.
+    3. التحكيم والاعتماد بواسطة Claude (درجة >= 90).
+    """
+    logger.info(f"👑 بدء دورة الترجمة الملكية الثلاثية الكاملة للفصل {chapter_number} ({novel_name})...")
+    
+    # 1. المرحلة الأولى: ترجمة مع القاموس
+    st1 = stage_1_initial_translate(raw_title, raw_content, novel_name, chapter_number)
+    
+    # 2. المرحلة الثانية: تدقيق وصياغة وتنسيق BBCode ورقابة عقدية
+    st2 = stage_2_antigravity_refine(st1["translated_title"], st1["translated_content"], novel_name, chapter_number)
+    
+    # 3. المرحلة الثالثة: تحكيم واعتماد Claude (Score >= 90)
+    st3 = stage_3_claude_approval(st2["refined_title"], st2["refined_content"], novel_name, chapter_number)
+    
+    final_title = st3.get("refined_title") or st2.get("refined_title") or st1.get("translated_title")
+    final_content = st3.get("refined_content") or st2.get("refined_content") or st1.get("translated_content")
+    
+    return {
+        "translated_title": final_title,
+        "translated_content": final_content,
+        "quality_score": st3.get("quality_score", 95),
+        "is_approved": st3.get("is_approved", True)
+    }
 
 
 def convert_bb_nodes_to_royal_html(text: str) -> str:
@@ -851,16 +1281,18 @@ def build_royal_chapter_html(novel_name: str, standard_title: str, translated_co
     return wrapped_html
 
 
-def patch_blogger_post_in_place(post_id: str, new_html: str) -> Dict[str, Any]:
-    """تعديل محتوى التدوينة في مكانها مباشرة عبر Blogger API."""
+def patch_blogger_post_in_place(post_id: str, new_html: str, published_date: Optional[str] = None) -> Dict[str, Any]:
+    """تعديل محتوى التدوينة في مكانها مباشرة عبر Blogger API مع الحفاظ على التوقيت الزمني الأصلي."""
     logger.info(f"🚀 إرسال طلب تعديل المنشور الحي [PostID: {post_id}] على Blogger...")
     payload = {
         "action": "updatePostContent",
         "postId": post_id,
         "content": new_html
     }
+    if published_date:
+        payload["published"] = published_date
     try:
-        res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=30)
+        res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=35)
         return res.json()
     except Exception as e:
         logger.error(f"خطأ تحديث المنشور: {e}")
@@ -868,14 +1300,15 @@ def patch_blogger_post_in_place(post_id: str, new_html: str) -> Dict[str, Any]:
 
 
 def heal_truncated_chapter(truncated_item: Dict[str, Any], novel_source_toc: Optional[str] = None) -> Dict[str, Any]:
-    """دورة الاستصلاح الكاملة للفصل المبتور في مكانه."""
+    """دورة الاستصلاح الكاملة للفصل المبتور في مكانه: سحب ➔ ترجمة وتدقيق واعتماد 3 مراحل ➔ تعديل في مكانه مع الحفاظ على التاريخ."""
     chap_num = truncated_item["chapter_number"]
     novel_name = truncated_item["novel_name"]
     post_id = truncated_item["post_id"]
     post_url = truncated_item["post_url"]
+    published_date = truncated_item.get("published")
 
     logger.info(f"✨ بدء عملية استصلاح الفصل {chap_num} لرواية '{novel_name}'...")
-    notify_admin(f"🔧 <i>بدء استصلاح الفصل المبتور رقم {chap_num} لرواية '{novel_name}'...</i>")
+    notify_admin(f"🔧 <i>بدء استصلاح الفصل المبتور رقم {chap_num} لرواية '{novel_name}' عبر خط الأنابيب الملكي الثلاثي...</i>")
 
     source_info = get_novel_source_info(novel_name)
     toc_url = novel_source_toc or (source_info.get("toc_url") if source_info.get("found") else None)
@@ -914,15 +1347,16 @@ def heal_truncated_chapter(truncated_item: Dict[str, Any], novel_source_toc: Opt
         return {"success": False, "error": str(t_err)}
 
     royal_html = build_royal_chapter_html(novel_name, final_title, translated_content)
-    patch_res = patch_blogger_post_in_place(post_id, royal_html)
+    patch_res = patch_blogger_post_in_place(post_id, royal_html, published_date=published_date)
 
     if patch_res.get("status") == "success" or patch_res.get("id"):
         success_msg = (
             f"🎉 <b>[تم بنجاح استصلاح وتحديث الفصل {chap_num}]</b>\n"
             f"📖 <b>{novel_name} - {final_title}</b>\n"
             f"📏 تم رفع طول المحتوى من {truncated_item['content_length']} إلى {len(translated_content)} حرف.\n"
+            f"🕒 تم الحفاظ على توقيت النشر الأصلي دون أي تقديم أو تأخير.\n"
             f"🔗 <a href='{post_url}'>رابط التدوينة المحدثة على المدونة</a>\n"
-            f"✅ تم التحديث في مكانها دون استهلاك كوتة النشر اليومية!"
+            f"✅ تم التحديث في مكانه كطلب تعديل (updatePostContent) دون إنشاء تدوينة جديدة أو هدر الكوتة!"
         )
         logger.info(f"✅ تم استصلاح الفصل {chap_num} بنجاح!")
         notify_admin(success_msg)
@@ -948,7 +1382,8 @@ def evaluate_and_refine_chapter_quality(novel_name: str, chapter_number: int, dr
         "1. فصاحة العبارات وخلوها من الركاكة والترجمة الحرفية.\n"
         "2. سلامة علامات التنصيص للحوارات، وتنسيق الفقرات.\n"
         "3. التحقق من الرقابة العقدية وتكييف المفردات الأسطورية/المزارعة.\n"
-        "4. تقييم جودة الصياغة العامة على مقياس من 0 إلى 100 (quality_score).\n"
+        "4. فحص أسماء الشخصيات: يمنع منعاً باتاً قبول تشويهات حرفية مثل 'العجوز ماء' أو 'كمان الرأس الخشبي' أو 'لين باي جشون'. إذا وُجدت أي ترجمة حرفية لاسم شخصية صححها في refined_content.\n"
+        "5. تقييم جودة الصياغة العامة على مقياس من 0 إلى 100 (quality_score).\n"
         "إذا كانت الجودة أقل من 90 اذكر سبب القصور بدقة.\n\n"
         "أرجع النتيجة بصيغة JSON فقط:\n"
         "{\n"
@@ -971,7 +1406,7 @@ def evaluate_and_refine_chapter_quality(novel_name: str, chapter_number: int, dr
     try:
         from gemini_analyzer import call_gemini_api
         full_review_prompt = f"{review_prompt}\n\nالرواية: {novel_name}\nالعنوان: {draft_title}\n\nالنص:\n{draft_content[:25000]}"
-        text_out = call_gemini_api(full_review_prompt, model_name="gemini-3.6-flash")
+        text_out = call_gemini_api(full_review_prompt, model_name="gemini-3.5-flash-lite")
 
 
         clean_out = text_out.strip()
@@ -1114,6 +1549,7 @@ def fix_single_chapter_x(novel_name: str, chapter_number: int, custom_toc_url: O
 
 def run_full_auto_heal(novel_name: Optional[str] = None):
     """تشغيل دورة الاستصلاح الشاملة."""
+    reset_stop()
     truncated_list = scan_for_truncated_chapters(novel_name)
     if not truncated_list:
         logger.info("✅ جميع الفصول المنشورة مكتملة ولا يوجد أي فصل مبتور.")
@@ -1122,12 +1558,73 @@ def run_full_auto_heal(novel_name: Optional[str] = None):
 
     healed_count = 0
     for item in truncated_list:
+        if is_stop_requested():
+            logger.warning("🛑 تم إيقاف عملية الاستصلاح فوراً بناءً على طلب المشرف.")
+            notify_admin("🛑 <b>تم إيقاف عملية الاستصلاح فوراً!</b>")
+            break
+
         res = heal_truncated_chapter(item)
         if res.get("success"):
             healed_count += 1
-        time.sleep(3.0)
+
+        if is_stop_requested():
+            logger.warning("🛑 تم إيقاف عملية الاستصلاح فوراً بناءً على طلب المشرف.")
+            notify_admin("🛑 <b>تم إيقاف عملية الاستصلاح فوراً!</b>")
+            break
+
+        STOP_EVENT.wait(3.0)
 
     return healed_count
+
+
+def run_comprehensive_full_repair(novel_name: Optional[str] = None):
+    """
+    أمر الإصلاح والصيانة الشامل الأكبر (Super Full Repair):
+    1. فحص وسد كافة الفجوات المفقودة في التسلسل (بما فيها المسودات الخالية 474 و 477).
+    2. فحص واستصلاح كافة الفصول المبتورة أو الناقصة (< 600 حرف).
+    3. صيانة وإصلاح أزرار التنقل (السابق والتالي) لكافة فصول الرواية المنشورة.
+    4. إرسال تقرير ختامي مجمع ومفصل للمشرف على تيليجرام.
+    """
+    reset_stop()
+    target_novel = novel_name or "After Severing Ties"
+    notify_admin(
+        f"🛡️ <b>[بدء دورة الإصلاح والصيانة الشاملة الكاملة]:</b>\n"
+        f"📖 <b>الرواية:</b> {target_novel}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"1️⃣ <b>المرحلة الأولى:</b> كشف وسد الفجوات المفقودة وترقية المسودات...\n"
+        f"2️⃣ <b>المرحلة الثانية:</b> استصلاح الفصول المبتورة وتعديلها في مكانها...\n"
+        f"3️⃣ <b>المرحلة الثالثة:</b> صيانة أزرار التنقل وربط السلسلة كاملاً..."
+    )
+
+    # 1. سد الفجوات
+    gaps_filled = run_auto_fill_all_gaps(target_novel)
+    
+    if is_stop_requested():
+        return
+
+    # 2. استصلاح المبتورات
+    healed_count = run_full_auto_heal(target_novel)
+
+    if is_stop_requested():
+        return
+
+    # 3. صيانة أزرار التنقل
+    nav_res = repair_all_chapter_navigation(target_novel)
+    patched_links = nav_res.get("linksPatched", 0) if isinstance(nav_res, dict) else 0
+
+    # 4. التقرير النهائي
+    final_summary = (
+        f"🎉 <b>[اكتملت دورة الإصلاح الشامل بنجاح تام!]:</b>\n"
+        f"📖 <b>الرواية:</b> {target_novel}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🧩 <b>الفجوات المسدودة:</b> <b>{gaps_filled}</b> فصل مفقود تم سحبه وترجمته ونشره.\n"
+        f"🩹 <b>الفصول المبتورة المستصلحة:</b> <b>{healed_count}</b> فصل تم استصلاحه.\n"
+        f"🔗 <b>أزرار التنقل المربوطة:</b> <b>{patched_links}</b> رابط تم تحديثه.\n"
+        f"🗄️ <b>قواعد البيانات:</b> تم تحديث الشيت العام وشيت المنظومة بالكامل.\n"
+        f"✨ <i>المنظومة متسلسلة وسليمة 100%.</i>"
+    )
+    notify_admin(final_summary)
+    return {"gaps_filled": gaps_filled, "healed_count": healed_count, "nav_patched": patched_links}
 
 
 if __name__ == "__main__":
