@@ -57,6 +57,37 @@ def strip_html_to_clean_story(html_content: str) -> str:
         for el in soup.select(selector):
             el.decompose()
 
+    # تحويل الصناديق التنسيقية الجمالية إلى وسوم BBCode متوافقة مع قالب المدونة
+    for div in soup.find_all("div", class_="cultivation"):
+        div.replace_with(f"\n[cultivation]{div.get_text(strip=True)}[/cultivation]\n")
+
+    for div in soup.find_all("div", class_="system"):
+        div.replace_with(f"\n[system]{div.get_text(strip=True)}[/system]\n")
+
+    for div in soup.find_all("div", class_="nsw-rift"):
+        div.replace_with(f"\n[system red]{div.get_text(strip=True)}[/system]\n")
+
+    for div in soup.find_all("div", class_="chinese-document"):
+        body = div.find("div", class_="doc-body")
+        seal = div.find("div", class_="doc-seal")
+        body_text = body.get_text(strip=True) if body else div.get_text(strip=True)
+        if seal:
+            div.replace_with(f'\n[doc seal="{seal.get_text(strip=True)}"]{body_text}[/doc]\n')
+        else:
+            div.replace_with(f"\n[doc]{body_text}[/doc]\n")
+
+    for div in soup.find_all("div", class_="personal-letter"):
+        div.replace_with(f"\n[letter]{div.get_text(strip=True)}[/letter]\n")
+
+    for div in soup.find_all("div", class_="nsw-tip"):
+        div.replace_with(f"\n[tip]{div.get_text(strip=True)}[/tip]\n")
+
+    for div in soup.find_all("div", class_="nsw-translator-note"):
+        div.replace_with(f"\n[note]{div.get_text(strip=True)}[/note]\n")
+
+    for div in soup.find_all("div", class_="nsw-system-log"):
+        div.replace_with(f"\n[log]{div.get_text(strip=True)}[/log]\n")
+
     # استخراج النصوص من الفقرات
     paragraphs = []
     p_tags = soup.find_all(["p", "div"])

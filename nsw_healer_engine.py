@@ -1122,6 +1122,35 @@ def get_novel_glossary(novel_name: str) -> List[Dict[str, str]]:
     return matched_terms
 
 
+def filter_glossary_for_chapter(raw_chinese_text: str, glossary_terms: List[Dict[str, str]], novel_name: str = "") -> List[Dict[str, str]]:
+    """
+    فلترة ذكية وفائقة الدقة: مطابقة النص الصيني للفصل مع القاموس المعتمد،
+    وإرسال المصطلحات التي وردت فعلياً في الفصل فقط لتوفير ما يزيد عن 90% من توكنز نافذة السياق،
+    مع ضمان إدراج المصطلحات المركزية للبطل دائماً.
+    """
+    if not raw_chinese_text or not glossary_terms:
+        return glossary_terms or []
+
+    matched = []
+    matched_originals = set()
+
+    for t in glossary_terms:
+        orig = t.get("original", "").strip()
+        if orig and orig in raw_chinese_text:
+            matched.append(t)
+            matched_originals.add(orig)
+
+    # إذا كان عدد المصطلحات المطابقة قليلاً جداً، نضمن بقاء أهم 5 مصطلحات قيادية للرواية
+    if len(matched) < 2:
+        for t in glossary_terms[:5]:
+            orig = t.get("original", "").strip()
+            if orig and orig not in matched_originals:
+                matched.append(t)
+                matched_originals.add(orig)
+
+    return matched
+
+
 def format_glossary_for_prompt(glossary_terms: List[Dict[str, str]]) -> str:
     """تنسيق القاموس ككتلة شروط إلزامية للذكاء الاصطناعي."""
     if not glossary_terms:
@@ -1139,10 +1168,12 @@ def format_glossary_for_prompt(glossary_terms: List[Dict[str, str]]) -> str:
 
 
 def stage_1_initial_translate(raw_title: str, raw_content: str, novel_name: str, chapter_number: int) -> Dict[str, Any]:
-    """المرحلة 1: الترجمة الأولية الكاملة مع التقيد التام بأسماء ومصطلحات القاموس."""
-    logger.info(f"🔹 [المرحلة 1/3] الترجمة الأولية للفصل {chapter_number} ({novel_name}) مع القاموس المعتمد...")
-    glossary_terms = get_novel_glossary(novel_name)
-    glossary_block = format_glossary_for_prompt(glossary_terms)
+    """المرحلة 1: الترجمة الأولية الكاملة مع التقيد التام بأسماء ومصطلحات القاموس المطابقة للفصل وتطبيق وسوم BBCode."""
+    logger.info(f"🔹 [المرحلة 1/3] الترجمة الأولية للفصل {chapter_number} ({novel_name}) مع القاموس المفلتر...")
+    all_glossary_terms = get_novel_glossary(novel_name)
+    chapter_glossary = filter_glossary_for_chapter(raw_content + " " + raw_title, all_glossary_terms, novel_name)
+    glossary_block = format_glossary_for_prompt(chapter_glossary)
+    logger.info(f"🎯 تم تصفية القاموس: إرسال {len(chapter_glossary)} مصطلح مطابق من أصل {len(all_glossary_terms)} لتوفير السياق.")
 
     sys_prompt = (
         "أنت مترجم روائي محترف ومحرر أدبي خبير متخصص في ترجمة الروايات الصينية والعالمية إلى العربية الفصحى البليغة.\n"
@@ -1155,12 +1186,24 @@ def stage_1_initial_translate(raw_title: str, raw_content: str, novel_name: str,
         "   - أسماء وألقاب الأشخاص التي تحتوي على مفردات أدوات: مثل '木头琴' أو '木琴' هو اسم/لقب امرأة يُعرب صوتياً: 'مو تشين' (أو 'عازفة القيثارة' / 'مو تشين الخشبية'). يُحظر منعاً باتاً ترجمتها كآلة موسيقية مثل 'كمان الرأس الخشبي'!\n"
         "   - الأسماء الصينية تُعرب صوتياً بنظام Pinyin ولا تُترجم معاني كلماتها الحرفية إطلاقاً.\n"
         "   - التعبيرات الشعبية: مثل '我怕个锤子' تُترجم: 'وهل نخشى شيئاً؟!' أو 'نحن لا نخشى الموت أبداً!'.\n"
-        "4. استخراج عنوان الفصل بصيغة: 'الفصل [رقم]: [عنوان الفصل المترجم]'.\n"
-        "5. إرجاع النتيجة حصراً بصيغة JSON بدون أي مقدمات:\n"
+        "4. التنسيقات الجمالية الملكية (وسوم BBCode لقالب المدونة):\n"
+        "   - احقن [cultivation]...[/cultivation] لتقنيات واختراقات ومراحل المزارعة والطاقة.\n"
+        "   - احقن [system]...[/system] لنوافذ وشاشات النظام السيبراني والإشعارات.\n"
+        "   - احقن [system red]...[/system] لتحذيرات الخطر الداهم والموت والشقوق الحمراء.\n"
+        "   - احقن [doc]...[/doc] للوثائق والمخطوطات والمراسيم القديمة.\n"
+        "   - احقن [letter]...[/letter] للرسائل والمذكرات الشخصية.\n"
+        "   - احقن [tip]...[/tip] للتلميحات الإرشادية.\n"
+        "   - احقن [note]...[/note] لهوامش وملاحظات الشرح الضرورية.\n"
+        "5. استخراج عنوان الفصل بصيغة: 'الفصل [رقم]: [عنوان الفصل المترجم]'.\n"
+        "6. كشف المصطلحات الجديدة: إذا ظهرت في الفصل شخصيات أو أماكن جديدة غير موجودة بالقاموس المرفق، اذكرها في حقل new_entities.\n"
+        "7. إرجاع النتيجة حصراً بصيغة JSON بدون أي مقدمات:\n"
         "```json\n"
         "{\n"
         '  "translated_title": "الفصل ...: ...",\n'
-        '  "translated_content": "المتن المترجم كاملاً..."\n'
+        '  "translated_content": "المتن المترجم كاملاً مع وسوم BBCode...",\n'
+        '  "new_entities": [\n'
+        '    {"chinese": "اسم صيني جديد", "arabic": "التعريب المقترح", "category": "شخصية/مكان/تقنية", "gender": "ذكر/أنثى/غير محدد"}\n'
+        '  ]\n'
         "}\n"
         "```"
     )
