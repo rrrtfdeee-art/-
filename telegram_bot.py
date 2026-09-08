@@ -107,6 +107,12 @@ def create_bot_app():
     if not telebot or not BOT_TOKEN:
         return None
 
+    from telebot import apihelper
+    # زيادة مهلة الاتصال لـ 60 ثانية لحماية البوت من انقطاعات وتذبذب الشبكة
+    apihelper.READ_TIMEOUT = 60
+    apihelper.CONNECT_TIMEOUT = 30
+    apihelper.RETRY_ON_ERROR = True
+
     bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
     # تسجيل قائمة الأوامر في زر Menu الرسمي بتطبيق تيليجرام
@@ -830,9 +836,21 @@ def create_bot_app():
                             types.InlineKeyboardButton("❌ إلغاء", callback_data="CANCEL_ACTION")
                         )
 
-                    bot.edit_message_text(summary, chat_id, wait_msg.message_id, reply_markup=markup)
+                    sent_ok = False
+                    for attempt in range(3):
+                        try:
+                            bot.edit_message_text(summary, chat_id, wait_msg.message_id, reply_markup=markup)
+                            sent_ok = True
+                            break
+                        except Exception as e_send:
+                            time.sleep(2)
+                    if not sent_ok:
+                        bot.send_message(chat_id, summary, reply_markup=markup)
                 except Exception as ex:
-                    bot.edit_message_text(f"❌ حدث خطأ أثناء المعاينة: {ex}", chat_id, wait_msg.message_id)
+                    try:
+                        bot.edit_message_text(f"❌ حدث خطأ أثناء المعاينة: {ex}", chat_id, wait_msg.message_id)
+                    except Exception:
+                        bot.send_message(chat_id, f"❌ حدث خطأ أثناء المعاينة: {ex}")
                     USER_SESSIONS.get(chat_id, {}).pop("state", None)
 
             threading.Thread(target=_preview_worker, daemon=True).start()
