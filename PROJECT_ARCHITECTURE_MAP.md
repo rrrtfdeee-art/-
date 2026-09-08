@@ -179,8 +179,11 @@
 * `setupWeeklyAuditSchedule` و `cleanWeeklyAuditSchedule`: محفز الفحص الأسبوعي الدوري المستقل.
 * `patchBloggerPost`: طلب PATCH لتعديل حقول محددة في Blogger API v3.
 * `publishBloggerDraft`: تفعيل جدولة المسودات بتاريخ RFC 3339 محدد.
+* `syncBloggerDatesToAllSheets`: المزامنة ثنائية الاتجاه من تدوينات Blogger الحية والمجدولة إلى الجداول (1IFT و 1HDj).
+* `onEdit(e)`: المشغل الفوري لتعديل تواريخ النشر في Blogger عند تعديل الخلية في الشيت مباشرة.
 
 ### ب) بيئة Python المركزية:
+* `local_nsw_api.py`: خادم الربط المحلي (Port 58242) يربط صفحات المتصفح (الترجمة.html وصفحة النشر.html) بخط إنتاج بايثون وأوبس بنظام النقرتين.
 * `nsw_healer_engine.py`:
   - `parse_any_datetime`: المحلل الشامل للتواريخ الصامدة أمام السلاش والشرطات.
   - `detect_system_gaps`: كشف الفجوات الحقيقي بدون إيجابيات كاذبة.

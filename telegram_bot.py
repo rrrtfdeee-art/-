@@ -1173,6 +1173,13 @@ def run_telegram_bot_loop():
         return
 
     print("🤖 Telegram Bot is running and waiting for messages...")
+    try:
+        import local_nsw_api
+        threading.Thread(target=local_nsw_api.start_server, daemon=True, name="NSWLocalAPI").start()
+        print("⚡ [Local API] Web Bridge server active on http://127.0.0.1:58242")
+    except Exception as e_api:
+        print(f"⚠️ Could not start local web bridge: {e_api}")
+
     while True:
         try:
             bot.polling(none_stop=True, interval=1, timeout=30)
