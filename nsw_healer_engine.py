@@ -58,6 +58,34 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/
 
 MIN_SAFE_TEXT_LENGTH = 800
 
+from datetime import datetime, timezone, timedelta
+
+def parse_any_datetime(date_val: Any) -> Optional[datetime]:
+    """محلل تاريخ ذكي وشامل يقبل كافة صيغ التواريخ (سلاش، شرطات، مسافات، ISO 8601)"""
+    if not date_val:
+        return None
+    s = str(date_val).strip().replace("/", "-")
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    for fmt in [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+    ]:
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            pass
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        pass
+    return None
+
+
 # أسماء الروايات الرسمية المسجلة بالمنظومة للتعرف الدقيق وتفادي تجزئة العناوين
 KNOWN_NOVELS = [
     "After Severing Ties",
@@ -757,18 +785,25 @@ def run_auto_fill_all_gaps(target_novel: Optional[str] = None) -> int:
             try:
                 p_date_str = current_prev.get("published_date")
                 n_date_str = g["next_info"].get("published_date")
-                if p_date_str:
-                    from datetime import datetime, timezone, timedelta
-                    p_dt = datetime.fromisoformat(p_date_str.replace("Z", "+00:00"))
-                    if n_date_str:
-                        n_dt = datetime.fromisoformat(n_date_str.replace("Z", "+00:00"))
-                        step_diff = (n_dt - p_dt) / (len(missing_sorted) + 1)
-                        step_dt = p_dt + step_diff * (idx + 1)
-                    else:
-                        step_dt = p_dt + timedelta(hours=2 * (idx + 1))
-                    target_pub_date = step_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                p_dt = parse_any_datetime(p_date_str)
+                n_dt = parse_any_datetime(n_date_str)
+
+                if p_dt and n_dt:
+                    step_diff = (n_dt - p_dt) / (len(missing_sorted) + 1)
+                    step_dt = p_dt + step_diff * (idx + 1)
+                elif p_dt:
+                    step_dt = p_dt + timedelta(minutes=1 * (idx + 1))
+                elif n_dt:
+                    step_dt = n_dt - timedelta(minutes=1 * (len(missing_sorted) - idx))
+                else:
+                    # في حال تعذر قراءة تاريخ الفصل السابق، جدولة الفصل في 2027 حصراً لمنع النشر المباشر نهائياً
+                    step_dt = datetime(2027, 1, 25, 9, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=idx + 1)
+
+                target_pub_date = step_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
             except Exception as dt_err:
                 logger.warning(f"تعذر حساب التوقيت الزمني للفصل {m_num}: {dt_err}")
+                # صمام أمان حديدي: موعد مجدول مستقبلي دائم لمنع النشر الحي تحت أي ظرف
+                target_pub_date = "2027-01-25T09:00:00.000Z"
 
             res = fill_single_missing_gap(
                 novel_name=novel,

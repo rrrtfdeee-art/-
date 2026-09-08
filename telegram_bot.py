@@ -452,28 +452,34 @@ def create_bot_app():
 
     @bot.message_handler(commands=['nsw_stage', 'stage', 'opus_stage', 'opus'])
     def nsw_stage_cmd(message):
-        """تجهيز وجلب دفعة فصول (حتى 20 فصلاً) لصقلها واعتمادها عبر Claude Opus."""
+        """لوحة تحكم طابور Claude Opus مع زر بدء السحب الفوري."""
         if not is_admin(message.from_user.id):
             bot.reply_to(message, "⛔ هذا الأمر للمشرف فقط.")
             return
         parts = message.text.strip().split(None, 1)
         novel_filter = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
-        bot.reply_to(message, f"🎭 <b>جاري تجهيز دفعة فصول Claude Opus (حتى 20 فصلاً) لرواية '{novel_filter}'...</b>\nسيتم تجريد النصوص برمجياً من الأكواد واستخراج المتن الصافي.")
-        def _run():
-            try:
-                import opus_staging_pipeline
-                batch = opus_staging_pipeline.fetch_pending_chapters_for_opus_review(max_chapters=20, novel_name=novel_filter)
-                if not batch:
-                    bot.send_message(message.chat.id, "ℹ️ لا توجد فصول حالياً بانتظار الاعتماد أو الجدولة لهذه الرواية.")
-                    return
-                report = f"✅ <b>تم تجهيز دفعة فصول ({len(batch)} فصل) للصقل الأدبي:</b>\n"
-                for ch in batch:
-                    report += f"• الفصل <b>{ch['chapter_number']}</b> ({ch['char_count']} حرف) ➔ مصدر: <code>{ch['source']}</code>\n"
-                report += "\n💡 <i>المتون مجردة وجاهزة للصقل وإعادة التغليف الملكي التلقائي.</i>"
-                bot.send_message(message.chat.id, report)
-            except Exception as e:
-                bot.send_message(message.chat.id, f"❌ خطأ أثناء تجهيز دفعة أوبس: {e}")
-        threading.Thread(target=_run, daemon=True).start()
+        
+        import sync_opus_queue
+        p_cnt = len(list(sync_opus_queue.PENDING_DIR.glob("chapter_*.txt")))
+        a_cnt = len(list(sync_opus_queue.APPROVED_DIR.glob("chapter_*.txt")))
+        pub_cnt = len(list(sync_opus_queue.PUBLISHED_DIR.glob("chapter_*.txt")))
+
+        text = (
+            f"🎭 <b>[لوحة تحكم طابور صقل Claude Opus]:</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📖 <b>الرواية:</b> {novel_filter}\n"
+            f"⏳ <b>في الانتظار (Pending):</b> <b>{p_cnt}</b> فصلاً\n"
+            f"✍️ <b>معتمدة للرفع (Approved):</b> <b>{a_cnt}</b> فصلاً\n"
+            f"✅ <b>منشورة وموثقة (Published):</b> <b>{pub_cnt}</b> فصلاً\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👇 <b>اضغط الزر أدناه لبدء العملية فوراً:</b>"
+        )
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn_pull = types.InlineKeyboardButton("📥 ابدأ سحب 20 فصلاً الآن (Pull)", callback_data="cb_opus_pull_now")
+        btn_approve_push = types.InlineKeyboardButton("🚀 اعتماد ونشر الكل إلى بلوجر (Push)", callback_data="cb_opus_push_all")
+        btn_status = types.InlineKeyboardButton("📊 تحديث حالة مجلدات الاستقبال", callback_data="cb_opus_status")
+        markup.add(btn_pull, btn_approve_push, btn_status)
+        bot.reply_to(message, text, reply_markup=markup)
 
     @bot.message_handler(commands=['nsw_nav', 'nav', 'repair_nav', 'nav_repair'])
     def nsw_nav_cmd(message):
@@ -694,15 +700,19 @@ def create_bot_app():
             if not is_admin(chat_id):
                 bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
                 return
-            bot.send_message(chat_id, "🧩 <b>جاري فحص الفصول المفقودة وسد الفجوات...</b>")
-            def _run_gaps():
-                try:
-                    import nsw_healer_engine
-                    nsw_healer_engine.run_auto_fill_all_gaps("After Severing Ties")
-                except Exception as e:
-                    bot.send_message(chat_id, f"❌ خطأ أثناء سد الفجوات: {e}")
-            threading.Thread(target=_run_gaps, daemon=True).start()
+            conf_markup = types.InlineKeyboardMarkup(row_width=2)
+            btn_yes = types.InlineKeyboardButton("✅ نعم، ابدأ سد الفجوات", callback_data="CONFIRM_HEAL_GAPS")
+            btn_no = types.InlineKeyboardButton("❌ إلغاء", callback_data="CANCEL_ACTION")
+            conf_markup.add(btn_yes, btn_no)
+            bot.send_message(
+                chat_id,
+                "⚠️ <b>تأكيد سد الفجوات الترقيمية:</b>\n"
+                "سيقوم المحرك بالتحقق من الفصول المفقودة وجدولتها بمواعيد زمنية دقيقة ومتسلسلة.\n\n"
+                "هل أنت متأكد من رغبتك بالبدء الآن؟",
+                reply_markup=conf_markup
+            )
             return
+
 
         elif data == "cb_nsw_heal":
             if not is_admin(chat_id):
@@ -740,26 +750,94 @@ def create_bot_app():
             threading.Thread(target=_run_nav, daemon=True).start()
             return
 
-        elif data == "cb_nsw_stage":
+        elif data == "cb_nsw_stage" or data == "cb_opus_status":
+            try:
+                import sync_opus_queue
+                p_cnt = len(list(sync_opus_queue.PENDING_DIR.glob("chapter_*.txt")))
+                a_cnt = len(list(sync_opus_queue.APPROVED_DIR.glob("chapter_*.txt")))
+                pub_cnt = len(list(sync_opus_queue.PUBLISHED_DIR.glob("chapter_*.txt")))
+                text = (
+                    f"🎭 <b>[لوحة طابور صقل فصول Claude Opus]:</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⏳ <b>في الانتظار (Pending):</b> <b>{p_cnt}</b> فصلاً\n"
+                    f"✍️ <b>معتمدة للرفع (Approved):</b> <b>{a_cnt}</b> فصلاً\n"
+                    f"✅ <b>منشورة وموثقة (Published):</b> <b>{pub_cnt}</b> فصلاً\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👇 اضغط الزر أدناه لبدء السحب فوراً:"
+                )
+                m = types.InlineKeyboardMarkup(row_width=1)
+                m.add(
+                    types.InlineKeyboardButton("📥 ابدأ سحب 20 فصلاً الآن (Pull)", callback_data="cb_opus_pull_now"),
+                    types.InlineKeyboardButton("🚀 اعتماد ونشر الكل إلى بلوجر (Push)", callback_data="cb_opus_push_all")
+                )
+                bot.send_message(chat_id, text, reply_markup=m)
+            except Exception as e:
+                bot.send_message(chat_id, f"❌ خطأ: {e}")
+            return
+
+        elif data == "cb_opus_pull_now":
             if not is_admin(chat_id):
                 bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
                 return
-            bot.send_message(chat_id, "🎭 <b>جاري تجهيز دفعة الـ 20 فصلاً لـ Claude Opus...</b>")
-            def _run_stage():
+            bot.send_message(chat_id, "⏳ <b>جاري سحب وتجهيز دفعة 20 فصلاً في مجلد pending...</b>")
+            def _pull_thread():
                 try:
-                    import opus_staging_pipeline
-                    batch = opus_staging_pipeline.fetch_pending_chapters_for_opus_review(max_chapters=20, novel_name="After Severing Ties")
-                    if not batch:
-                        bot.send_message(chat_id, "ℹ️ لا توجد فصول حالياً بانتظار الاعتماد أو الجدولة لهذه الرواية.")
-                        return
-                    report = f"✅ <b>تم تجهيز دفعة فصول ({len(batch)} فصل) للصقل الأدبي:</b>\n"
-                    for ch in batch:
-                        report += f"• الفصل <b>{ch['chapter_number']}</b> ({ch['char_count']} حرف) ➔ مصدر: <code>{ch['source']}</code>\n"
-                    report += "\n💡 <i>المتون مجردة وجاهزة للصقل وإعادة التغليف التلقائي.</i>"
-                    bot.send_message(chat_id, report)
+                    import sync_opus_queue
+                    sync_opus_queue.cmd_pull(limit=20, novel_name="After Severing Ties")
+                    p_files = sorted(list(sync_opus_queue.PENDING_DIR.glob("chapter_*.txt")), key=lambda p: int(re.search(r'\d+', p.name).group(0)) if re.search(r'\d+', p.name) else 0)
+                    ch_nums = [re.search(r'\d+', f.name).group(0) for f in p_files if re.search(r'\d+', f.name)]
+                    msg = (
+                        f"🎉 <b>[تم بنجاح سحب وتفريغ {len(p_files)} فصلاً في مجلد Pending!]</b> 🚀\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔢 <b>الفصول الجاهزة:</b> {', '.join(ch_nums[:15])}{'...' if len(ch_nums) > 15 else ''}\n"
+                        f"📂 <b>المجلد على حاسوبك:</b> <code>opus_staging/pending/</code>\n\n"
+                        f"💬 <b>الخطوة التالية:</b>\n"
+                        f"اطلب من Claude في محادثتك الآن:\n"
+                        f"<i>«راجع وصقل الفصل {ch_nums[0] if ch_nums else '221'} في opus_staging/pending/ بأعلى أسلوب بلاغي»</i>\n\n"
+                        f"وبعد الانتهاء، اضغط الزر أدناه لاعتمادها ونشرها مباشرة في بلوجر والشيت:"
+                    )
+                    m = types.InlineKeyboardMarkup(row_width=1)
+                    m.add(
+                        types.InlineKeyboardButton("✍️ اعتماد كافة الفصول المصقولة", callback_data="cb_opus_approve_all"),
+                        types.InlineKeyboardButton("🚀 رفع ونشر الكل إلى بلوجر والشيت (Push)", callback_data="cb_opus_push_all")
+                    )
+                    bot.send_message(chat_id, msg, reply_markup=m)
                 except Exception as e:
-                    bot.send_message(chat_id, f"❌ خطأ: {e}")
-            threading.Thread(target=_run_stage, daemon=True).start()
+                    bot.send_message(chat_id, f"❌ خطأ أثناء السحب: {e}")
+            threading.Thread(target=_pull_thread, daemon=True).start()
+            return
+
+        elif data == "cb_opus_approve_all":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            try:
+                import sync_opus_queue
+                cnt = sync_opus_queue.cmd_approve_all()
+                msg = (
+                    f"⭐ <b>تم اعتماد {cnt} فصول ونقلها إلى مجلد Approved بنجاح!</b>\n"
+                    f"الفصول الآن جاهزة للرفع إلى مدونة بلوجر والتحديث في الشيت بضغطة زر واحدة:"
+                )
+                m = types.InlineKeyboardMarkup()
+                m.add(types.InlineKeyboardButton("🚀 رفع ونشر الكل إلى بلوجر الآن (Push)", callback_data="cb_opus_push_all"))
+                bot.send_message(chat_id, msg, reply_markup=m)
+            except Exception as e:
+                bot.send_message(chat_id, f"❌ خطأ: {e}")
+            return
+
+        elif data == "cb_opus_push_all":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            bot.send_message(chat_id, "🚀 <b>جاري نشر ورفع الفصول المعتمدة إلى مدونة بلوجر وتحديث الجداول...</b>")
+            def _push_thread():
+                try:
+                    import sync_opus_queue
+                    sync_opus_queue.cmd_push(novel_name="After Severing Ties")
+                    bot.send_message(chat_id, "🎉 <b>تم بنجاح رفع ونشر كافة الفصول المصقولة إلى Blogger ومزامنة قواعد البيانات!</b>")
+                except Exception as e:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء النشر: {e}")
+            threading.Thread(target=_push_thread, daemon=True).start()
             return
 
         elif data == "cb_nsw_stop":
@@ -775,11 +853,28 @@ def create_bot_app():
                 bot.send_message(chat_id, f"❌ خطأ: {e}")
             return
 
-        elif data in ["TRIGGER_HEAL_GAPS", "heal_truncated_now"]:
+        elif data in ["TRIGGER_HEAL_GAPS", "heal_truncated_now", "cb_nsw_repair"]:
             if not is_admin(chat_id):
                 bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
                 return
-            bot.send_message(chat_id, "🚀 <b>جاري بدء دورة الاستصلاح الشاملة للمبتورات والفجوات بناءً على طلبك...</b>")
+            conf_markup = types.InlineKeyboardMarkup(row_width=2)
+            btn_yes = types.InlineKeyboardButton("✅ نعم، ابدأ الإصلاح الشامل", callback_data="CONFIRM_HEAL_GAPS")
+            btn_no = types.InlineKeyboardButton("❌ إلغاء", callback_data="CANCEL_ACTION")
+            conf_markup.add(btn_yes, btn_no)
+            bot.send_message(
+                chat_id,
+                "⚠️ <b>تأكيد تشغيل الإصلاح الشامل:</b>\n"
+                "سيقوم المحرك بسد الفجوات المفقودة بجدولة زمنية دقيقة، واستصلاح المبتورات، وصيانة أزرار التنقل.\n\n"
+                "هل أنت متأكد من رغبتك بالبدء الآن؟",
+                reply_markup=conf_markup
+            )
+            return
+
+        elif data == "CONFIRM_HEAL_GAPS":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            bot.send_message(chat_id, "🚀 <b>جاري بدء دورة الاستصلاح الشاملة بناءً على تأكيدك...</b>\n📅 كافة الفصول المضافة ستُجدول في مواعيدها الطبيعية.")
             def _run_full():
                 try:
                     import nsw_healer_engine
@@ -788,6 +883,11 @@ def create_bot_app():
                     bot.send_message(chat_id, f"❌ خطأ أثناء الاستصلاح: {e}")
             threading.Thread(target=_run_full, daemon=True).start()
             return
+
+        elif data == "CANCEL_ACTION":
+            bot.send_message(chat_id, "🛑 تم إلغاء العملية بأمان. لن يتم إجراء أي تعديل أو نشر.")
+            return
+
 
         elif data == "cb_nsw_help":
             try:

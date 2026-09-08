@@ -227,6 +227,24 @@ def cmd_approve(chapter_num: int):
     logger.info(f"⭐ تم اعتماد الفصل {chapter_num} ونقله إلى {approved_file}. جاهز للنشر (Push)!")
 
 
+def cmd_approve_all():
+    """نقل كافة الفصول الموجودة في pending/ إلى approved/ دفعة واحدة."""
+    pending_files = sorted(list(PENDING_DIR.glob("chapter_*.txt")), key=lambda p: int(re.search(r'\d+', p.name).group(0)) if re.search(r'\d+', p.name) else 0)
+    if not pending_files:
+        logger.info("ℹ️ لا توجد فصول في pending/ لنقلها للاعتماد.")
+        return 0
+
+    count = 0
+    for pf in pending_files:
+        m = re.search(r'\d+', pf.name)
+        if m:
+            c_num = int(m.group(0))
+            cmd_approve(c_num)
+            count += 1
+    logger.info(f"⭐ تم اعتماد ونقل {count} فصول بنجاح إلى approved/!")
+    return count
+
+
 def cmd_push(novel_name: str = "After Severing Ties"):
     """أخذ كافة الفصول المعتمدة في approved/، وتغليفها ملكياً وإرسالها لبلوجر والشيت."""
     approved_files = sorted(list(APPROVED_DIR.glob("chapter_*.txt")), key=lambda p: int(re.search(r'\d+', p.name).group(0)) if re.search(r'\d+', p.name) else 0)
@@ -314,8 +332,8 @@ def main():
     pull_parser.add_argument("--novel", type=str, default="After Severing Ties", help="اسم الرواية")
 
     # أمر approve
-    approve_parser = subparsers.add_parser("approve", help="اعتماد فصل ونقله إلى approved")
-    approve_parser.add_argument("chapter", type=int, help="رقم الفصل")
+    approve_parser = subparsers.add_parser("approve", help="اعتماد فصل ونقله إلى approved (أو اكتب all)")
+    approve_parser.add_argument("chapter", type=str, help="رقم الفصل أو 'all' لاعتماد كافة الفصول")
 
     # أمر push
     push_parser = subparsers.add_parser("push", help="نشر وتحديث الفصول المعتمدة في بلوجر والشيت")
@@ -328,7 +346,13 @@ def main():
     elif args.command == "pull":
         cmd_pull(limit=args.limit, novel_name=args.novel)
     elif args.command == "approve":
-        cmd_approve(chapter_num=args.chapter)
+        if args.chapter.lower() in ["all", "--all", "*"]:
+            cmd_approve_all()
+        else:
+            try:
+                cmd_approve(chapter_num=int(args.chapter))
+            except ValueError:
+                logger.error(f"❌ رقم الفصل غير صالح: {args.chapter}. أدخل رقماً أو 'all'.")
     elif args.command == "push":
         cmd_push(novel_name=args.novel)
     else:

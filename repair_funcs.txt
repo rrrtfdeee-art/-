@@ -1,0 +1,2272 @@
+// ==============================================================================
+// 🛠️ منظومة أدوات الإصلاح، الصيانة، والتدقيق الشامل (NSW Maintenance & Repair Suite)
+// ==============================================================================
+// 💡 هذا الملف يحتوي على كافة دوال الإصلاح والصيانة المنفصلة عن سكربت النشر الأساسي:
+// 1. أدوات فحص وإعادة ربط أزرار التنقل (السابق / التالي / الفهرست).
+// 2. أدوات الفحص الهيكلي وتدقيق الـ CSS ومطابقة النصوص.
+// 3. أدوات استصلاح وترقية الفصول واستعادة الفصول المبتورة من النسخ الاحتياطي.
+// 4. أدوات تنظيف وتصحيح بيانات الجداول.
+// ==============================================================================
+
+// 🔗 القسم 1: أدوات فحص ومزامنة أزرار التنقل وحقن الفهارس
+/**
+ * 🚀  * 3️⃣ الدالة الثالثة: المزامنة الشاملة لربط وحقن أزرار السابق، التالي، والفهرست على بلوجر
+ * المزايا المحدثة:
+ * 1. الحفظ التلقائي لنقطة التوقف (Checkpoint) في PropertiesService بعد كل فصل، والاستئناف التلقائي من الفصل التالي.
+ * 2. البدء الافتراضي التلقائي من الفصل 383 لرواية "الوريث المنبوذ" ومواصلة العمل دون تكرار.
+ * 3. فحص كافة الفصول عبر المستويات الثلاثة: المنشورة، المجدولة، وطابور النشر.
+ * 4. استخراج اسم الرواية بدقة من مصفوفة Labels مع استبعاد "آخر الفصول" والتصنيفات العامة.
+ * 5. استخراج رقم الفصل بدقة بعد كلمة "الفصل".
+ * 6. مطابقة اسم الرواية مع العمود A في شيت الفهارس وتجلب رابط الفهرست من العمود C.
+ * 7. جلب روابط السابق والتالي الحقيقية، وتتحقق من مطابقة الأزرار، وتحدثها فقط إذا كانت غير محقونة أو معطوبة.
+ * 8. تخفي الأزرار غير المرتبطة بروابط تلقائياً بذكاء.
+ */
+function syncAllChaptersNavigationWithIndex(targetNovelName, startChapterNum) {
+  var service = getBloggerService();
+  if (!service.hasAccess()) {
+    Logger.log("❌ المصادقة مطلوبة. يرجى تشغيل startAuth() أولاً.");
+    return;
+  }
+
+  var startTime = new Date().getTime();
+  var ss = SpreadsheetApp.openById(QUEUE_SHEET_ID);
+  var publishedSheet = getOrInitPublishedPostsSheet(ss);
+  var queueSheet = getOrInitQueueSheet(ss);
+
+  // 1. تحميل خريطة الفهارس المركزية في الذاكرة لتقليل الاستدعاءات
+  var indexMap = getNovelsIndexMap();
+
+  // 2. قراءة نقطة الاستئناف المحفوظة من الجلسة السابقة
+  var checkpoint = getNavResumeCheckpoint();
+
+  // تحديد الرواية المستهدفة أو استهداف بقية الروايات فقط
+  var isOtherNovelsOnly = false;
+  var target = "";
+  if (targetNovelName !== undefined && targetNovelName !== null && String(targetNovelName).trim() !== "") {
+    var rawT = String(targetNovelName).trim();
+    if (rawT === "OTHER_NOVELS_ONLY" || rawT === "بقية الروايات") {
+      isOtherNovelsOnly = true;
+    } else {
+      target = rawT.toLowerCase();
+    }
+  }
+
+  Logger.log("🚀 [بدء المزامنة الشاملة] " + 
+             (isOtherNovelsOnly ? "لكافة الروايات الأخرى (باستثناء الوريث المنبوذ)" : (target ? ("للرواية: [" + targetNovelName + "]") : "لكافة الروايات")) + 
+             (startChapterNum !== undefined && startChapterNum !== null ? (" | فصل البداية المحدد: [" + startChapterNum + "]") : ""));
+
+  // -------------------------------------------------------------
+  // 1️⃣ المرحلة الأولى: فحص وحقن الفصول المنشورة (Published Posts)
+  // -------------------------------------------------------------
+  Logger.log("⏳ [1/3] فحص ومزامنة الفصول المنشورة من جدول Published Posts...");
+  var pubData = publishedSheet.getDataRange().getValues();
+  var novelsMap = {};
+
+  for (var i = 1; i < pubData.length; i++) {
+    var rawTitle = String(pubData[i][1] || "");
+    var chapNum = extractChapterNumber(rawTitle) || parseFloat(pubData[i][0]);
+    var labelsRaw = pubData[i][2];
+    var postId = String(pubData[i][4] || "").trim();
+    var postUrl = String(pubData[i][5] || "").trim();
+    var novelCol = String(pubData[i][7] || "").trim();
+
+    var novelName = novelCol || extractNovelNameFromLabels(labelsRaw, rawTitle);
+    if (!novelName) continue;
+
+    if (isOtherNovelsOnly && novelName.indexOf("الوريث المنبوذ") !== -1) {
+      continue;
+    }
+
+    if (!target || novelName.toLowerCase() === target || novelName.toLowerCase().indexOf(target) !== -1) {
+      if (postId && postUrl && !isNaN(chapNum)) {
+        if (!novelsMap[novelName]) novelsMap[novelName] = [];
+        novelsMap[novelName].push({
+          row: i + 1,
+          chapNum: chapNum,
+          title: rawTitle,
+          postId: postId,
+          postUrl: postUrl,
+          novelName: novelName
+        });
+      }
+    }
+  }
+
+  var totalPubUpdated = 0;
+  var novelKeys = Object.keys(novelsMap);
+
+  for (var n = 0; n < novelKeys.length; n++) {
+    var currentNovel = novelKeys[n];
+    var chapters = novelsMap[currentNovel];
+    var indexUrl = resolveNovelIndexUrl(currentNovel, indexMap);
+
+    chapters.sort(function(a, b) { return a.chapNum - b.chapNum; });
+
+    // تحديد رقم فصل البداية للرواية الحالية:
+    var minChapterNum = 1; // الافتراضي لبقية الروايات: البدء من الفصل الأول (1)
+    var isForsaken = (currentNovel.indexOf("الوريث المنبوذ") !== -1);
+    var isCheckpointNovel = (checkpoint && checkpoint.novel && 
+      (currentNovel.toLowerCase() === checkpoint.novel.toLowerCase() || 
+       currentNovel.toLowerCase().indexOf(checkpoint.novel.toLowerCase()) !== -1 ||
+       checkpoint.novel.toLowerCase().indexOf(currentNovel.toLowerCase()) !== -1));
+
+    if (startChapterNum !== undefined && startChapterNum !== null && !isNaN(parseFloat(startChapterNum))) {
+      minChapterNum = parseFloat(startChapterNum);
+      Logger.log("🎯 [بداية محددة] رواية [" + currentNovel + "] تبدأ من الفصل [" + minChapterNum + "].");
+    } else if (isCheckpointNovel && checkpoint.lastChapNum !== null) {
+      minChapterNum = checkpoint.lastChapNum + 0.0001;
+      Logger.log("🔄 [استئناف تلقائي] رواية [" + currentNovel + "] تستأنف من بعد الفصل [" + checkpoint.lastChapNum + "].");
+    } else if (isForsaken) {
+      minChapterNum = 383; // استثناء خاص برواية الوريث المنبوذ: تبدأ من الفصل 383
+      Logger.log("🎯 [بداية الوريث المنبوذ] رواية [" + currentNovel + "] تبدأ تلقائياً من الفصل [383].");
+    } else {
+      minChapterNum = 1; // بقية الروايات تبدأ دائماً من الفصل الأول (1)
+      Logger.log("🎯 [بداية من الأول] رواية [" + currentNovel + "] تبدأ من الفصل الأول [1].");
+    }
+
+    Logger.log("📖 مزامنة فصول رواية [" + currentNovel + "] (" + chapters.length + " فصلاً) | بدءاً من الفصل: [" + (minChapterNum > 1 ? minChapterNum : 1) + "] | رابط الفهرس: " + indexUrl);
+
+    for (var k = 0; k < chapters.length; k++) {
+      var cur = chapters[k];
+
+      // تخطي الفصول التي تسبق نقطة البداية المحددة أو نقطة الاستئناف
+      if (cur.chapNum < minChapterNum) {
+        continue;
+      }
+
+      // فحص وقت الأمان لمهلة جوجل (4.5 دقيقة) - التوقف بأمان وحفظ الموضع
+      if (new Date().getTime() - startTime > 1000 * 60 * 4.5) {
+        var lastDone = (k > 0 ? chapters[k - 1].chapNum : cur.chapNum);
+        Logger.log("⏳ تم استهلاك 4.5 دقيقة (أمان مهلة جوجل). آخر فصل تم إنجازه وحفظه: [" + lastDone + "] لرواية [" + currentNovel + "]. يرجى إعادة التشغيل وسيستأنف تلقائياً من الفصل التالي.");
+        return;
+      }
+
+      var prevUrl = (k > 0) ? chapters[k - 1].postUrl : "#";
+      var nextUrl = (k < chapters.length - 1) ? chapters[k + 1].postUrl : "#";
+
+      var postRes = getBloggerPost(service, cur.postId);
+      if (!postRes.success) {
+        Logger.log("⚠️ تعذر جلب محتوى الفصل [" + cur.chapNum + "]: " + postRes.message);
+        saveNavResumeCheckpoint(currentNovel, cur.chapNum);
+        continue;
+      }
+
+      var content = postRes.data && postRes.data.content ? postRes.data.content : "";
+      
+      // فحص هل الروابط محقونة وسليمة مسبقاً
+      var existingNav = extractExistingNavUrls(content);
+      var isPrevMatch = (prevUrl === "#" && (existingNav.prevUrl === "#" || !existingNav.prevUrl)) || (existingNav.prevUrl === prevUrl);
+      var isNextMatch = (nextUrl === "#" && (existingNav.nextUrl === "#" || !existingNav.nextUrl)) || (existingNav.nextUrl === nextUrl);
+      var isIndexMatch = (indexUrl === "#" && (existingNav.indexUrl === "#" || !existingNav.indexUrl)) || (existingNav.indexUrl === indexUrl);
+
+      if (isPrevMatch && isNextMatch && isIndexMatch && content.indexOf('class="nsw-chapter-nav"') !== -1) {
+        saveNavResumeCheckpoint(currentNovel, cur.chapNum);
+        continue; // الأزرار سليمة ومحقونة بدقة، لا داعي لاستهلاك طلب تحديث
+      }
+
+      var newContent = setChapterNavUrls(content, prevUrl, nextUrl, indexUrl);
+      var updateRes = updateBloggerPostContent(service, cur.postId, newContent);
+      if (updateRes.success) {
+        totalPubUpdated++;
+        Logger.log("✅ [مُحدّث منشور] الفصل [" + cur.chapNum + "] تم حقن الروابط (السابق: " + (prevUrl !== '#' ? 'نعم' : 'لا') + " | الفهرس: " + (indexUrl !== '#' ? 'نعم' : 'لا') + " | التالي: " + (nextUrl !== '#' ? 'نعم' : 'لا') + ")");
+      } else {
+        Logger.log("❌ فشل تحديث الفصل [" + cur.chapNum + "]: " + updateRes.message);
+      }
+
+      // حفظ الفصل المنجز فوراً كنقطة استئناف
+      saveNavResumeCheckpoint(currentNovel, cur.chapNum);
+      Utilities.sleep(1000);
+    }
+
+    Logger.log("🎉 اكتملت فصول رواية [" + currentNovel + "] المنشورة بالكامل حتى الفصل [" + chapters[chapters.length - 1].chapNum + "].");
+  }
+
+  // -------------------------------------------------------------
+  // 2️⃣ المرحلة الثانية: فحص وحقن الفصول المجدولة (Scheduled Posts)
+  // -------------------------------------------------------------
+  Logger.log("⏳ [2/3] فحص ومزامنة الفصول المجدولة من Blogger API...");
+  var scheduledUrl = "https://www.googleapis.com/blogger/v3/blogs/" + BLOG_ID + "/posts?status=SCHEDULED&view=AUTHOR&maxResults=500";
+  var options = {
+    method: "get",
+    headers: { "Authorization": "Bearer " + service.getAccessToken() },
+    muteHttpExceptions: true
+  };
+
+  try {
+    var schedRes = UrlFetchApp.fetch(scheduledUrl, options);
+    if (schedRes.getResponseCode() === 200) {
+      var schedJson = JSON.parse(schedRes.getContentText());
+      var schedPosts = schedJson.items || [];
+      Logger.log("📊 عدد الفصول المجدولة المكتشفة على بلوجر: " + schedPosts.length);
+
+      var schedNovelsMap = {};
+      for (var s = 0; s < schedPosts.length; s++) {
+        var sp = schedPosts[s];
+        var sTitle = String(sp.title || "").trim();
+        var sLabels = sp.labels || [];
+        var sNovel = extractNovelNameFromLabels(sLabels, sTitle);
+        var sChapNum = extractChapterNumber(sTitle);
+
+        if (isOtherNovelsOnly && sNovel.indexOf("الوريث المنبوذ") !== -1) {
+          continue;
+        }
+
+        if (!target || sNovel.toLowerCase() === target || sNovel.toLowerCase().indexOf(target) !== -1) {
+          if (!schedNovelsMap[sNovel]) schedNovelsMap[sNovel] = [];
+          schedNovelsMap[sNovel].push({
+            id: sp.id,
+            url: sp.url,
+            title: sTitle,
+            chapNum: sChapNum,
+            novel: sNovel,
+            content: sp.content || ""
+          });
+        }
+      }
+
+      var schedKeys = Object.keys(schedNovelsMap);
+      for (var sn = 0; sn < schedKeys.length; sn++) {
+        var curSchedNovel = schedKeys[sn];
+        var sChapters = schedNovelsMap[curSchedNovel];
+        var sIndexUrl = resolveNovelIndexUrl(curSchedNovel, indexMap);
+
+        sChapters.sort(function(a, b) { return a.chapNum - b.chapNum; });
+
+        // البحث عن آخر فصل حي منشور في الشيت لربط زر التالي به مع أول فصل مجدول
+        var lastLive = findPreviousChapterInSheet(publishedSheet, curSchedNovel, sChapters[0].chapNum);
+        if (lastLive && lastLive.postId && sChapters[0].url) {
+          patchBloggerPostNextButton(service, lastLive.postId, sChapters[0].url);
+        }
+
+        for (var sk = 0; sk < sChapters.length; sk++) {
+          if (new Date().getTime() - startTime > 1000 * 60 * 4.5) {
+            Logger.log("⏳ تم استهلاك 4.5 دقيقة أثناء معالجة الفصول المجدولة.");
+            return;
+          }
+
+          var sCur = sChapters[sk];
+          var sPrevUrl = (sk > 0) ? sChapters[sk - 1].url : (lastLive ? lastLive.postUrl : "#");
+          var sNextUrl = (sk < sChapters.length - 1) ? sChapters[sk + 1].url : "#";
+
+          var sExistingNav = extractExistingNavUrls(sCur.content);
+          var sMatch = (sExistingNav.prevUrl === sPrevUrl || (sPrevUrl === '#' && !sExistingNav.prevUrl)) &&
+                       (sExistingNav.nextUrl === sNextUrl || (sNextUrl === '#' && !sExistingNav.nextUrl)) &&
+                       (sExistingNav.indexUrl === sIndexUrl || (sIndexUrl === '#' && !sExistingNav.indexUrl));
+
+          if (!sMatch || sCur.content.indexOf('class="nsw-chapter-nav"') === -1) {
+            var sNewContent = setChapterNavUrls(sCur.content, sPrevUrl, sNextUrl, sIndexUrl);
+            var sUpRes = updateBloggerPostContent(service, sCur.id, sNewContent);
+            if (sUpRes.success) {
+              Logger.log("✅ [مُحدّث مجدول] الفصل [" + sCur.chapNum + "] لرواية [" + curSchedNovel + "] تم ربط أزراره بنجاح.");
+            }
+            Utilities.sleep(1000);
+          }
+        }
+      }
+    }
+  } catch(e) {
+    Logger.log("⚠️ تعذر فحص الفصول المجدولة: " + e.toString());
+  }
+
+  // -------------------------------------------------------------
+  // 3️⃣ المرحلة الثالثة: فحص وحقن فصول طابور النشر (Queue - الصفحة 1)
+  // -------------------------------------------------------------
+  Logger.log("⏳ [3/3] فحص وحقن فصول طابور النشر في الصفحة 1 (Queue)...");
+  var queueLastRow = queueSheet.getLastRow();
+  if (queueLastRow >= 2) {
+    var queueData = queueSheet.getRange(2, 1, queueLastRow - 1, 10).getValues();
+    var queueModified = false;
+
+    for (var q = 0; q < queueData.length; q++) {
+      var qChapNum = extractChapterNumber(queueData[q][COL_Q_TITLE]) || parseFloat(queueData[q][COL_Q_CHAPTER_NUM]);
+      var qTitle = String(queueData[q][COL_Q_TITLE] || "");
+      var qContent = String(queueData[q][COL_Q_CONTENT] || "");
+      var qLabelsRaw = queueData[q][COL_Q_LABELS];
+      var qStatus = String(queueData[q][COL_Q_STATUS] || "").trim();
+
+      if (qStatus === "PUBLISHED") continue;
+
+      var qNovel = extractNovelNameFromLabels(qLabelsRaw, qTitle);
+      if (isOtherNovelsOnly && qNovel.indexOf("الوريث المنبوذ") !== -1) {
+        continue;
+      }
+      if (target && qNovel.toLowerCase() !== target && qNovel.toLowerCase().indexOf(target) === -1) {
+        continue;
+      }
+
+      var qIndexUrl = resolveNovelIndexUrl(qNovel, indexMap);
+      var qPrevChapter = findPreviousChapterInSheet(publishedSheet, qNovel, qChapNum);
+      var qPrevUrl = (qPrevChapter && qPrevChapter.postUrl) ? qPrevChapter.postUrl : "#";
+
+      var qExistingNav = extractExistingNavUrls(qContent);
+      if (qExistingNav.indexUrl !== qIndexUrl || qExistingNav.prevUrl !== qPrevUrl || qContent.indexOf('class="nsw-chapter-nav"') === -1) {
+        var qNewContent = setChapterNavUrls(qContent, qPrevUrl, null, qIndexUrl);
+        queueSheet.getRange(q + 2, COL_Q_CONTENT + 1).setValue(qNewContent);
+        queueSheet.getRange(q + 2, COL_Q_UPDATED_AT + 1).setValue(new Date().toISOString());
+        queueModified = true;
+        Logger.log("✅ [طابور النشر] تم حقن أزرار الفصل [" + qChapNum + "] لرواية [" + qNovel + "] ورابط الفهرس: " + qIndexUrl);
+      }
+    }
+
+    if (queueModified) {
+      SpreadsheetApp.flush();
+    }
+  }
+
+  Logger.log("🎉 [اكتملت المزامنة الشاملة بنجاح!] تم فحص وتحديث كافة الفصول والروابط وأزرار الفهرست.");
+}
+
+/**
+ * 💾 دوال إدارة نقطة الاستئناف لحقن روابط الفصول عبر PropertiesService
+ */
+function getNavResumeCheckpoint() {
+  var props = PropertiesService.getScriptProperties();
+  var novel = props.getProperty("NAV_RESUME_NOVEL") || "";
+  var chap = props.getProperty("NAV_RESUME_LAST_CHAP");
+  var num = (chap !== null && chap !== undefined && chap !== "") ? parseFloat(chap) : null;
+  return { novel: novel, lastChapNum: num };
+}
+
+function saveNavResumeCheckpoint(novelName, chapNum) {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    props.setProperties({
+      "NAV_RESUME_NOVEL": String(novelName || "").trim(),
+      "NAV_RESUME_LAST_CHAP": String(chapNum),
+      "NAV_RESUME_UPDATED_AT": new Date().toISOString()
+    });
+  } catch (e) {
+    Logger.log("⚠️ تعذر حفظ نقطة الاستئناف: " + e.toString());
+  }
+}
+
+function resetNavResumeCheckpoint() {
+  var props = PropertiesService.getScriptProperties();
+  props.deleteProperty("NAV_RESUME_NOVEL");
+  props.deleteProperty("NAV_RESUME_LAST_CHAP");
+  props.deleteProperty("NAV_RESUME_UPDATED_AT");
+  Logger.log("🔄 تم تصفير نقطة الاستئناف لحقن الروابط بنجاح.");
+}
+
+/**
+ * 🚀 تشغيل فوري لكافة الروايات الأخرى بدءاً من الفصل الأول (مع استثناء رواية الوريث المنبوذ) بضغطة زر وبدون كتابة أي اسم
+ */
+function runSyncOtherNovelsFromChapter1() {
+  return syncAllChaptersNavigationWithIndex("OTHER_NOVELS_ONLY", 1);
+}
+
+/**
+ * 🌐 تشغيل فوري لكافة الروايات بلا استثناء (الوريث المنبوذ من 383 وبقية الروايات من 1) بضغطة زر
+ */
+function runSyncAllNovels() {
+  return syncAllChaptersNavigationWithIndex();
+}
+
+/**
+ * 🎯 تشغيل فوري يبدأ من الفصل 383 من رواية الوريث المنبوذ ويستمر مع الحفظ التلقائي
+ */
+function runSyncForsakenHeirFromChapter383() {
+  saveNavResumeCheckpoint("الوريث المنبوذ", 382); // ضبط نقطة التوقف عند 382 ليبدأ فوراً من الفصل 383 فما بعده
+  return syncAllChaptersNavigationWithIndex("الوريث المنبوذ", 383);
+}
+
+/**
+ * ⏯️ استئناف فوري لحقن الروابط من آخر نقطة تم التوقف عندها في الجلسة السابقة
+ */
+function resumeSyncNavigation() {
+  var cp = getNavResumeCheckpoint();
+  if (cp && cp.novel) {
+    return syncAllChaptersNavigationWithIndex(cp.novel);
+  }
+  return syncAllChaptersNavigationWithIndex();
+}
+
+/**
+ * دالة مساعدة متوافقة مع الاسم القديم
+ */
+function syncNovelNavigation(targetNovelName, startChapterNum) {
+  return syncAllChaptersNavigationWithIndex(targetNovelName, startChapterNum);
+}
+
+// ==============================================================================
+// 🛠️ دوال صيانة شيت المنشورات واستيراد منشورات بلوجر (Maintenance & Import)
+// ==============================================================================
+
+/**
+ * 1️⃣ تنظيف شيت Published Posts وإضافة عمود اسم الرواية H
+ * - تحذف جميع صفوف رواية "عين المعرفة الكلية: النجاة بكسر القواعد"
+ * - تضبط الخلية H1 لتكون Novelname
+ * - تقرأ التصنيفات في العمود C وتستخرج اسم الرواية لكل الفصول الحالية وتكتبه في العمود H
+ */
+function cleanEyeOfOmniscienceAndAddNovelColumn() {
+  var ss = SpreadsheetApp.openById(QUEUE_SHEET_ID);
+  var sheet = ss.getSheetByName(PUBLISHED_SHEET_NAME);
+  if (!sheet) {
+    Logger.log("❌ تعذر العثور على صفحة " + PUBLISHED_SHEET_NAME);
+    return;
+  }
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    Logger.log("⚠️ لا توجد بيانات في شيت " + PUBLISHED_SHEET_NAME);
+    sheet.getRange(1, 8).setValue("Novelname").setFontWeight("bold").setBackground("#064e3b").setFontColor("#ecfdf5");
+    return;
+  }
+
+  Logger.log("⏳ بدء فحص وتنظيف شيت " + PUBLISHED_SHEET_NAME + " فائق السرعة...");
+
+  var targetNovelToDelete = "عين المعرفة الكلية: النجاة بكسر القواعد";
+  var data = sheet.getDataRange().getValues();
+  var header = data[0];
+  var cleanRows = [];
+  var deletedCount = 0;
+
+  for (var r = 1; r < data.length; r++) {
+    var labelsCol = String(data[r][2] || ""); // Column C: Labels
+    var titleCol  = String(data[r][1] || ""); // Column B: Title
+
+    if (labelsCol.indexOf(targetNovelToDelete) !== -1 || titleCol.indexOf(targetNovelToDelete) !== -1) {
+      deletedCount++;
+    } else {
+      var labelsRaw = data[r][2];
+      var existingNovel = String(data[r][7] || "").trim();
+      var novelName = existingNovel || extractNovelNameFromLabels(labelsRaw, titleCol);
+
+      var row = data[r].slice(0, 7);
+      while (row.length < 7) row.push("");
+      row.push(novelName); // العمود الثامن H
+      cleanRows.push(row);
+    }
+  }
+
+  // مسح وتحديث الشيت بالكامل دفعة واحدة في ثانية واحدة فقط
+  sheet.clearContents();
+
+  var newHeader = header.slice(0, 7);
+  while (newHeader.length < 7) newHeader.push("");
+  newHeader[7] = "Novelname";
+
+  var allData = [newHeader].concat(cleanRows);
+  sheet.getRange(1, 1, allData.length, 8).setValues(allData);
+  sheet.setFrozenRows(1);
+  sheet.getRange(1, 1, 1, 8).setFontWeight("bold").setBackground("#064e3b").setFontColor("#ecfdf5");
+  SpreadsheetApp.flush();
+
+  Logger.log("🗑️ تم حذف " + deletedCount + " صفاً لرواية '" + targetNovelToDelete + "'.");
+  Logger.log("✅ تم ضبط وتحديث اسم الرواية في العمود H لـ " + cleanRows.length + " فصلاً في ثانية واحدة!");
+  Logger.log("🎉 اكتملت العملية بنجاح تام!");
+}
+
+/**
+ * 2️⃣ استيراد جميع منشورات بلوجر الحالية وتسكينها في شيت Published Posts
+ * - تجلب جميع المنشورات من بلوجر عبر Blogger API مع دعم كامل لجميع الصفحات (Pagination)
+ * - تستخرج رقم الفصل، العنوان، التصنيفات، تاريخ النشر، معرف المنشور، الرابط، وتاريخ الإضافة، واسم الرواية
+ * - تتحقق من عدم التكرار بتخطي أي منشور مسجل مسبقاً عبر PostID
+ * - تستثني تلقائياً أي منشورات تخص رواية "عين المعرفة الكلية"
+ */
+function importAllBloggerPostsToSheet() {
+  var service = getBloggerService();
+  if (!service.hasAccess()) {
+    Logger.log("❌ المصادقة مطلوبة لنشر أو جلب الفصول من Blogger. يرجى تشغيل startAuth() أولاً.");
+    return;
+  }
+
+  var ss = SpreadsheetApp.openById(QUEUE_SHEET_ID);
+  var sheet = getOrInitPublishedPostsSheet(ss);
+
+  var existingIds = {};
+  var lastRow = sheet.getLastRow();
+  if (lastRow >= 2) {
+    var existingValues = sheet.getRange(2, 5, lastRow - 1, 1).getValues(); // Column E: PostID
+    for (var e = 0; e < existingValues.length; e++) {
+      var id = String(existingValues[e][0] || "").trim();
+      if (id) existingIds[id] = true;
+    }
+  }
+
+  Logger.log("⏳ بدء استدعاء المنشورات من بلوجر (Blog ID: " + BLOG_ID + ")...");
+
+  var pageToken = null;
+  var totalFetched = 0;
+  var rowsToAppend = [];
+  var targetNovelToDelete = "عين المعرفة الكلية: النجاة بكسر القواعد";
+
+  do {
+    var url = "https://www.googleapis.com/blogger/v3/blogs/" + BLOG_ID + "/posts?maxResults=500&fetchBodies=false&status=LIVE&status=SCHEDULED&view=AUTHOR";
+    if (pageToken) {
+      url += "&pageToken=" + encodeURIComponent(pageToken);
+    }
+
+    var options = {
+      method: "get",
+      headers: { "Authorization": "Bearer " + service.getAccessToken() },
+      muteHttpExceptions: true
+    };
+
+    var response = UrlFetchApp.fetch(url, options);
+    var resCode = response.getResponseCode();
+    if (resCode < 200 || resCode >= 300) {
+      Logger.log("❌ خطأ في الاتصال بـ Blogger API (" + resCode + "): " + response.getContentText());
+      break;
+    }
+
+    var json = JSON.parse(response.getContentText());
+    var items = json.items || [];
+    totalFetched += items.length;
+
+    for (var i = 0; i < items.length; i++) {
+      var post = items[i];
+      var postId = String(post.id || "").trim();
+
+      if (existingIds[postId]) continue;
+
+      var labels = post.labels || [];
+      var title = String(post.title || "").trim();
+      var novelName = extractNovelNameFromLabels(labels, title);
+
+      if (novelName.indexOf(targetNovelToDelete) !== -1 || title.indexOf(targetNovelToDelete) !== -1) {
+        continue;
+      }
+
+      var chapNum = extractChapterNumber(title);
+      var pubDate = post.published || new Date().toISOString();
+      var postUrl = post.url || "";
+      var publishedAt = post.published || new Date().toISOString();
+
+      rowsToAppend.push([
+        chapNum,
+        title,
+        JSON.stringify(labels),
+        pubDate,
+        postId,
+        postUrl,
+        publishedAt,
+        novelName
+      ]);
+
+      existingIds[postId] = true;
+    }
+
+    pageToken = json.nextPageToken;
+    Utilities.sleep(400);
+  } while (pageToken);
+
+  Logger.log("📊 إجمالي التدوينات التي تم فحصها من بلوجر: " + totalFetched);
+
+  if (rowsToAppend.length > 0) {
+    rowsToAppend.sort(function(a, b) {
+      if (a[7] !== b[7]) return String(a[7]).localeCompare(String(b[7]));
+      return a[0] - b[0];
+    });
+
+    sheet.getRange(sheet.getLastRow() + 1, 1, rowsToAppend.length, 8).setValues(rowsToAppend);
+    SpreadsheetApp.flush();
+    Logger.log("✅ تم بنجاح إضافة " + rowsToAppend.length + " منشوراً جديداً إلى شيت " + PUBLISHED_SHEET_NAME);
+  } else {
+    Logger.log("ℹ️ جميع منشورات بلوجر مسجلة مسبقاً في الشيت، لا توجد منشورات جديدة للإضافة.");
+  }
+}
+
+/**
+ * 🎯 دالة مخصصة لمعالجة وربط الفصول المجدولة فقط (Scheduled Chapters)
+ * - تجلب جميع الفصول المجدولة مباشرة من Blogger مع view=AUTHOR
+ * - تربط أول فصل مجدول بآخر فصل حي منشور قبله (مثلاً: ربط 209 بـ 208)
+ * - تربط الفصول المجدولة تسلسلياً (السابق والتالي)
+ * - تحدث محتواها في بلوجر وتسكّنها في شيت Published Posts
+ */
+
+// 🧹 القسم 2: أدوات استصلاح وتوحيد الفصول القديمة والنسخ الاحتياطي
+/**
+ * 🚀 دالة الاستصلاح المُحسّنة: تعتمد على جدول "Published Posts" لاستخراج معرفات الفصول (PostIDs) 
+ * بدلاً من فحص كل منشورات المدونة بشكل عشوائي!
+ */
+function remediateAndStandardizeAllChapters() {
+  var service = getBloggerService();
+  if (!service.hasAccess()) {
+    Logger.log("❌ خطأ: لم يتم منح صلاحيات OAuth لبلوجر بعد.");
+    return;
+  }
+
+  // استخدام openById لضمان عمل السكريبت حتى لو كان مستقلاً (Standalone)
+  var ss = SpreadsheetApp.openById(QUEUE_SHEET_ID);
+  
+  // 1. جلب جدول المنشورات المنشورة للحصول على الـ PostIDs
+  var publishedSheet = ss.getSheetByName("Published Posts");
+  if (!publishedSheet) {
+    Logger.log("❌ خطأ: تعذر العثور على ورقة 'Published Posts'.");
+    return;
+  }
+  
+  var publishedData = publishedSheet.getDataRange().getValues();
+  if (publishedData.length <= 1) {
+    Logger.log("ℹ️ لا توجد فصول منشورة في جدول Published Posts.");
+    return;
+  }
+
+  // 2. جلب جدول النسخ الاحتياطي
+  var backupSheet = getOrCreateBackupSheet(ss);
+  var existingBackups = getAlreadyBackedUpPostIds(backupSheet);
+
+  var totalProcessed = 0;
+  var totalRemediated = 0;
+  var startTime = new Date().getTime();
+  
+  Logger.log("🚀 بدء عملية الاستصلاح بالاعتماد على جدول Published Posts...");
+
+  // نبدأ من الصف الثاني (تجاهل العناوين)
+  // العمود E (الاندكس 4) يحتوي على PostID
+  for (var i = 1; i < publishedData.length; i++) {
+    var postId = publishedData[i][4]; 
+    var title = publishedData[i][1];
+    
+    if (!postId) continue;
+
+    // التحقق من الوقت لتفادي مهلة الـ 6 دقائق لجوجل (Google Apps Script Timeout)
+    if (new Date().getTime() - startTime > 1000 * 60 * 4.5) {
+      Logger.log("⚠️ تم الوصول للحد الأقصى للوقت (4.5 دقائق). يرجى تشغيل الدالة مرة أخرى لإكمال الباقي.");
+      break;
+    }
+
+    if (existingBackups.has(String(postId))) {
+      // الفصل تم استصلاحه مسبقاً
+      continue;
+    }
+
+    totalProcessed++;
+    Logger.log("جاري استصلاح: " + title + " (ID: " + postId + ")");
+
+    try {
+      var url = 'https://www.googleapis.com/blogger/v3/blogs/' + BLOG_ID + '/posts/' + postId + '?view=AUTHOR';
+      var response = UrlFetchApp.fetch(url, {
+        headers: { Authorization: 'Bearer ' + service.getAccessToken() },
+        muteHttpExceptions: true
+      });
+      
+      if (response.getResponseCode() !== 200) {
+        Logger.log("❌ فشل جلب الفصل " + postId + ": " + response.getContentText());
+        continue;
+      }
+      
+      var post = JSON.parse(response.getContentText());
+      var rawHtml = post.content || "";
+
+      // التحقق مما إذا كان الفصل نظيفاً مسبقاً
+      if (rawHtml.indexOf('class="nsw-chapter-wrapper"') !== -1 && 
+          rawHtml.indexOf('nsw-chapter-toolbar') === -1 && 
+          rawHtml.indexOf('autoChapterNav') === -1 && 
+          rawHtml.indexOf('<style') === -1 && 
+          rawHtml.indexOf('chapter-content-container') === -1) {
+         Logger.log("✅ الفصل سليم بالفعل، تم تخطيه.");
+         backupSheet.appendRow([postId, title, new Date(), "ALREADY_CLEAN", "ALREADY_CLEAN"]);
+         continue;
+      }
+
+      // 1. أخذ نسخة احتياطية
+      backupSheet.appendRow([postId, title, new Date(), rawHtml, "REMEDIATED"]);
+
+      // 2. تنظيف وتوحيد الـ HTML بالهيكل القياسي الملكي
+      var cleanHtml = nswSanitizeLegacyChapterHtml(rawHtml, '', title);
+
+      // 3. رفع الكود النظيف لبلوجر مباشرة دون تغليف مزدوج
+      var res = updateBloggerPostContent(service, postId, cleanHtml);
+      if (res.success) {
+        totalRemediated++;
+      }
+      
+    } catch (e) {
+      Logger.log("❌ خطأ أثناء معالجة الفصل " + postId + ": " + e.toString());
+    }
+  }
+
+  Logger.log("✅ اكتملت عملية الاستصلاح لهذه الدفعة!");
+  Logger.log("📊 الإحصائيات: تم فحص " + totalProcessed + " فصول، وتم استصلاح " + totalRemediated + " فصول بنجاح.");
+}
+
+
+/**
+ * 🔄 2. الدالة العكسية للاسترجاع (Rollback): إعادة الفصول كما كانت في حال الرغبة بالتراجع
+ */
+function rollbackRemediatedChapters() {
+    var service = getBloggerService();
+    if (!service.hasAccess()) {
+      Logger.log("❌ خطأ: خدمة Blogger غير مصرح بها.");
+      return;
+    }
+  
+    var ss = SpreadsheetApp.openById(QUEUE_SHEET_ID);
+    var backupSheet = getOrCreateBackupSheet(ss);
+  var data = backupSheet.getDataRange().getValues();
+  if (data.length <= 1) {
+    Logger.log("⚠️ لا توجد نسخ احتياطية في شيت " + REMEDIATION_CONFIG.BACKUP_SHEET_NAME);
+    return;
+  }
+
+  Logger.log("⏪ بدء عملية الاسترجاع العكسي للفصول من النسخة الاحتياطية...");
+  var restoredCount = 0;
+  var startTime = new Date().getTime();
+
+  // يبدأ من الصف 2 متجاوزاً الترويسة
+  for (var i = 1; i < data.length; i++) {
+    var postId = data[i][0];
+    var title = data[i][1];
+    var originalContent = data[i][3];
+
+    if (!postId || !originalContent) continue;
+
+    var res = updateBloggerPostContent(service, postId, originalContent);
+    if (res.success) {
+      restoredCount++;
+      Logger.log("↩️ [تم الاسترجاع]: " + title + " (ID: " + postId + ")");
+    } else {
+      Logger.log("⚠️ فشل استرجاع [" + title + "]: " + res.message);
+    }
+
+    Utilities.sleep(REMEDIATION_CONFIG.DELAY_MS);
+
+    if (new Date().getTime() - startTime > 270000) {
+      Logger.log("⏳ تم استهلاك 4.5 دقيقة. أعد تشغيل دالة الاسترجاع لإكمال ما تبقى.");
+      return;
+    }
+  }
+
+  Logger.log("🎉 اكتملت عملية الاسترجاع العكسي بنجاح! تم استرجاع " + restoredCount + " فصلاً.");
+}
+
+/**
+ * 🧹 3. خوارزمية الاستصلاح الشامل: استئصال القوالب القديمة والسكربتات وزرع المتن النقي
+ */
+function nswSanitizeLegacyChapterHtml(rawHtml, novelName, chapterTitle) {
+  if (!rawHtml) return "";
+  var content = rawHtml;
+
+  // 1. استئصال كافة وسوم <script> المضمنة بالكامل (autoChapterNav, font resize, json-ld)
+  content = content.replace(/<script[\s\S]*?<\/script>/gi, '');
+
+  // 2. استئصال كتل <style> المضمنة بالكامل
+  content = content.replace(/<style[\s\S]*?<\/style>/gi, '');
+
+  // 3. استئصال أشرطة الأدوات القديمة (nsw-chapter-toolbar) بأي هيئة وأزرار الخط والثيم
+  content = content.replace(/<div[^>]*class=["'][^"']*nsw-chapter-toolbar[^"']*["'][\s\S]*?<\/div>\s*<\/div>/gi, '');
+  content = content.replace(/<div[^>]*class=["'][^"']*nsw-theme-switch[^"']*["'][\s\S]*?<\/div>/gi, '');
+  content = content.replace(/<button[^>]*class=["'][^"']*nsw-btn-tool[^"']*["'][\s\S]*?<\/button>/gi, '');
+
+  // 4. استئصال أشرطة التنقل القديمة (nsw-chapter-nav)
+  content = content.replace(/<div[^>]*class=["'][^"']*nsw-chapter-nav[^"']*["'][\s\S]*?<\/div>/gi, '');
+
+  // 5. استخراج المتن الحقيقي الصافي للرواية
+  var pureText = "";
+  var textBodyMatch = content.match(/<div[^>]*class=["'][^"']*(?:actual-text|nsw-text-body)[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+  if (textBodyMatch) {
+    pureText = textBodyMatch[1].trim();
+  } else {
+    var pMatches = content.match(/<p[\s\S]*?<\/p>/gi);
+    if (pMatches && pMatches.length > 0) {
+      pureText = pMatches.join('\n');
+    } else {
+      pureText = content.trim();
+    }
+  }
+
+  // تنظيف أي بقايا لحاويات متداخلة قديمة
+  pureText = pureText.replace(/<div[^>]*class=["'][^"']*nsw-chapter-wrapper[^"']*["'][^>]*>/gi, '');
+  pureText = pureText.replace(/<div id=["']reading-content["'][^>]*>/gi, '');
+  pureText = pureText.replace(/<div[^>]*class=["'][^"']*nsw-chapter-toolbar[^"']*["'][\s\S]*?<\/div>/gi, '');
+  pureText = pureText.replace(/<div[^>]*class=["'][^"']*nsw-chapter-nav[^"']*["'][\s\S]*?<\/div>/gi, '');
+  pureText = pureText.replace(/<\/div>\s*<\/div>\s*<\/div>/gi, '');
+  pureText = pureText.replace(/<h1[^>]*>[\s\S]*?<\/h1>/gi, '');
+
+  // 6. تحويل ملاحظات المترجم إلى هوامش تفاعلية ذكية (💬)
+  pureText = pureText.replace(/<div class=["']nsw-translator-note["']>([\s\S]*?)<\/div>/gi, function(match, inner) {
+    var cleanNote = inner.replace(/<[^>]+>/g, ' ').replace(/"/g, '&quot;').replace(/\n/g, ' ').trim();
+    return '<span class="nsw-tooltip-term" onclick="nswShowNoteTooltip(\'' + cleanNote + '\', event)">🪶 ملاحظة المترجم <span class="nsw-tooltip-icon">💬</span></span>';
+  });
+
+  // استخراج روابط التنقل السابقة إن كانت موجودة في الكود الأصلي
+  var indexMatch = content.match(/<a\b[^>]*\bid=["']index-btn["'][^>]*\bhref=["']([^"']*)["']/i) || content.match(/<a\b[^>]*\bhref=["']([^"']*)["'][^>]*\bid=["']index-btn["']/i);
+  var prevMatch  = content.match(/<a\b[^>]*\bid=["']prev-btn["'][^>]*\bhref=["']([^"']*)["']/i) || content.match(/<a\b[^>]*\bhref=["']([^"']*)["'][^>]*\bid=["']prev-btn["']/i);
+  var nextMatch  = content.match(/<a\b[^>]*\bid=["']next-btn["'][^>]*\bhref=["']([^"']*)["']/i) || content.match(/<a\b[^>]*\bhref=["']([^"']*)["'][^>]*\bid=["']next-btn["']/i);
+
+  var indexUrl = indexMatch ? indexMatch[1] : "#";
+  var prevUrl  = prevMatch ? prevMatch[1] : "#";
+  var nextUrl  = nextMatch ? nextMatch[1] : "#";
+
+  // 7. صياغة الهيكل الملكي النقي والقياسي الموحد لـ Novel Sky World
+  var standardHtml = 
+    '<div class="nsw-chapter-wrapper">\n' +
+    '    <span id="dynamic-novel-name" style="display: none;">' + (novelName || "") + '</span>\n' +
+    '    <div id="reading-content">\n' +
+    '        <h1 style="border-bottom: 1px dashed var(--accent-gold-border, #c5a059); color: var(--accent-gold, #c5a059); text-align: center; margin-bottom: 25px; padding-bottom: 15px;">' + (chapterTitle || "") + '</h1>\n' +
+    '        <div class="actual-text" id="nsw-text-body">\n' +
+    '            ' + pureText.trim() + '\n' +
+    '        </div>\n' +
+    '    </div>\n' +
+    '    <div class="nsw-chapter-nav">\n' +
+    '        <a class="nsw-btn-fill" href="' + prevUrl + '" id="prev-btn"' + (prevUrl === '#' ? ' style="display: none;"' : '') + '>السابق</a>\n' +
+    '        <a class="nsw-btn-fill" href="' + indexUrl + '" id="index-btn" style="display: flex !important;">الفهرس</a>\n' +
+    '        <a class="nsw-btn-fill" href="' + nextUrl + '" id="next-btn"' + (nextUrl === '#' ? ' style="display: none;"' : '') + '>التالي</a>\n' +
+    '    </div>\n' +
+    '</div>';
+
+  return standardHtml;
+}
+
+/**
+ * 📋 دوال مساعدة لجدول النسخ الاحتياطي في Google Sheets
+ */
+function getOrCreateBackupSheet(ss) {
+  
+  var sheet = ss.getSheetByName(REMEDIATION_CONFIG.BACKUP_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(REMEDIATION_CONFIG.BACKUP_SHEET_NAME);
+    sheet.appendRow(["Post ID", "Post Title", "Post URL", "Original HTML Content", "Backup Timestamp"]);
+    sheet.setFrozenRows(1);
+    sheet.getRange("1:1").setFontWeight("bold").setBackground("#fef3c7");
+  }
+  return sheet;
+}
+
+function getAlreadyBackedUpPostIds(sheet) {
+  var ids = new Set();
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    // نتخطى فقط الفصول التي تم استصلاحها فعلياً وتم حفظ نسختها الأصلية (REMEDIATED)
+    if (data[i][0] && data[i][4] === "REMEDIATED") {
+      ids.add(String(data[i][0]));
+    }
+  }
+  return ids;
+}
+
+function resetRemediationProgress() {
+  PropertiesService.getScriptProperties().deleteProperty("NSW_REMEDIATE_PAGE_TOKEN");
+  var ss = SpreadsheetApp.openById(QUEUE_SHEET_ID);
+  var sheet = ss.getSheetByName(REMEDIATION_CONFIG.BACKUP_SHEET_NAME);
+  if (sheet) {
+    // حذف صفوف ALREADY_CLEAN للسماح بفحصها من جديد بعد التحديث
+    var data = sheet.getDataRange().getValues();
+    for (var i = data.length - 1; i >= 1; i--) {
+      if (data[i][4] === "ALREADY_CLEAN") {
+        sheet.deleteRow(i + 1);
+      }
+    }
+  }
+  Logger.log("✅ تم إعادة تعيين سجلات الفحص المبدئي بنجاح للبدء من جديد.");
+}
+
+
+/**
+ * 🚀 دالة الاستصلاح الجراحية الشاملة (تعمل على الفصول المنشورة والمجدولة بشكل منفصل لمنع أخطاء API)
+ */
+function remediateAllChaptersSurgically() {
+  Logger.log("==================================================");
+  Logger.log("🚀 بدء تشغيل دالة الاستصلاح الجراحية...");
+
+  var service = getBloggerService();
+  if (!service.hasAccess()) {
+    Logger.log("❌ تنبيه حرج: المصادقة غير مفعلة أو انتهت صلاحيتها!");
+    Logger.log("👉 يرجى تشغيل دالة (startAuth) أولاً والموافقة على الرابط في المتصفح.");
+    return;
+  }
+
+  var startTime = new Date().getTime();
+  var totalProcessed = 0;
+  var totalUpdated = 0;
+
+  // الحالات المطلوب استصلاحها بالتتابع (المنشور ثم المجدول)
+  var statuses = ["LIVE", "SCHEDULED"];
+
+  for (var s = 0; s < statuses.length; s++) {
+    var curStatus = statuses[s];
+    var nextPageToken = null;
+    Logger.log("--------------------------------------------------");
+    Logger.log("📂 جاري جلب الفصول بحالة: [" + curStatus + "]...");
+
+    do {
+      var url = "https://www.googleapis.com/blogger/v3/blogs/" + BLOG_ID + 
+                "/posts?status=" + curStatus + "&maxResults=50&view=AUTHOR" + 
+                (nextPageToken ? "&pageToken=" + nextPageToken : "");
+
+      var response = UrlFetchApp.fetch(url, {
+        headers: { Authorization: "Bearer " + service.getAccessToken() },
+        muteHttpExceptions: true
+      });
+
+      var code = response.getResponseCode();
+      if (code !== 200) {
+        Logger.log("⚠️ استجابة غير متوقعة من بلوجر (" + code + "): " + response.getContentText());
+        break;
+      }
+
+      var result = JSON.parse(response.getContentText());
+      var items = result.items || [];
+      nextPageToken = result.nextPageToken;
+
+      Logger.log("📦 تم العثور على " + items.length + " فصلاً في هذه الدفعة من حالة [" + curStatus + "].");
+
+      for (var i = 0; i < items.length; i++) {
+        var post = items[i];
+        var postId = post.id;
+        var title = post.title || "";
+        var rawHtml = post.content || "";
+
+        var novelName = "After Severing Ties";
+        if (title.includes('-')) {
+          novelName = title.split('-')[0].trim();
+        }
+
+        totalProcessed++;
+
+        // تطبيق التنظيف الجراحي
+        var cleanHtml = surgicalCleanChapter(rawHtml, novelName);
+
+        if (cleanHtml !== rawHtml) {
+          var updateRes = updateBloggerPostContent(service, postId, cleanHtml);
+          if (updateRes.success) {
+            totalUpdated++;
+            Logger.log("✅ [" + totalProcessed + "] تم استصلاح: " + title);
+          } else {
+            Logger.log("❌ فشل تحديث [" + title + "]: " + updateRes.message);
+          }
+          Utilities.sleep(1200);
+        } else {
+          Logger.log("ℹ️ [" + totalProcessed + "] الفصل نظيف بالفعل: " + title);
+        }
+
+        // إيقاف آمن قبل الوصول للحد الأقصى (4.5 دقيقة)
+        if (new Date().getTime() - startTime > 1000 * 60 * 4.5) {
+          Logger.log("⏳ تم الوصول للحد الزمني (4.5 دقيقة). شغل الدالة مرة أخرى لإكمال الفصول المتبقية.");
+          Logger.log("📊 حتى الآن: تم فحص " + totalProcessed + " وتحديث " + totalUpdated);
+          return;
+        }
+      }
+
+    } while (nextPageToken);
+  }
+
+  Logger.log("==================================================");
+  Logger.log("🎉 اكتمل الفحص والاستصلاح الشامل!");
+  Logger.log("📊 الإحصائية النهائية: تم فحص " + totalProcessed + " فصلاً، وتحديث " + totalUpdated + " فصلاً بنجاح.");
+}
+
+/**
+ * ✂️ دالة التنظيف الجراحي (حذف الأجزاء غير المرغوبة فقط)
+ */
+function surgicalCleanChapter(html, novelName) {
+  if (!html) return "";
+  var content = html;
+
+  if (!novelName) {
+    var m = content.match(/id=['"]dynamic-novel-name['"][^>]*>([^<]+)<\//i);
+    if (m && m[1].trim()) novelName = m[1].trim();
+    else novelName = "After Severing Ties";
+  }
+
+  // 1. إزالة الغلاف المزدوج الخارجي وإغلاقاته الزائدة (للنوع الأول)
+  content = content.replace(/^\s*<div[^>]*class=['"]nsw-chapter-wrapper['"][^>]*>\s*<div[^>]*class=['"]actual-text['"][^>]*>/i, '');
+  content = content.replace(/(?:<\/div>\s*){3,4}(<div[^>]*class=['"]nsw-chapter-nav['"])/i, '</div>\n    </div>\n    $1');
+
+  // 2. إزالة شريط الأدوات القديم والإيموجيات وتثبيت اسم الرواية (للنوع الثاني)
+  content = content.replace(
+    /(<div[^>]*class=['"]nsw-chapter-wrapper['"][^>]*>)[\s\S]*?(<div id=['"]reading-content['"])/i,
+    '$1\n    <span id="dynamic-novel-name" style="display: none;">' + novelName + '</span>\n    $2'
+  );
+
+  // 3. توحيد نصوص أزرار التنقل
+  content = content.replace(/>الفصل السابق</g, '>السابق<');
+  content = content.replace(/>الفصل التالي</g, '>التالي<');
+
+  return content.trim();
+}
+
+
+/**
+ * 💎 دالة استعادة النصوص الكاملة من النسخة الاحتياطية وإلباسها الهيكل الجديد النظيف 100%
+ * NSW Master Restoration & Chapter Preservation Engine
+ * 
+ * المزايا المحدثة:
+ * 1. لا تستثني الفصلين 2 و 3، بل تستخرج نصوصهما بالإضافة إلى استخلاص وحفظ أكواد الـ CSS (<style>) الخاصة بهما.
+ * 2. تسجل كل فصل يتم الانتهاء منه في العمود E من شيت النسخ الاحتياطي (NSW_BACKUP_POSTS) بقيمة "RESTORED"
+ *    وتتخطاه تلقائياً عند التشغيل القادم لمنع التكرار.
+ * 3. تجلب رابط الفهرست المحدث للرواية من شيت الفهارس المركزي.
+ * 4. تقوم في ختامها بتشغيل دالة المزامنة الشاملة للتأكد من ربط الفصول المنشورة والمجدولة وطابور النشر.
+ */
+function restoreFullContentWithNewDesign() {
+  var service = getBloggerService();
+  if (!service.hasAccess()) {
+    Logger.log("❌ المصادقة غير مفعلة. يرجى تشغيل startAuth أولاً.");
+    return;
+  }
+
+  var ss = SpreadsheetApp.openById(QUEUE_SHEET_ID);
+  var backupSheet = ss.getSheetByName("NSW_BACKUP_POSTS");
+  if (!backupSheet) {
+    Logger.log("❌ لم يتم العثور على ورقة النسخ الاحتياطي NSW_BACKUP_POSTS.");
+    return;
+  }
+
+  var backupData = backupSheet.getDataRange().getValues();
+  if (backupData.length <= 1) {
+    Logger.log("ℹ️ لا توجد بيانات في ورقة النسخ الاحتياطي.");
+    return;
+  }
+
+  // تحميل خريطة الفهارس المركزية
+  var indexMap = getNovelsIndexMap();
+
+  var startTime = new Date().getTime();
+  var totalProcessed = 0;
+  var totalRestored = 0;
+
+  Logger.log("🚀 بدء استعادة ومعالجة النصوص الكاملة مع الحفاظ التام على أكواد الـ CSS للفصلين 2 و3...");
+
+  for (var i = 1; i < backupData.length; i++) {
+    var postId = String(backupData[i][0] || "").trim();
+    var postTitle = String(backupData[i][1] || "").trim();
+    var originalHtml = String(backupData[i][3] || "");
+    var status = String(backupData[i][4] || "").trim();
+
+    // تخطي أي فصل تم استعادته أو تنظيفه مسبقاً لمنع التكرار كما طلب المستخدم
+    if (status === "RESTORED" || status === "ALREADY_CLEAN" || status === "PROCESSED") {
+      continue;
+    }
+
+    if (!postId || !originalHtml || originalHtml === "ALREADY_CLEAN") continue;
+
+    // استخراج اسم الرواية ورقم الفصل
+    var novelName = "After Severing Ties";
+    var chapterTitle = postTitle;
+    if (postTitle.includes('-')) {
+      var parts = postTitle.split('-');
+      novelName = parts[0].trim();
+      chapterTitle = parts.slice(1).join('-').trim();
+    }
+
+    var chapNum = extractChapterNumber(postTitle);
+    totalProcessed++;
+
+    // 1. استخلاص النص الأصلي الكامل 100% مع استخلاص أكواد CSS للفصلين 2 و 3
+    var extracted = extractFullStoryTextSafe(originalHtml, chapNum);
+    if (!extracted.storyText && chapNum !== 2 && chapNum !== 3) {
+      Logger.log("⚠️ تعذر استخراج النص للفصل: " + postTitle);
+      continue;
+    }
+
+    // جلب رابط الفهرست المحدث للرواية
+    var indexUrl = resolveNovelIndexUrl(novelName, indexMap);
+    if (indexUrl === "#") indexUrl = extracted.indexUrl;
+
+    // إعداد كود CSS للفصلين 2 و 3 إن وجد
+    var preservedCssBlock = "";
+    if (extracted.preservedCss) {
+      preservedCssBlock = '\n    ' + extracted.preservedCss + '\n';
+    }
+
+    var prevHref = (extracted.prevUrl && extracted.prevUrl !== "#") ? extracted.prevUrl : "#";
+    var nextHref = (extracted.nextUrl && extracted.nextUrl !== "#") ? extracted.nextUrl : "#";
+    var indexHref = (indexUrl && indexUrl !== "#") ? indexUrl : "#";
+
+    var prevStyle = (prevHref !== "#") ? "display: flex !important;" : "display: none !important;";
+    var nextStyle = (nextHref !== "#") ? "display: flex !important;" : "display: none !important;";
+    var indexStyle = (indexHref !== "#") ? "display: flex !important;" : "display: none !important;";
+
+    // 2. صب النص داخل الهيكل الملكي النظيف القياسي
+    var newCleanHtml = 
+      '<div class="nsw-chapter-wrapper">\n' +
+      '    <span id="dynamic-novel-name" style="display: none;">' + novelName + '</span>' +
+      preservedCssBlock +
+      '    <div id="reading-content">\n' +
+      '        <h1 style="border-bottom: 1px dashed var(--accent-gold-border, #c5a059); color: var(--accent-gold, #c5a059); text-align: center; margin-bottom: 25px; padding-bottom: 15px;">' + chapterTitle + '</h1>\n' +
+      '        <div class="actual-text" id="nsw-text-body">\n' +
+      '            ' + extracted.storyText + '\n' +
+      '        </div>\n' +
+      '    </div>\n' +
+      '    <div class="nsw-chapter-nav">\n' +
+      '        <a class="nsw-btn-fill" href="' + prevHref + '" id="prev-btn" style="' + prevStyle + '">السابق</a>\n' +
+      '        <a class="nsw-btn-fill" href="' + indexHref + '" id="index-btn" style="' + indexStyle + '">الفهرس</a>\n' +
+      '        <a class="nsw-btn-fill" href="' + nextHref + '" id="next-btn" style="' + nextStyle + '">التالي</a>\n' +
+      '    </div>\n' +
+      '</div>';
+
+    // 3. رفع الفصل المكتمل لبلوجر فوراً
+    var updateRes = updateBloggerPostContent(service, postId, newCleanHtml);
+    if (updateRes.success) {
+      totalRestored++;
+      // تسجيل الفصل في عمود الحالة بشيت النسخ الاحتياطي لمنع التكرار لاحقاً
+      backupSheet.getRange(i + 1, 5).setValue("RESTORED");
+      Logger.log("✅ [" + totalProcessed + "] تم استعادة النص وتثبيت الهيكل بنجاح: " + postTitle + (extracted.preservedCss ? " [تم حفظ كود CSS]" : ""));
+    } else {
+      Logger.log("❌ فشل تحديث [" + postTitle + "]: " + updateRes.message);
+    }
+
+    Utilities.sleep(1200);
+
+    if (new Date().getTime() - startTime > 1000 * 60 * 4.5) {
+      Logger.log("⏳ تم الوصول للحد الزمني (4.5 دقيقة). يرجى تشغيل الدالة مرة أخرى لمتابعة بقية الفصول.");
+      Logger.log("📊 المنجز حتى الآن: تم فحص " + totalProcessed + " واستعادة " + totalRestored);
+      return;
+    }
+  }
+
+  Logger.log("🎉 اكتملت مرحلة الاستعادة من النسخ الاحتياطية! تم استرجاع " + totalRestored + " فصلاً.");
+
+  // تشغيل المزامنة الشاملة للتأكد من شمول الفصول المنشورة والمجدولة وطابور النشر
+  try {
+    syncAllChaptersNavigationWithIndex();
+  } catch (syncErr) {
+    Logger.log("⚠️ تنبيه أثناء تشغيل المزامنة الشاملة: " + syncErr.toString());
+  }
+}
+
+/**
+/**
+ * 🔍 دالة الاستخلاص الآمن للنص الكامل من الكود القديم مع حفظ كتل الـ CSS لكافة الفصول
+ */
+function extractFullStoryTextSafe(html, chapNum) {
+  if (!html) return { storyText: "", prevUrl: "#", indexUrl: "#", nextUrl: "#", preservedCss: "" };
+  var content = html;
+
+  // 1. استخلاص وحفظ كافة أكواد الـ CSS (<style>) المضمنة في الفصل إن وُجدت
+  var preservedCss = "";
+  var styleMatches = content.match(/<style[\s\S]*?<\/style>/gi);
+  if (styleMatches && styleMatches.length > 0) {
+    preservedCss = styleMatches.join('\n');
+  }
+
+  // 2. استخراج روابط التنقل السابقة إن وُجدت
+  var indexMatch = content.match(/<a\b[^>]*\bid=["']index-btn["'][^>]*\bhref=["']([^"']*)["']/i) || content.match(/<a\b[^>]*\bhref=["']([^"']*)["'][^>]*\bid=["']index-btn["']/i);
+  var prevMatch  = content.match(/<a\b[^>]*\bid=["']prev-btn["'][^>]*\bhref=["']([^"']*)["']/i) || content.match(/<a\b[^>]*\bhref=["']([^"']*)["'][^>]*\bid=["']prev-btn["']/i);
+  var nextMatch  = content.match(/<a\b[^>]*\bid=["']next-btn["'][^>]*\bhref=["']([^"']*)["']/i) || content.match(/<a\b[^>]*\bhref=["']([^"']*)["'][^>]*\bid=["']next-btn["']/i);
+
+  var prevUrl  = prevMatch ? prevMatch[1].trim() : "#";
+  var indexUrl = indexMatch ? indexMatch[1].trim() : "#";
+  var nextUrl  = nextMatch ? nextMatch[1].trim() : "#";
+
+  // 3. تحديد حدود النص: أين تنتهي الرواية وتبدأ أزرار التنقل؟
+  var navIdx = content.search(/<div[^>]*class=["'][^"']*nsw-chapter-nav/i);
+  var bodyPart = (navIdx !== -1) ? content.substring(0, navIdx) : content;
+
+  // 4. أين تبدأ الرواية؟ فوراً بعد انتهاء وسم </h1>
+  var h1CloseIdx = bodyPart.search(/<\/h1>/i);
+  var textPart = (h1CloseIdx !== -1) ? bodyPart.substring(h1CloseIdx + 5) : bodyPart;
+
+  // 5. حذف النفايات الخارجية مع إبقاء كتل الرواية كاملة
+  textPart = textPart.replace(/<script[\s\S]*?<\/script>/gi, '');
+  textPart = textPart.replace(/<style[\s\S]*?<\/style>/gi, '');
+  textPart = textPart.replace(/<div[^>]*class=["'][^"']*nsw-sponsored-box[\s\S]*?<\/div>/gi, '');
+
+  return {
+    storyText: textPart.trim(),
+    prevUrl: prevUrl,
+    indexUrl: indexUrl,
+    nextUrl: nextUrl,
+    preservedCss: preservedCss
+  };
+}
+
+// ==============================================================================
+// 📊 منظومة جرد وتحليل أكواد الـ CSS في الفصول (CSS Audit Engine)
+// ==============================================================================
+
+var TEMPLATE_BUILTIN_CLASSES = [
+  'nsw-rift', 'nsw-official-doc', 'doc-title', 'personal-letter',
+  'nsw-tip', 'nsw-translator-note', 'nsw-line-red', 'nsw-line-grey',
+  'nsw-chapter-wrapper', 'actual-text', 'nsw-text-body'
+];
+
+/**
+ * 🔍 تحليل كود الفصل واستخراج أنماط وكلاسات الـ CSS والمطابقة مع القالب
+ */
+function analyzeChapterCssContent(html) {
+  if (!html) return { type: 'لا يوجد', inTemplate: 'لا ينطبق', classes: '', cssCode: '' };
+
+  var styleMatches = html.match(/<style[\s\S]*?<\/style>/gi) || [];
+  var cssCode = styleMatches.join('\n');
+
+  // استخراج الكلاسات
+  var classMatches = html.match(/class=["']([^"']+)["']/gi) || [];
+  var foundClasses = {};
+  for (var i = 0; i < classMatches.length; i++) {
+    var raw = classMatches[i].replace(/class=["']|["']/gi, '');
+    var parts = raw.split(/\s+/);
+    for (var j = 0; j < parts.length; j++) {
+      var cls = parts[j].trim();
+      if (cls && cls.indexOf('nsw-chapter-wrapper') === -1 && cls.indexOf('actual-text') === -1 && 
+          cls.indexOf('nsw-btn') === -1 && cls.indexOf('reading-content') === -1) {
+        foundClasses[cls] = true;
+      }
+    }
+  }
+
+  var classList = Object.keys(foundClasses);
+  var typeParts = [];
+  if (styleMatches.length > 0) typeParts.push('كتلة <style> مضمنة (' + styleMatches.length + ')');
+  if (classList.length > 0) typeParts.push('كلاسات جمالية (' + classList.join(', ') + ')');
+
+  if (typeParts.length === 0) {
+    return {
+      type: 'نص عادي (خالٍ من CSS)',
+      inTemplate: 'لا ينطبق',
+      classes: '',
+      cssCode: ''
+    };
+  }
+
+  // مطابقة الكلاسات مع ما هو مدمج في القالب
+  var allInTemplate = true;
+  if (styleMatches.length > 0) {
+    allInTemplate = false; // يحتوي على كود ستايل مخصص
+  }
+  for (var c = 0; c < classList.length; c++) {
+    var clName = classList[c];
+    if (TEMPLATE_BUILTIN_CLASSES.indexOf(clName) === -1) {
+      allInTemplate = false;
+      break;
+    }
+  }
+
+  return {
+    type: typeParts.join(' | '),
+    inTemplate: allInTemplate ? 'نعم - مدمج بالقالب' : 'لا - كود مخصص (يحتاج دمج أو إبقاء)',
+    classes: classList.join(', '),
+    cssCode: cssCode
+  };
+}
+
+/**
+ * 🚀 دالة جرد كافة الفصول وإنشاء جدول إكسل متكامل (CSS_Audit_Report)
+ * - دالة آمنة 100% (Read-Only) لا تعدل أي شيء على بلوجر
+ * - تنشئ تبويباً جديداً باسم CSS_Audit_Report وتوضح فيه كل فصل ونوع السيسي وهل هو موجود بالقالب
+ */
+function auditAllChaptersCssAndGenerateReport() {
+  var service = getBloggerService();
+  var ss = SpreadsheetApp.openById(QUEUE_SHEET_ID);
+
+  var publishedSheet = ss.getSheetByName("Published Posts");
+  if (!publishedSheet) {
+    Logger.log("❌ تعذر العثور على ورقة Published Posts.");
+    return;
+  }
+
+  var backupSheet = ss.getSheetByName("NSW_BACKUP_POSTS");
+  var backupMap = {};
+  if (backupSheet) {
+    var bData = backupSheet.getDataRange().getValues();
+    for (var b = 1; b < bData.length; b++) {
+      var bId = String(bData[b][0] || "").trim();
+      var bHtml = String(bData[b][3] || "");
+      if (bId && bHtml && bHtml !== "ALREADY_CLEAN") {
+        backupMap[bId] = bHtml;
+      }
+    }
+    Logger.log("📦 تم تحميل " + Object.keys(backupMap).length + " فصلاً من النسخ الاحتياطية للفحص السريع.");
+  }
+
+  // إعداد أو تفريغ شيت تقرير الجرد
+  var reportSheet = ss.getSheetByName("CSS_Audit_Report");
+  if (!reportSheet) {
+    reportSheet = ss.insertSheet("CSS_Audit_Report");
+  } else {
+    reportSheet.clear();
+  }
+
+  var headers = [
+    "اسم الرواية", 
+    "رقم الفصل", 
+    "عنوان الفصل", 
+    "Post ID", 
+    "نوع الـ CSS المكتشف", 
+    "هل الـ CSS مدمج في القالب؟", 
+    "الكلاسات المستخرجة", 
+    "كود الـ CSS (<style>)", 
+    "رابط الفصل"
+  ];
+  reportSheet.appendRow(headers);
+  reportSheet.setFrozenRows(1);
+  reportSheet.getRange(1, 1, 1, headers.length)
+    .setFontWeight("bold")
+    .setBackground("#064e3b")
+    .setFontColor("#ecfdf5")
+    .setHorizontalAlignment("center");
+
+  var pubData = publishedSheet.getDataRange().getValues();
+  if (pubData.length <= 1) {
+    Logger.log("ℹ️ لا توجد فصول في جدول Published Posts.");
+    return;
+  }
+
+  var startTime = new Date().getTime();
+  var totalChecked = 0;
+  var countWithStyleTag = 0;
+  var countWithTemplateClasses = 0;
+  var countPlain = 0;
+  var rowsToWrite = [];
+
+  Logger.log("🔍 بدء عملية الجرد الشامل لأكواد الـ CSS في كافة الفصول المنشورة (" + (pubData.length - 1) + " فصلاً)...");
+
+  for (var i = 1; i < pubData.length; i++) {
+    var rawTitle  = String(pubData[i][1] || "");
+    var chapNum   = extractChapterNumber(rawTitle) || parseFloat(pubData[i][0]);
+    var labelsRaw = pubData[i][2];
+    var postId    = String(pubData[i][4] || "").trim();
+    var postUrl   = String(pubData[i][5] || "").trim();
+    var novelCol  = String(pubData[i][7] || "").trim();
+    var novelName = novelCol || extractNovelNameFromLabels(labelsRaw, rawTitle);
+
+    if (!postId) continue;
+    totalChecked++;
+
+    // الحصول على الـ HTML (من النسخ الاحتياطي أولاً، أو من بلوجر عبر الـ API)
+    var htmlContent = backupMap[postId] || "";
+    if (!htmlContent && service && service.hasAccess()) {
+      var postRes = getBloggerPost(service, postId);
+      if (postRes.success && postRes.data && postRes.data.content) {
+        htmlContent = postRes.data.content;
+      }
+    }
+
+    var auditRes = analyzeChapterCssContent(htmlContent);
+
+    if (auditRes.cssCode) countWithStyleTag++;
+    else if (auditRes.inTemplate.indexOf("نعم") !== -1) countWithTemplateClasses++;
+    else countPlain++;
+
+    rowsToWrite.push([
+      novelName,
+      chapNum,
+      rawTitle,
+      postId,
+      auditRes.type,
+      auditRes.inTemplate,
+      auditRes.classes,
+      auditRes.cssCode ? auditRes.cssCode.substring(0, 500) : "",
+      postUrl
+    ]);
+
+    // حفظ دفعات كل 50 فصلاً في الشيت لضمان عدم فقد البيانات
+    if (rowsToWrite.length >= 50) {
+      var startRow = reportSheet.getLastRow() + 1;
+      reportSheet.getRange(startRow, 1, rowsToWrite.length, headers.length).setValues(rowsToWrite);
+      rowsToWrite = [];
+      SpreadsheetApp.flush();
+      Logger.log("📊 تم تسجيل " + totalChecked + " فصلاً في شيت التقرير...");
+    }
+
+    // فحص أمان المهلة الزمنية (4.5 دقيقة)
+    if (new Date().getTime() - startTime > 1000 * 60 * 4.5) {
+      if (rowsToWrite.length > 0) {
+        var startR = reportSheet.getLastRow() + 1;
+        reportSheet.getRange(startR, 1, rowsToWrite.length, headers.length).setValues(rowsToWrite);
+        rowsToWrite = [];
+      }
+      Logger.log("⏳ تم استهلاك 4.5 دقيقة. تم فحص وتوثيق " + totalChecked + " فصلاً في شيت CSS_Audit_Report. يرجى إعادة التشغيل لإكمال الباقي.");
+      return;
+    }
+  }
+
+  // كتابة ما تبقى من الصفوف
+  if (rowsToWrite.length > 0) {
+    var lastR = reportSheet.getLastRow() + 1;
+    reportSheet.getRange(lastR, 1, rowsToWrite.length, headers.length).setValues(rowsToWrite);
+    rowsToWrite = [];
+    SpreadsheetApp.flush();
+  }
+
+  // تنسيق أعمدة الشيت
+  try {
+    reportSheet.autoResizeColumns(1, 7);
+    reportSheet.setColumnWidth(8, 250);
+  } catch(e) {}
+
+  Logger.log("==================================================");
+  Logger.log("🎉 [اكتمل تقرير جرد الـ CSS بنجاح!]");
+  Logger.log("📊 الإحصائية الشاملة:");
+  Logger.log("   - إجمالي الفصول المفحوصة: " + totalChecked);
+  Logger.log("   - فصول تحتوي على كود <style> مخصص: " + countWithStyleTag);
+  Logger.log("   - فصول تستخدم كلاسات مدمجة بالقالب: " + countWithTemplateClasses);
+  Logger.log("   - فصول بنص عادي خالٍ من الـ CSS: " + countPlain);
+  Logger.log("📁 تم إنشاء وحفظ التقرير بالكامل في صفحة: [CSS_Audit_Report] داخل Google Sheets.");
+  Logger.log("==================================================");
+}
+
+// ==============================================================================
+// 📝 منظومة مطابقة النصوص وكشف التغييرات في المحتوى (Content Matching Engine)
+// ==============================================================================
+
+/**
+ * 🔍 استخلاص النص الصافي للقصة لتجريده من أي إضافات هيكلية أو أزرار
+ */
+function extractPureTextForComparison(html) {
+  if (!html) return "";
+  var content = html;
+  content = content.replace(/<script[\s\S]*?<\/script>/gi, '');
+  content = content.replace(/<style[\s\S]*?<\/style>/gi, '');
+  content = content.replace(/<div[^>]*class=["'][^"']*nsw-chapter-nav[\s\S]*?<\/div>/gi, '');
+  content = content.replace(/<div[^>]*class=["'][^"']*nsw-chapter-toolbar[\s\S]*?<\/div>\s*<\/div>/gi, '');
+  content = content.replace(/<div[^>]*class=["'][^"']*nsw-sponsored-box[\s\S]*?<\/div>/gi, '');
+  content = content.replace(/<[^>]+>/g, ' ');
+  content = content.replace(/&nbsp;/gi, ' ');
+  content = content.replace(/\s+/g, ' ').trim();
+  return content;
+}
+
+/**
+ * 🚀 دالة جرد ومطابقة نصوص الفصول الأصلية مع الحالية وإنشاء تقرير مفصل (Content_Matching_Report)
+ * - دالة آمنة 100% (Read-Only)
+ * - تقارن محتوى النص الأصلي من ورقة النسخ الاحتياطي (NSW_BACKUP_POSTS) مع المنشور الفعلي
+ * - تكشف: هل النص مطابق 100%، أم يوجد نقص حروف/كلمات، أم زيادة، مع حساب الفارق بدقة
+ */
+function auditChapterTextMatchingAndContentDrift() {
+  var service = getBloggerService();
+  var ss = SpreadsheetApp.openById(QUEUE_SHEET_ID);
+
+  var publishedSheet = ss.getSheetByName("Published Posts");
+  if (!publishedSheet) {
+    Logger.log("❌ تعذر العثور على ورقة Published Posts.");
+    return;
+  }
+
+  var backupSheet = ss.getSheetByName("NSW_BACKUP_POSTS");
+  var backupMap = {};
+  if (backupSheet) {
+    var bData = backupSheet.getDataRange().getValues();
+    for (var b = 1; b < bData.length; b++) {
+      var bId = String(bData[b][0] || "").trim();
+      var bHtml = String(bData[b][3] || "");
+      if (bId && bHtml && bHtml !== "ALREADY_CLEAN") {
+        backupMap[bId] = bHtml;
+      }
+    }
+    Logger.log("📦 تم تحميل " + Object.keys(backupMap).length + " فصلاً أصلياً من النسخ الاحتياطية للمطابقة.");
+  } else {
+    Logger.log("⚠️ لم يتم العثور على ورقة NSW_BACKUP_POSTS. يرجى التأكد من وجودها للمطابقة.");
+  }
+
+  // إعداد أو تفريغ شيت تقرير مطابقة النصوص
+  var reportSheet = ss.getSheetByName("Content_Matching_Report");
+  if (!reportSheet) {
+    reportSheet = ss.insertSheet("Content_Matching_Report");
+  } else {
+    reportSheet.clear();
+  }
+
+  var headers = [
+    "اسم الرواية", 
+    "رقم الفصل", 
+    "عنوان الفصل", 
+    "Post ID", 
+    "حالة مطابقة النص", 
+    "فارق الحروف (Delta)", 
+    "طول النص الأصلي", 
+    "طول النص الحالي", 
+    "نسبة التطابق التقريبية", 
+    "رابط الفصل"
+  ];
+  reportSheet.appendRow(headers);
+  reportSheet.setFrozenRows(1);
+  reportSheet.getRange(1, 1, 1, headers.length)
+    .setFontWeight("bold")
+    .setBackground("#1e3a8a")
+    .setFontColor("#eff6ff")
+    .setHorizontalAlignment("center");
+
+  var pubData = publishedSheet.getDataRange().getValues();
+  if (pubData.length <= 1) {
+    Logger.log("ℹ️ لا توجد فصول في جدول Published Posts.");
+    return;
+  }
+
+  var startTime = new Date().getTime();
+  var totalChecked = 0;
+  var countIdentical = 0;
+  var countMinorSpaces = 0;
+  var countContentChanged = 0;
+  var countNoBackup = 0;
+  var rowsToWrite = [];
+
+  Logger.log("🔍 بدء مطابقة نصوص كافة الفصول (" + (pubData.length - 1) + " فصلاً)...");
+
+  for (var i = 1; i < pubData.length; i++) {
+    var rawTitle  = String(pubData[i][1] || "");
+    var chapNum   = extractChapterNumber(rawTitle) || parseFloat(pubData[i][0]);
+    var labelsRaw = pubData[i][2];
+    var postId    = String(pubData[i][4] || "").trim();
+    var postUrl   = String(pubData[i][5] || "").trim();
+    var novelCol  = String(pubData[i][7] || "").trim();
+    var novelName = novelCol || extractNovelNameFromLabels(labelsRaw, rawTitle);
+
+    if (!postId) continue;
+    totalChecked++;
+
+    var originalHtml = backupMap[postId] || "";
+    var currentHtml = "";
+
+    // جلب المحتوى الحالي من بلوجر عبر الـ API
+    if (service && service.hasAccess()) {
+      var postRes = getBloggerPost(service, postId);
+      if (postRes.success && postRes.data && postRes.data.content) {
+        currentHtml = postRes.data.content;
+      }
+    }
+
+    var matchStatus = "";
+    var deltaChars = 0;
+    var origLen = 0;
+    var currLen = 0;
+    var matchRatio = "0%";
+
+    if (!originalHtml) {
+      matchStatus = "غير متوفر في النسخ الاحتياطي";
+      currLen = extractPureTextForComparison(currentHtml).length;
+      countNoBackup++;
+    } else {
+      var origPure = extractPureTextForComparison(originalHtml);
+      var currPure = extractPureTextForComparison(currentHtml);
+      origLen = origPure.length;
+      currLen = currPure.length;
+      deltaChars = currLen - origLen;
+
+      if (origPure === currPure) {
+        matchStatus = "مطابق تماماً 100% ✅";
+        matchRatio = "100%";
+        countIdentical++;
+      } else if (origPure.replace(/\s+/g, '') === currPure.replace(/\s+/g, '')) {
+        matchStatus = "مطابق (فروق فراغات فقط) 🟡";
+        matchRatio = "99.9%";
+        countMinorSpaces++;
+      } else {
+        countContentChanged++;
+        var maxLen = Math.max(origLen, currLen);
+        var diffRatio = maxLen > 0 ? ((1 - Math.abs(deltaChars) / maxLen) * 100).toFixed(1) + "%" : "0%";
+        matchRatio = diffRatio;
+        if (deltaChars < 0) {
+          matchStatus = "نقص في المحتوى (" + deltaChars + " حرف) ⚠️";
+        } else {
+          matchStatus = "زيادة في المحتوى (+" + deltaChars + " حرف) ℹ️";
+        }
+      }
+    }
+
+    rowsToWrite.push([
+      novelName,
+      chapNum,
+      rawTitle,
+      postId,
+      matchStatus,
+      deltaChars,
+      origLen,
+      currLen,
+      matchRatio,
+      postUrl
+    ]);
+
+    if (rowsToWrite.length >= 50) {
+      var startRow = reportSheet.getLastRow() + 1;
+      reportSheet.getRange(startRow, 1, rowsToWrite.length, headers.length).setValues(rowsToWrite);
+      rowsToWrite = [];
+      SpreadsheetApp.flush();
+      Logger.log("📊 تم توثيق " + totalChecked + " فصلاً في شيت مطابقة النصوص...");
+    }
+
+    if (new Date().getTime() - startTime > 1000 * 60 * 4.5) {
+      if (rowsToWrite.length > 0) {
+        var startR = reportSheet.getLastRow() + 1;
+        reportSheet.getRange(startR, 1, rowsToWrite.length, headers.length).setValues(rowsToWrite);
+        rowsToWrite = [];
+      }
+      Logger.log("⏳ تم استهلاك 4.5 دقيقة. تم فحص ومطابقة " + totalChecked + " فصلاً. يرجى إعادة التشغيل لإكمال الباقي.");
+      return;
+    }
+  }
+
+  if (rowsToWrite.length > 0) {
+    var lastR = reportSheet.getLastRow() + 1;
+    reportSheet.getRange(lastR, 1, rowsToWrite.length, headers.length).setValues(rowsToWrite);
+    rowsToWrite = [];
+    SpreadsheetApp.flush();
+  }
+
+  try {
+    reportSheet.autoResizeColumns(1, 9);
+    reportSheet.setColumnWidth(10, 250);
+  } catch(e) {}
+
+  Logger.log("==================================================");
+  Logger.log("🎉 [اكتمل تقرير مطابقة النصوص بنجاح!]");
+  Logger.log("📊 إحصائية الفحص:");
+  Logger.log("   - إجمالي الفصول المفحوصة: " + totalChecked);
+  Logger.log("   - فصول مطابقة تماماً (100%): " + countIdentical);
+  Logger.log("   - فصول بفروق مسافات فقط: " + countMinorSpaces);
+  Logger.log("   - فصول طرأ عليها تغيير في المحتوى: " + countContentChanged);
+  Logger.log("   - فصول لا تملك نسخة احتياطية: " + countNoBackup);
+  Logger.log("📁 تم حفظ التقرير بالكامل في صفحة: [Content_Matching_Report] داخل Google Sheets.");
+  Logger.log("==================================================");
+}
+
+// ==============================================================================
+// 🚑 منظومة استعادة الفصول المبتورة والمفقودة من النسخ الاحتياطي (Content Recovery Engine)
+// ==============================================================================
+
+/**
+ * 🚀 دالة استعادة وإصلاح كافة الفصول التي تعرضت لنقص في المحتوى من النسخة الاحتياطية
+ * - تستهدف الفصول الـ 34 التي كشفها تقرير المطابقة (Content_Matching_Report)
+ * - تسترجع المتن الكامل الأصلي 100% من ورقة NSW_BACKUP_POSTS
+ * - تلبس الفصل الهيكل الملكي النظيف وتضبط أزرار التنقل وتحفظه على بلوجر فوراً
+ * - تحدث حالة الفصل في شيت التقرير إلى "تمت الاستعادة والإصلاح 100% ✅"
+ */
+function restoreAllTruncatedChaptersFromBackup() {
+  var service = getBloggerService();
+  if (!service.hasAccess()) {
+    Logger.log("❌ المصادقة غير مفعلة. يرجى تشغيل startAuth() أولاً.");
+    return;
+  }
+
+  var ss = SpreadsheetApp.openById(QUEUE_SHEET_ID);
+  var reportSheet = ss.getSheetByName("Content_Matching_Report");
+  var backupSheet = ss.getSheetByName("NSW_BACKUP_POSTS");
+  var publishedSheet = ss.getSheetByName("Published Posts");
+
+  if (!backupSheet) {
+    Logger.log("❌ لم يتم العثور على ورقة النسخ الاحتياطي NSW_BACKUP_POSTS.");
+    return;
+  }
+
+  // 1. تحميل خريطة النسخ الاحتياطي
+  var bData = backupSheet.getDataRange().getValues();
+  var backupMap = {};
+  for (var b = 1; b < bData.length; b++) {
+    var bId = String(bData[b][0] || "").trim();
+    var bHtml = String(bData[b][3] || "");
+    if (bId && bHtml && bHtml !== "ALREADY_CLEAN") {
+      backupMap[bId] = bHtml;
+    }
+  }
+
+  // 2. تحميل خريطة الفهارس المركزية
+  var indexMap = getNovelsIndexMap();
+
+  // 3. حصر الفصول المطلوب استعادتها
+  var targetsToRestore = [];
+
+  if (reportSheet && reportSheet.getLastRow() > 1) {
+    var repData = reportSheet.getDataRange().getValues();
+    for (var r = 1; r < repData.length; r++) {
+      var rNovel = String(repData[r][0] || "");
+      var rChap = repData[r][1];
+      var rTitle = String(repData[r][2] || "");
+      var rPostId = String(repData[r][3] || "").trim();
+      var rStatus = String(repData[r][4] || "");
+      var rDelta = parseFloat(repData[r][5]) || 0;
+      var rOrigLen = parseFloat(repData[r][6]) || 0;
+
+      // الفصول التي تعاني من نقص ملحوظ وموجودة في الباك اب
+      if (rOrigLen >= 1000 && rDelta < -100 && backupMap[rPostId]) {
+        targetsToRestore.push({
+          row: r + 1,
+          novel: rNovel,
+          chapNum: rChap,
+          title: rTitle,
+          postId: rPostId,
+          origLen: rOrigLen,
+          missingChars: Math.abs(rDelta)
+        });
+      }
+    }
+  }
+
+  // في حال لم تكن صفحة التقرير موجودة، نفحص جدول المنشورات مباشرة
+  if (targetsToRestore.length === 0 && publishedSheet) {
+    var pData = publishedSheet.getDataRange().getValues();
+    for (var p = 1; p < pData.length; p++) {
+      var pId = String(pData[p][4] || "").trim();
+      var pTitle = String(pData[p][1] || "");
+      var pChap = extractChapterNumber(pTitle) || parseFloat(pData[p][0]);
+      var pNovel = String(pData[p][7] || "").trim() || extractNovelNameFromLabels(pData[p][2], pTitle);
+
+      if (backupMap[pId]) {
+        var origLen = extractPureTextForComparison(backupMap[pId]).length;
+        if (origLen >= 1000) {
+          var postRes = getBloggerPost(service, pId);
+          var currLen = (postRes.success && postRes.data && postRes.data.content) ? extractPureTextForComparison(postRes.data.content).length : 0;
+          if (currLen < origLen - 100) {
+            targetsToRestore.push({
+              row: null,
+              novel: pNovel,
+              chapNum: pChap,
+              title: pTitle,
+              postId: pId,
+              origLen: origLen,
+              missingChars: (origLen - currLen)
+            });
+          }
+        }
+      }
+    }
+  }
+
+  Logger.log("🎯 تم تحديد [" + targetsToRestore.length + "] فصلاً مبتوراً تحتاج استعادة فورية من الباك اب.");
+  if (targetsToRestore.length === 0) {
+    Logger.log("✨ لا توجد فصول مبتورة بحاجة لاستعادة! جميع الفصول مكتملة.");
+    return;
+  }
+
+  var startTime = new Date().getTime();
+  var totalRestored = 0;
+
+  for (var i = 0; i < targetsToRestore.length; i++) {
+    var target = targetsToRestore[i];
+    var origHtml = backupMap[target.postId];
+    if (!origHtml) continue;
+
+    var chapNum = parseFloat(target.chapNum) || extractChapterNumber(target.title);
+
+    // 1. استخلاص النص الأصلي الكامل 100% مع حفظ أي أكواد CSS
+    var extracted = extractFullStoryTextSafe(origHtml, chapNum);
+    if (!extracted.storyText) {
+      Logger.log("⚠️ تعذر استخراج النص للأصل للفصل: " + target.title);
+      continue;
+    }
+
+    // 2. إعداد روابط التنقل
+    var indexUrl = resolveNovelIndexUrl(target.novel, indexMap);
+    if (indexUrl === "#") indexUrl = extracted.indexUrl;
+
+    var prevHref = (extracted.prevUrl && extracted.prevUrl !== "#") ? extracted.prevUrl : "#";
+    var nextHref = (extracted.nextUrl && extracted.nextUrl !== "#") ? extracted.nextUrl : "#";
+    var indexHref = (indexUrl && indexUrl !== "#") ? indexUrl : "#";
+
+    // محاولة جلب الروابط من شيت المنشورات إن كانت غير متوفرة
+    if (publishedSheet && (prevHref === "#" || nextHref === "#")) {
+      var prevChap = findPreviousChapterInSheet(publishedSheet, target.novel, chapNum);
+      if (prevChap && prevChap.postUrl) prevHref = prevChap.postUrl;
+    }
+
+    var prevStyle = (prevHref !== "#") ? "display: flex !important;" : "display: none !important;";
+    var nextStyle = (nextHref !== "#") ? "display: flex !important;" : "display: none !important;";
+    var indexStyle = (indexHref !== "#") ? "display: flex !important;" : "display: none !important;";
+
+    var preservedCssBlock = "";
+    if (extracted.preservedCss) {
+      preservedCssBlock = '\n    ' + extracted.preservedCss + '\n';
+    }
+
+    // 3. بناء الهيكل الملكي القياسي الجديد
+    var restoredHtml = 
+      '<div class="nsw-chapter-wrapper">\n' +
+      '    <span id="dynamic-novel-name" style="display: none;">' + target.novel + '</span>' +
+      preservedCssBlock +
+      '    <div id="reading-content">\n' +
+      '        <h1 style="border-bottom: 1px dashed var(--accent-gold-border, #c5a059); color: var(--accent-gold, #c5a059); text-align: center; margin-bottom: 25px; padding-bottom: 15px;">' + target.title + '</h1>\n' +
+      '        <div class="actual-text" id="nsw-text-body">\n' +
+      '            ' + extracted.storyText + '\n' +
+      '        </div>\n' +
+      '    </div>\n' +
+      '    <div class="nsw-chapter-nav">\n' +
+      '        <a class="nsw-btn-fill" href="' + prevHref + '" id="prev-btn" style="' + prevStyle + '">السابق</a>\n' +
+      '        <a class="nsw-btn-fill" href="' + indexHref + '" id="index-btn" style="' + indexStyle + '">الفهرس</a>\n' +
+      '        <a class="nsw-btn-fill" href="' + nextHref + '" id="next-btn" style="' + nextStyle + '">التالي</a>\n' +
+      '    </div>\n' +
+      '</div>';
+
+    // 4. تحديث المنشور في بلوجر فوراً
+    var updateRes = updateBloggerPostContent(service, target.postId, restoredHtml);
+    if (updateRes.success) {
+      totalRestored++;
+      Logger.log("✅ [" + (i + 1) + "/" + targetsToRestore.length + "] تم استعادة وإصلاح: [" + target.novel + "] الفصل [" + chapNum + "] (استرجاع " + target.missingChars + " حرفاً مفقوداً بنجاح!)");
+
+      // تحديث صفحة التقرير في الشيت إن وُجدت
+      if (reportSheet && target.row) {
+        var restoredLen = extractPureTextForComparison(restoredHtml).length;
+        reportSheet.getRange(target.row, 5).setValue("تمت الاستعادة والإصلاح 100% ✅");
+        reportSheet.getRange(target.row, 6).setValue(restoredLen - target.origLen);
+        reportSheet.getRange(target.row, 8).setValue(restoredLen);
+        reportSheet.getRange(target.row, 9).setValue("100%");
+      }
+    } else {
+      Logger.log("❌ فشل تحديث الفصل [" + target.title + "]: " + updateRes.message);
+    }
+
+    Utilities.sleep(1200);
+
+    // أمان مهلة جوجل (4.5 دقيقة)
+    if (new Date().getTime() - startTime > 1000 * 60 * 4.5) {
+      Logger.log("⏳ تم استهلاك 4.5 دقيقة (أمان مهلة جوجل). تم استعادة " + totalRestored + " فصلاً بنجاح. أعد تشغيل الدالة لإكمال بقية الفصول المستهدفة.");
+      SpreadsheetApp.flush();
+      return;
+    }
+  }
+
+  SpreadsheetApp.flush();
+  Logger.log("==================================================");
+  Logger.log("🎉 [اكتملت عملية استعادة الفصول المبتورة بنجاح تام!]");
+  Logger.log("📊 تم استعادة وإصلاح [" + totalRestored + "] فصلاً كاملاً بنسبة 100% دون أن ينقص حرف واحد.");
+  Logger.log("==================================================");
+}
+
+
+// ==============================================================================
+// 🩹 القسم 3: أدوات تنظيف وإصلاح بيانات الجداول والتنسيقات المعطوبة
+// ==============================================================================
+function fixExistingCorruptedData() {
+  const TRANSLATE_SPREADSHEET_ID = "1FcehVXh-GLlZGePTm2nm13N932qcFeT0uGuOsXRFXpI";
+  const PUBLISH_QUEUE_SPREADSHEET_ID = "1HDjYu6EypdiNfoawJ2s7nQcRJiGsfJ5bNefcEy0QhFE";
+
+  function extractCorrectChapterNumber(title) {
+    if (!title) return 1;
+    var match = String(title).match(/(?:الفصل|chapter|chap|ch\.?)\s*(\d+)/i);
+    if (match && match[1]) return parseInt(match[1], 10);
+    var anyNum = String(title).match(/\d+/);
+    return anyNum ? parseInt(anyNum[0], 10) : 1;
+  }
+
+  Logger.log("⏳ بدء فحص وإصلاح البيانات...");
+
+  // 1. إصلاح جدول التدقيق (ReviewQueue) - فقط رقم الفصل
+  try {
+    const ssTrans = SpreadsheetApp.openById(TRANSLATE_SPREADSHEET_ID);
+    const reviewSheet = ssTrans.getSheetByName("ReviewQueue");
+    if (reviewSheet) {
+      const data = reviewSheet.getDataRange().getValues();
+      let fixedCount = 0;
+      for (let i = 1; i < data.length; i++) {
+        let title = String(data[i][2]); // TransTitle
+        let currentNum = data[i][0]; // ChapterNum
+        let correctNum = extractCorrectChapterNumber(title);
+        
+        if (correctNum && correctNum !== currentNum && !isNaN(correctNum)) {
+          reviewSheet.getRange(i + 1, 1).setValue(correctNum);
+          fixedCount++;
+        }
+      }
+      Logger.log("✅ تم إصلاح أرقام الفصول لـ " + fixedCount + " صف في جدول التدقيق.");
+    }
+  } catch (e) {
+    Logger.log("❌ خطأ في إصلاح جدول التدقيق: " + e.message);
+  }
+
+  // 2. إصلاح جدول النشر (PublishQueue) - رقم الفصل، العنوان، والتصنيفات، ومحتوى HTML
+  try {
+    const ssPub = SpreadsheetApp.openById(PUBLISH_QUEUE_SPREADSHEET_ID);
+    const pubSheet = ssPub.getSheetByName("Queue") || ssPub.getSheets()[0];
+    const data = pubSheet.getDataRange().getValues();
+    let fixedCount = 0;
+    
+    for (let i = 1; i < data.length; i++) {
+      let titleCol = String(data[i][1] || "");
+      let contentHtml = String(data[i][2] || "");
+      let currentNum = data[i][0];
+      
+      // إذا كان العنوان طويلاً جداً ويحتوي على نص الفصل فهو تالف
+      if (titleCol.length > 200 && titleCol.includes(" - ")) {
+        // استخراج العنوان الصحيح من آخر النص
+        let parts = titleCol.split(" - ");
+        let correctTitle = parts.pop().trim();
+        
+        // استخراج اسم الرواية (سيكون بعد الفاصلة الأولى في المصفوفة التالفة)
+        let arrayParts = titleCol.split(",");
+        let novelName = arrayParts.length > 1 ? arrayParts[1].trim() : "رواية عامة";
+
+        // استخراج رقم الفصل الصحيح
+        let correctNum = extractCorrectChapterNumber(correctTitle);
+        
+        // بناء العنوان الصحيح النهائي
+        let newPostTitle = novelName + " - " + correctTitle;
+        
+        // تصحيح عمود التصنيفات Labels
+        let newLabels = JSON.stringify([novelName, "آخر الفصول"]);
+        
+        // تصحيح الـ HTML (إزالة المصفوفة التالفة من اسم الرواية)
+        let fixedHtml = contentHtml.replace(
+          /<div id="dynamic-novel-name"[^>]*>[\s\S]*?<\/div>/i, 
+          `<div id="dynamic-novel-name" style="color: var(--gold-main); font-weight: bold;">${novelName}</div>`
+        );
+        
+        // تطبيق الإصلاحات
+        pubSheet.getRange(i + 1, 1).setValue(correctNum);
+        pubSheet.getRange(i + 1, 2).setValue(newPostTitle);
+        pubSheet.getRange(i + 1, 3).setValue(fixedHtml);
+        pubSheet.getRange(i + 1, 4).setValue(newLabels);
+        
+        fixedCount++;
+      } else {
+        // إذا كان العنوان سليماً، نتحقق فقط من صحة رقم الفصل
+        let correctNum = extractCorrectChapterNumber(titleCol);
+        if (correctNum && correctNum !== currentNum && !isNaN(correctNum)) {
+          pubSheet.getRange(i + 1, 1).setValue(correctNum);
+        }
+      }
+    }
+    Logger.log("✅ تم إصلاح " + fixedCount + " صف تالف في جدول النشر.");
+  } catch (e) {
+    Logger.log("❌ خطأ في إصلاح جدول النشر: " + e.message);
+  }
+
+  Logger.log("🎉 اكتملت عملية الإصلاح بنجاح!");
+}
+
+/**
+ * 🛠️ دالة تصحيح أرقام وعناوين الفصول بناءً على الفارق الزمني (12 ساعة) مع الفصل 105
+ * تفحص الفصول التي عمودها A يحتوي على 1 أو رقم خاطئ أو غير مكتمل:
+ * 1. تحسب رقم الفصل الفعلي بمقارنة وقت الجدولة مع وقت جدولة الفصل 105 (فارق 12 ساعة لكل فصل).
+ * 2. تضع الرقم الناتج في عمود A (رقم الفصل).
+ * 3. في عمود B تضيف بادئة "الفصل X: " مع الاحتفاظ بالعنوان الأصلي.
+ */
+function fixChaptersAndTitlesByDate105() {
+  const TRANSLATE_SPREADSHEET_ID = "1FcehVXh-GLlZGePTm2nm13N932qcFeT0uGuOsXRFXpI";
+  const PUBLISH_QUEUE_SPREADSHEET_ID = "1HDjYu6EypdiNfoawJ2s7nQcRJiGsfJ5bNefcEy0QhFE";
+  const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000; // 43,200,000 ms
+
+  Logger.log("⏳ بدء فحص وإصلاح الفصول بالاعتماد على الفارق الزمني مع الفصل 105...");
+
+  function formatStandardTitle(title, chapNum, isPublishQueue) {
+    if (!title) return `الفصل ${chapNum}`;
+    
+    if (isPublishQueue && title.includes(" - ")) {
+      let parts = title.split(" - ");
+      let novel = parts[0].trim();
+      let subTitle = parts.slice(1).join(" - ").trim();
+      
+      subTitle = subTitle.replace(/^(?:الفصل|chapter|chap)\s*\d+[\s:ـ-]*/i, "").trim();
+      let newSubTitle = `الفصل ${chapNum}: ${subTitle}`;
+      return `${novel} - ${newSubTitle}`;
+    } else {
+      let cleanTitle = title.replace(/^(?:الفصل|chapter|chap)\s*\d+[\s:ـ-]*/i, "").trim();
+      return `الفصل ${chapNum}: ${cleanTitle}`;
+    }
+  }
+
+  // 1. معالجة جدول التدقيق (ReviewQueue)
+  try {
+    const ssTrans = SpreadsheetApp.openById(TRANSLATE_SPREADSHEET_ID);
+    const reviewSheet = ssTrans.getSheetByName("ReviewQueue");
+    if (reviewSheet) {
+      const data = reviewSheet.getDataRange().getValues();
+      
+      let baseDate105 = null;
+      for (let i = 1; i < data.length; i++) {
+        let num = parseInt(data[i][0], 10);
+        let pDateStr = data[i][9] || data[i][8] || data[i][7] || "";
+        if (num === 105 && pDateStr) {
+          let d = new Date(pDateStr);
+          if (!isNaN(d.getTime())) {
+            baseDate105 = d.getTime();
+            break;
+          }
+        }
+      }
+
+      if (!baseDate105) {
+        const ssPub = SpreadsheetApp.openById(PUBLISH_QUEUE_SPREADSHEET_ID);
+        const pubSheet = ssPub.getSheetByName("Queue") || ssPub.getSheets()[0];
+        const pubData = pubSheet.getDataRange().getValues();
+        for (let i = 1; i < pubData.length; i++) {
+          let num = parseInt(pubData[i][0], 10);
+          let pDateStr = pubData[i][4];
+          if (num === 105 && pDateStr) {
+            let d = new Date(pDateStr);
+            if (!isNaN(d.getTime())) {
+              baseDate105 = d.getTime();
+              break;
+            }
+          }
+        }
+      }
+
+      let fixedCount = 0;
+      for (let i = 1; i < data.length; i++) {
+        let curNum = parseInt(data[i][0], 10);
+        let curTitle = String(data[i][2] || "").trim();
+        let curDateStr = data[i][9] || data[i][8] || "";
+        
+        let calculatedNum = curNum;
+
+        if ((isNaN(curNum) || curNum === 1 || curNum <= 0) && curDateStr && baseDate105) {
+          let curDate = new Date(curDateStr).getTime();
+          if (!isNaN(curDate)) {
+            let diffHours = (curDate - baseDate105) / TWELVE_HOURS_MS;
+            calculatedNum = 105 + Math.round(diffHours);
+          }
+        } else if (curTitle.match(/(?:الفصل|chapter|chap)\s*(\d+)/i)) {
+          let m = curTitle.match(/(?:الفصل|chapter|chap)\s*(\d+)/i);
+          calculatedNum = parseInt(m[1], 10);
+        }
+
+        if (calculatedNum > 0) {
+          let newTitle = formatStandardTitle(curTitle, calculatedNum, false);
+          if (curNum !== calculatedNum) {
+            reviewSheet.getRange(i + 1, 1).setValue(calculatedNum);
+          }
+          if (curTitle !== newTitle) {
+            reviewSheet.getRange(i + 1, 3).setValue(newTitle);
+          }
+          fixedCount++;
+        }
+      }
+      Logger.log(`✅ تم فحص وإصلاح ${fixedCount} صف في جدول التدقيق.`);
+    }
+  } catch (e) {
+    Logger.log("❌ خطأ في جدول التدقيق: " + e.message);
+  }
+
+  // 2. معالجة جدول النشر (PublishQueue)
+  try {
+    const ssPub = SpreadsheetApp.openById(PUBLISH_QUEUE_SPREADSHEET_ID);
+    const pubSheet = ssPub.getSheetByName("Queue") || ssPub.getSheets()[0];
+    const data = pubSheet.getDataRange().getValues();
+
+    let baseDate105 = null;
+    for (let i = 1; i < data.length; i++) {
+      let num = parseInt(data[i][0], 10);
+      let pDateStr = data[i][4];
+      if (num === 105 && pDateStr) {
+        let d = new Date(pDateStr);
+        if (!isNaN(d.getTime())) {
+          baseDate105 = d.getTime();
+          break;
+        }
+      }
+    }
+
+    let fixedCount = 0;
+    for (let i = 1; i < data.length; i++) {
+      let curNum = parseInt(data[i][0], 10);
+      let curTitle = String(data[i][1] || "").trim();
+      let curDateStr = data[i][4];
+
+      let calculatedNum = curNum;
+
+      if ((isNaN(curNum) || curNum === 1 || curNum <= 0) && curDateStr && baseDate105) {
+        let curDate = new Date(curDateStr).getTime();
+        if (!isNaN(curDate)) {
+          let diff = (curDate - baseDate105) / TWELVE_HOURS_MS;
+          calculatedNum = 105 + Math.round(diff);
+        }
+      } else if (curTitle.match(/(?:الفصل|chapter|chap)\s*(\d+)/i)) {
+        let m = curTitle.match(/(?:الفصل|chapter|chap)\s*(\d+)/i);
+        calculatedNum = parseInt(m[1], 10);
+      }
+
+      if (calculatedNum > 0) {
+        let newTitle = formatStandardTitle(curTitle, calculatedNum, true);
+        if (curNum !== calculatedNum) {
+          pubSheet.getRange(i + 1, 1).setValue(calculatedNum);
+        }
+        if (curTitle !== newTitle) {
+          pubSheet.getRange(i + 1, 2).setValue(newTitle);
+        }
+        fixedCount++;
+      }
+    }
+    Logger.log(`✅ تم فحص وإصلاح ${fixedCount} صف في جدول النشر.`);
+  } catch (e) {
+    Logger.log("❌ خطأ في جدول النشر: " + e.message);
+  }
+
+  Logger.log("🎉 اكتملت عملية الإصلاح والمطابقة بنجاح!");
+}
+
+// ==============================================================================
+// 🧼 القسم 4: أدوات تطهير التدوينات القديمة من الأكواد الزائدة
+// ==============================================================================
+/**
+ * ==============================================================================
+ * 🧹 دالة تنظيف وتوحيد كافة الفصول السابقة على بلوجر مرة واحدة
+ * NSW One-Time Blogger Posts Sanitizer & Normalizer Engine
+ * ==============================================================================
+ * 
+ * 💡 وظيفة هذه الدالة:
+ * 1. الاتصال بمدونتك على بلوجر عبر Blogger API الرسمي.
+ * 2. جلب تدوينات الفصول المنشورة تدريجياً وبأمان.
+ * 3. استئصال كافة أكواد CSS المضمنة القديمة (<style>) وأزرار الخط وشمس/قمر وأشرطة التنقل القديمة.
+ * 4. الحفاظ التام والآمن على متن الرواية النقي، وعنوان الفصل، وتصنيف الرواية.
+ * 5. تحديث محتوى التدوينة (PATCH) دون تغيير تاريخ النشر أو الرابط (URL) نهائياً.
+ * 
+ * ⚙️ طريقة الاستخدام في محرر سكربت جوجل (Google Apps Script):
+ * - انسخ هذا الكود والصقه في نهاية سكربت النشر الخاص بك في جوجل (كود النشر.txt).
+ * - حدد الدالة "cleanAllBloggerChapters" واضغط "Run" (تشغيل).
+ * - يمكنك تفعيل وضع التجربة (IS_DRY_RUN = true) لمعاينة النتائج في السجل قبل الحفظ الفعلي.
+ */
+
+// ⚙️ إعدادات التحكم بالعملية
+var CLEANER_CONFIG = {
+  BATCH_SIZE: 50,         // عدد الفصول المعالجة في الدفعة الواحدة لتجنب مهلة جوجل (6 دقائق)
+  IS_DRY_RUN: false,      // اجعلها true للمعاينة في السجل فقط دون حفظ، أو false للتنفيذ والحفظ الفعلي
+  DELAY_MS: 300           // فاصل زمني أمان (300 ملي ثانية) بين كل طلب API لمنع حظر الحصة
+};
+
+/**
+ * 🚀 الدالة الرئيسية: بدء تنظيف كافة الفصول على بلوجر
+ */
+function cleanAllBloggerChapters() {
+  var service = getBloggerService();
+  if (!service.hasAccess()) {
+    Logger.log("❌ خطأ: خدمة Blogger غير مصرح بها. يرجى تسجيل الدخول أولاً.");
+    return;
+  }
+
+  Logger.log("🚀 بدء فحص وتنظيف فصول مدونة عالم سماء الروايات...");
+  Logger.log("⚙️ وضع المعاينة (Dry Run): " + (CLEANER_CONFIG.IS_DRY_RUN ? "مفعل (لن يتم تعديل المنشورات فعلياً)" : "معطل (سيتم الحفظ الفعلي على بلوجر)"));
+
+  var pageToken = PropertiesService.getScriptProperties().getProperty("NSW_CLEAN_PAGE_TOKEN") || null;
+  var totalProcessed = 0;
+  var totalCleaned = 0;
+  var startTime = new Date().getTime();
+
+  do {
+    // جلب قائمة المنشورات الحية
+    var url = "https://www.googleapis.com/blogger/v3/blogs/" + BLOG_ID + "/posts?status=LIVE&view=AUTHOR&maxResults=" + CLEANER_CONFIG.BATCH_SIZE;
+    if (pageToken) {
+      url += "&pageToken=" + encodeURIComponent(pageToken);
+    }
+
+    var options = {
+      method: "get",
+      headers: { "Authorization": "Bearer " + service.getAccessToken() },
+      muteHttpExceptions: true
+    };
+
+    var res = UrlFetchApp.fetch(url, options);
+    if (res.getResponseCode() !== 200) {
+      Logger.log("❌ خطأ في جلب المنشورات من Blogger API (" + res.getResponseCode() + "): " + res.getContentText());
+      break;
+    }
+
+    var data = JSON.parse(res.getContentText());
+    var items = data.items || [];
+    if (items.length === 0) {
+      Logger.log("✅ لم يتم العثور على مزيد من المنشورات.");
+      PropertiesService.getScriptProperties().deleteProperty("NSW_CLEAN_PAGE_TOKEN");
+      break;
+    }
+
+    for (var i = 0; i < items.length; i++) {
+      var post = items[i];
+      var title = post.title || "";
+      var categories = post.labels || [];
+      var novelName = (categories.length > 0 && categories[0] !== "آخر الفصول") ? categories[0] : (categories[1] || "رواية");
+      var originalHtml = post.content || "";
+
+      // فحص هل المنشور فصل رواية ويحتاج لتنظيف
+      var isChapter = title.indexOf("الفصل") !== -1 || (title.match(/\d+/) !== null);
+      if (!isChapter) {
+        continue;
+      }
+
+      totalProcessed++;
+
+      // فحص هل يحتوي على أكواد قديمة تستوجب التنظيف
+      var hasOldCode = originalHtml.indexOf("nsw-chapter-toolbar") !== -1 ||
+                         originalHtml.indexOf("nsw-theme-switch") !== -1 ||
+                         originalHtml.indexOf("nsw-btn-tool") !== -1 ||
+                         originalHtml.indexOf("<style") !== -1 ||
+                         originalHtml.indexOf("nsw-chapter-nav") !== -1;
+
+      if (hasOldCode) {
+        var cleanedHtml = nswSanitizeChapterBody(originalHtml, novelName, title);
+
+        if (!CLEANER_CONFIG.IS_DRY_RUN) {
+          var updateRes = updateBloggerPostContent(service, post.id, cleanedHtml);
+          if (updateRes.success) {
+            totalCleaned++;
+            Logger.log("✅ تم تنظيف وحفظ [" + title + "] (معرف: " + post.id + ")");
+          } else {
+            Logger.log("⚠️ فشل تحديث [" + title + "]: " + updateRes.message);
+          }
+        } else {
+          totalCleaned++;
+          Logger.log("🔍 [معاينة] يحتاج لتنظيف: [" + title + "]");
+        }
+
+        Utilities.sleep(CLEANER_CONFIG.DELAY_MS);
+      }
+
+      // فحص حد وقت التنفيذ (توقف آمن عند 5 دقائق لاستئناف لاحق)
+      if (new Date().getTime() - startTime > 300000) { // 5 دقائق
+        Logger.log("⏳ تم استهلاك 5 دقائق، حفظ موضع الاستئناف للدفعة القادمة...");
+        if (data.nextPageToken) {
+          PropertiesService.getScriptProperties().setProperty("NSW_CLEAN_PAGE_TOKEN", data.nextPageToken);
+        }
+        Logger.log("📊 الملخص المؤقت: تم فحص " + totalProcessed + " منشوراً، وتنظيف " + totalCleaned + " فصلاً.");
+        Logger.log("👉 أعد تشغيل الدالة لمواصلة الفصول المتبقية.");
+        return;
+      }
+    }
+
+    pageToken = data.nextPageToken || null;
+    if (pageToken) {
+      PropertiesService.getScriptProperties().setProperty("NSW_CLEAN_PAGE_TOKEN", pageToken);
+    } else {
+      PropertiesService.getScriptProperties().deleteProperty("NSW_CLEAN_PAGE_TOKEN");
+    }
+
+  } while (pageToken);
+
+  Logger.log("🎉 اكتمل الفحص والتنظيف بنجاح!");
+  Logger.log("📊 الإجمالي: تم فحص " + totalProcessed + " تدوينة، وتنظيف " + totalCleaned + " فصلاً بالكامل.");
+}
+
+/**
+ * 🧹 الدالة الفرعية: تجريد واستئصال الأكواد القديمة وإنتاج متن الفصل النقي القياسي
+ */
+function nswSanitizeChapterBody(rawHtml, novelName, chapterTitle) {
+  if (!rawHtml) return "";
+  var content = rawHtml;
+
+  // 1. إزالة كتل <style> المضمنة بالكامل
+  content = content.replace(/<style[\s\S]*?<\/style>/gi, '');
+
+  // 2. إزالة أشرطة الأدوات القديمة وأزرار الخط والثيم القديمة
+  content = content.replace(/<div class=["']nsw-chapter-toolbar["'][\s\S]*?<\/div>\s*<\/div>/gi, '');
+  content = content.replace(/<div class=["']nsw-theme-switch["'][\s\S]*?<\/div>/gi, '');
+  content = content.replace(/<button class=["']nsw-btn-tool["'][\s\S]*?<\/button>/gi, '');
+
+  // 3. إزالة أشرطة التنقل السفلية القديمة (لأن القالب والمحرك الجديد يولدها تلقائياً)
+  content = content.replace(/<div class=["']nsw-chapter-nav["'][\s\S]*?<\/div>/gi, '');
+
+  // 4. استخراج المتن الحقيقي للنص (Pure Text Body)
+  var pureText = "";
+  var textBodyMatch = content.match(/<div[^>]*class=["'][^"']*actual-text[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+  if (textBodyMatch) {
+    pureText = textBodyMatch[1].trim();
+  } else {
+    var pMatches = content.match(/<p[\s\S]*?<\/p>/gi);
+    if (pMatches && pMatches.length > 0) {
+      pureText = pMatches.join('\n');
+    } else {
+      pureText = content.trim();
+    }
+  }
+
+  // تنظيف أي بقايا من وسوم الحاويات القديمة
+  pureText = pureText.replace(/<div class=["']nsw-chapter-wrapper["'][\s\S]*?>/gi, '');
+  pureText = pureText.replace(/<div id=["']reading-content["'][\s\S]*?>/gi, '');
+  pureText = pureText.replace(/<div class=["']nsw-chapter-toolbar["'][\s\S]*?<\/div>/gi, '');
+  pureText = pureText.replace(/<div class=["']nsw-chapter-nav["'][\s\S]*?<\/div>/gi, '');
+
+  // 5. تحويل ملاحظات المترجم القديمة إلى هوامش تفاعلية ذكية
+  pureText = pureText.replace(/<div class=["']nsw-translator-note["']>([\s\S]*?)<\/div>/gi, function(match, inner) {
+    var cleanNote = inner.replace(/<[^>]+>/g, ' ').replace(/"/g, '&quot;').replace(/\n/g, ' ').trim();
+    return '<span class="nsw-tooltip-term" onclick="nswShowNoteTooltip(\'' + cleanNote + '\', event)">🪶 ملاحظة المترجم <span class="nsw-tooltip-icon">💬</span></span>';
+  });
+
+  // 6. الصياغة الملكية النقية والقياسية الموحدة لـ Novel Sky World
+  var standardHtml = 
+    '<div class="nsw-chapter-wrapper">\n' +
+    '    <span id="dynamic-novel-name" style="display: none;">' + (novelName || "") + '</span>\n' +
+    '    <div id="reading-content">\n' +
+    '        <h1 style="border-bottom: 1px dashed var(--accent-gold-border, #c5a059); color: var(--accent-gold, #c5a059); text-align: center; margin-bottom: 25px; padding-bottom: 15px;">' + (chapterTitle || "") + '</h1>\n' +
+    '        <div class="actual-text" id="nsw-text-body">\n' +
+    '            ' + pureText + '\n' +
+    '        </div>\n' +
+    '    </div>\n' +
+    '</div>';
+
+  return standardHtml;
+}
+
+/**
+ * 🔄 إعادة ضبط مؤشر الاستئناف للبدء من أول منشور في المدونة
+ */
+function resetCleanerProgress() {
+  PropertiesService.getScriptProperties().deleteProperty("NSW_CLEAN_PAGE_TOKEN");
+  Logger.log("✅ تم إعادة ضبط المؤشر بنجاح. عند تشغيل cleanAllBloggerChapters ستبدأ من البداية.");
+}

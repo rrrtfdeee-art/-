@@ -31,7 +31,8 @@ from nsw_healer_engine import (
     build_royal_chapter_html_with_nav,
     extract_pure_story_text,
     count_arabic_chars,
-    notify_admin
+    notify_admin,
+    parse_any_datetime
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -152,7 +153,11 @@ def fetch_pending_chapters_for_opus_review(
         needed = max_chapters - len(chapters_batch)
         try:
             audit_url = f"{PUBLISH_WEBAPP_URL}?action=scanGaps&novelName={requests.utils.quote(novel_name)}"
-            res = requests.get(audit_url, timeout=35).json()
+            r = requests.get(audit_url, timeout=60)
+            if r.status_code != 200:
+                logger.warning(f"ملاحظة: استجابة غير متوقعة من scanGaps: {r.status_code}")
+                return chapters_batch
+            res = r.json()
             all_chaps = res.get("allChapters", {})
             
             # فرز تصاعدي لأرقام الفصول
@@ -234,6 +239,12 @@ def apply_opus_review_and_sync(
 
     result = {"success": True, "chapter_number": c_num, "title": final_title}
 
+    # ضبط التاريخ بصيغة ISO الصارمة
+    iso_pub_date = None
+    if pub_date:
+        dt_obj = parse_any_datetime(pub_date)
+        iso_pub_date = dt_obj.strftime("%Y-%m-%dT%H:%M:%S.000Z") if dt_obj else str(pub_date)
+
     # 2. التحديث حسب المصدر
     # الحالة أ: المنشور موجود على بلوجر (مجدول أو حي) ➔ إرسال طلب PATCH لتحديث المحتوى فقط
     if post_id and ("Blogger" in source or str(post_id).isdigit()):
@@ -243,8 +254,8 @@ def apply_opus_review_and_sync(
             "content": royal_html,
             "title": f"{novel_name} - {final_title}"
         }
-        if pub_date:
-            patch_payload["published"] = pub_date
+        if iso_pub_date:
+            patch_payload["published"] = iso_pub_date
 
         try:
             res = requests.post(PUBLISH_WEBAPP_URL, json=patch_payload, timeout=35).json()
@@ -268,8 +279,8 @@ def apply_opus_review_and_sync(
             "content": royal_html,
             "labels": [novel_name, "آخر الفصول"]
         }
-        if pub_date:
-            sync_payload["publishDate"] = pub_date
+        if iso_pub_date:
+            sync_payload["publishDate"] = iso_pub_date
 
         try:
             res = requests.post(PUBLISH_WEBAPP_URL, json=sync_payload, timeout=35).json()
