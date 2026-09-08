@@ -338,7 +338,7 @@ def cmd_auto_refine_and_notify(
     ثم إرسال إشعار تيليجرام تفاعلي للمشرف يحتوي على زر الاعتماد والنشر المباشر.
     """
     from nsw_healer_engine import (
-        get_novel_glossary, stage_2_antigravity_refine, notify_admin
+        get_novel_glossary, stage_2_antigravity_refine, notify_admin, normalize_character_names
     )
     pending_files = sorted(list(PENDING_DIR.glob("chapter_*.txt")), key=lambda p: int(re.search(r'\d+', p.name).group(0)) if re.search(r'\d+', p.name) else 0)
     if not pending_files:
@@ -369,6 +369,10 @@ def cmd_auto_refine_and_notify(
             ref_res = stage_2_antigravity_refine(title, raw_text, novel_name, c_num)
             refined_content = ref_res.get("refined_content", raw_text)
             refined_title = ref_res.get("refined_title", title)
+            
+            # تطبيع وتوحيد أسماء الشخصيات حتمياً
+            refined_title = normalize_character_names(refined_title, novel_name)
+            refined_content = normalize_character_names(refined_content, novel_name)
 
             # حفظ الفصل المنقح في approved/
             app_file = APPROVED_DIR / pf.name

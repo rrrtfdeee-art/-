@@ -1,0 +1,2051 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8"></meta>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"></meta>
+    <title>NSW Ultimate Generator v80.3 | لوحة النشر المركزية</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700&amp;family=Amiri&amp;display=swap" rel="stylesheet"></link>
+    
+    <style>
+        :root { 
+            --gold-main: #c5a059; 
+            --gold-dim: rgba(197, 160, 89, 0.4); 
+            --bg-dark: #050505; 
+            --card-bg: #0d0d0d;
+        }
+
+        body { 
+            background: var(--bg-dark); 
+            color: white; 
+            font-family: 'Tajawal', sans-serif; 
+            margin: 0; 
+            padding: 10px; 
+            overflow-x: hidden;
+        }
+
+        .nsw-light-theme { 
+            background: #fdfdfd !important; 
+            color: #111 !important; 
+        }
+        
+        .nsw-light-theme .actual-text, 
+        .nsw-light-theme .actual-text * { 
+            color: #1a1a1a !important; 
+        }
+
+        .nsw-chapter-toolbar { 
+            background: #111; 
+            border: 1px solid #333; 
+            padding: 10px 15px; 
+            border-radius: 8px; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-bottom: 20px; 
+        }
+
+        .nsw-light-theme .nsw-chapter-toolbar { 
+            background: #eee !important; 
+            border-color: #ccc !important; 
+        }
+        
+        .nsw-light-theme .nsw-official-doc { 
+            background: #f0f0f0 !important;
+            border-color: var(--gold-main) !important;
+        }
+
+
+        #nsw-board-container { 
+            background: var(--card-bg); 
+            border-radius: 15px; 
+            border: 1px solid var(--gold-main); 
+            margin: 10px auto; 
+            max-width: 1000px; 
+            padding: 20px; 
+            box-shadow: 0 0 30px rgba(0,0,0,0.5); 
+        }
+
+        .nsw-master-toolbar-ui { 
+            position: sticky; 
+            top: 0; 
+            z-index: 1000; 
+            background: rgba(21, 21, 21, 0.98); 
+            backdrop-filter: blur(8px); 
+            padding: 12px; 
+            border-radius: 0 0 15px 15px; 
+            border-bottom: 2px solid var(--gold-main); 
+            margin: -20px -20px 20px -20px; 
+            box-shadow: 0 5px 20px rgba(0,0,0,0.8);
+        }
+
+        .tool-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+        .label-gold { color: var(--gold-main); font-size: 11px; display: block; margin-bottom: 5px; font-weight: bold; }
+        
+        .nsw-input { 
+            width: 100%; padding: 10px; background: #1a1a1a; 
+            color: #fff; border: 1px solid #333; border-radius: 8px; 
+            font-family: 'Tajawal'; outline: none; box-sizing: border-box; 
+        }
+
+        .btn-gold { 
+            background: #222; color: var(--gold-main); border: 1px solid var(--gold-main); 
+            padding: 8px 15px; border-radius: 6px; cursor: pointer; 
+            font-weight: bold; transition: 0.2s; font-size: 13px; 
+        }
+        .btn-gold:hover { background: var(--gold-main); color: #000; }
+
+        .nsw-btn-tool {
+            background: #222;
+            color: var(--gold-main);
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 4px 8px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        #editor { 
+            min-height: 500px; background: #111; color: #eee; 
+            border: 1px solid #333; padding: 25px; border-radius: 12px; 
+            outline: none; line-height: 1.8; font-size: 18px; 
+            text-align: right; white-space: pre-wrap !important; 
+            word-wrap: break-word;
+        }
+
+        .actual-text { 
+            white-space: pre-wrap !important; 
+            word-wrap: break-word; 
+            font-size: 20px; 
+            line-height: 2.0; 
+        }
+
+        /* ⚡ صندوق النظام الملكي الفاخر (Royal System Box) */
+        .personal-letter.system,
+        .nsw-system-log { 
+            background: linear-gradient(135deg, rgba(16, 22, 36, 0.95), rgba(9, 13, 22, 0.98)) !important;
+            border: 1px solid rgba(197, 160, 89, 0.45) !important;
+            border-top: 3px solid #c5a059 !important;
+            border-radius: 14px !important;
+            padding: 26px 22px 20px !important;
+            margin: 32px 0 !important;
+            box-shadow: 0 12px 35px -8px rgba(0, 0, 0, 0.7), 0 0 20px rgba(197, 160, 89, 0.1) !important;
+            position: relative !important;
+            color: #f1f5f9 !important;
+            font-family: 'Tajawal', sans-serif !important;
+            line-height: 2.0 !important;
+        }
+        .personal-letter.system::before,
+        .nsw-system-log::before {
+            content: "⚡ إشعار النظام | SYSTEM NOTIFICATION" !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 6px !important;
+            position: absolute !important;
+            top: -14px !important;
+            right: 20px !important;
+            background: linear-gradient(135deg, #1b2438, #0e1424) !important;
+            color: #e5c378 !important;
+            border: 1px solid rgba(197, 160, 89, 0.5) !important;
+            border-radius: 20px !important;
+            padding: 3px 14px !important;
+            font-size: 0.78rem !important;
+            font-weight: 800 !important;
+            letter-spacing: 0.5px !important;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5), 0 0 10px rgba(197, 160, 89, 0.2) !important;
+        }
+        .personal-letter.system p, .personal-letter.system span, .personal-letter.system div,
+        .nsw-system-log p, .nsw-system-log span, .nsw-system-log div {
+            color: #f1f5f9 !important;
+        }
+
+        .nsw-line-red { color: #ff4d4d; font-weight: bold; }
+        .nsw-line-grey { color: #94a3b8; }
+        .nsw-rift { background: #1a0022; border-right: 4px solid #ba55d3; color: #e6b8ff; padding: 15px; margin: 15px 0; font-style: italic; border-radius: 8px; }
+
+        /* تلميح الحكمة / عين المعرفة (Emerald & Gold) */
+        .nsw-tip { 
+            background: linear-gradient(135deg, rgba(6, 30, 20, 0.85), rgba(3, 16, 11, 0.95)) !important; 
+            border: 1px solid rgba(16, 185, 129, 0.3) !important; 
+            border-right: 4px solid #10b981 !important; 
+            color: #a7f3d0 !important; 
+            padding: 18px 22px !important; 
+            border-radius: 12px !important; 
+            margin: 25px 0 !important; 
+            font-size: 0.95em !important; 
+        }
+        .nsw-tip::before {
+            content: "👁️ عين المعرفة | تلميح";
+            display: block;
+            font-weight: 800;
+            color: #34d399;
+            font-size: 0.85em;
+            margin-bottom: 8px;
+        }
+        .nsw-tip p, .nsw-tip span, .nsw-tip div { color: #a7f3d0 !important; }
+
+        .nsw-stream { background: #111827; border: 1px solid #3b82f6; border-radius: 8px; padding: 15px; margin: 15px 0; }
+        .nsw-chat-row { margin-bottom: 6px; font-size: 16px; }
+
+        /* ملاحظة المترجم الذهبية */
+        .nsw-translator-note { 
+            background: linear-gradient(135deg, rgba(38, 28, 5, 0.8), rgba(20, 15, 2, 0.9)) !important; 
+            border: 1px dashed rgba(197, 160, 89, 0.6) !important; 
+            border-right: 4px solid #c5a059 !important; 
+            color: #fde68a !important; 
+            padding: 18px 22px !important; 
+            border-radius: 12px !important; 
+            margin: 25px 0 !important; 
+            font-size: 0.95em !important; 
+        }
+        .nsw-translator-note::before {
+            content: "🪶 ملاحظة المترجم";
+            display: block;
+            font-weight: 800;
+            color: #ffd700;
+            font-size: 0.85em;
+            margin-bottom: 8px;
+        }
+        .nsw-translator-note p, .nsw-translator-note span, .nsw-translator-note div { color: #fde68a !important; }
+
+        /* الرسائل الشخصية الملكية */
+        .personal-letter { padding: 26px 24px; margin: 26px 0; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); line-height: 2.1; }
+        .personal-letter.cultivation { 
+            background: linear-gradient(135deg, #f7ebd0, #eed9b2) !important; 
+            color: #38240f !important; 
+            border-right: 5px solid #8b6d31 !important; 
+            font-family: 'Amiri', serif !important; 
+        }
+        .personal-letter.cultivation p, .personal-letter.cultivation span, .personal-letter.cultivation div { color: #38240f !important; font-family: 'Amiri', serif !important; }
+
+        .personal-letter.horror { 
+            background: linear-gradient(135deg, #1c0808, #0f0303) !important; 
+            color: #fca5a5 !important; 
+            border: 1px solid rgba(239, 68, 68, 0.4) !important; 
+            border-right: 5px solid #dc2626 !important; 
+            box-shadow: 0 10px 30px rgba(220, 38, 38, 0.15) !important; 
+        }
+        .personal-letter.horror p, .personal-letter.horror span, .personal-letter.horror div { color: #fca5a5 !important; }
+
+        .personal-letter.romance { 
+            background: linear-gradient(135deg, #2a1520, #170911) !important; 
+            color: #fbcfe8 !important; 
+            border: 1px solid rgba(244, 114, 182, 0.3) !important; 
+            border-right: 5px solid #ec4899 !important; 
+            box-shadow: 0 10px 30px rgba(236, 72, 153, 0.12) !important; 
+        }
+        .personal-letter.romance p, .personal-letter.romance span, .personal-letter.romance div { color: #fbcfe8 !important; }
+
+        /* الوثيقة والمراسيم الرسمية الملكية */
+        .nsw-official-doc { 
+            position: relative;
+            margin: 35px auto;
+            padding: 40px 25px 25px;
+            border: 2px solid rgba(197, 160, 89, 0.5);
+            border-radius: 12px;
+            background: linear-gradient(135deg, #131926 0%, #0c101a 100%) !important;
+            text-align: center;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.6), 0 0 25px rgba(197, 160, 89, 0.1);
+        }
+        .doc-title { 
+            font-size: 1.4em; 
+            color: #ffd700; 
+            display: block; 
+            border-bottom: 1px solid rgba(197, 160, 89, 0.3); 
+            padding-bottom: 12px; 
+            margin-bottom: 18px; 
+            font-weight: 900; 
+            text-shadow: 0 0 12px rgba(255, 215, 0, 0.3);
+        }
+
+        /* أزرار التنقل السفلية الزجاجية الملكية */
+        .nsw-chapter-nav { display: flex; justify-content: space-between; margin-top: 25px; gap: 10px; }
+        .nsw-btn-fill { 
+            flex: 1; 
+            background: rgba(197, 160, 89, 0.1) !important; 
+            color: #e5c378 !important; 
+            border: 1px solid rgba(197, 160, 89, 0.35) !important; 
+            padding: 12px 18px; 
+            border-radius: 12px; 
+            text-decoration: none; 
+            font-weight: 800; 
+            text-align: center; 
+            transition: all 0.25s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        .nsw-btn-fill:hover {
+            background: linear-gradient(135deg, #e5c378, #c5a059) !important;
+            color: #0b0e14 !important;
+            box-shadow: 0 6px 20px rgba(197, 160, 89, 0.4);
+            transform: translateY(-2px);
+        }
+
+        #nsw-lock-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #050505; z-index: 9999999; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        #previewArea { display: none; margin-top: 20px; border: 2px dashed #444; padding: 10px; background: #080808; border-radius: 10px; }
+
+        /* --- تنسيقات التبويبات الرئيسية --- */
+        .nsw-main-nav {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 25px;
+            border-bottom: 2px solid var(--gold-main);
+            padding-bottom: 8px;
+        }
+        .nsw-main-tab-btn {
+            background: #151515;
+            color: var(--gold-main);
+            border: 1px solid #333;
+            border-bottom: none;
+            padding: 12px 24px;
+            border-radius: 10px 10px 0 0;
+            cursor: pointer;
+            font-family: 'Tajawal', sans-serif;
+            font-size: 15px;
+            font-weight: bold;
+            transition: 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .nsw-main-tab-btn:hover {
+            background: #222;
+            color: #fff;
+        }
+        .nsw-main-tab-btn.active {
+            background: var(--gold-main);
+            color: #000;
+            border-color: var(--gold-main);
+        }
+        .chip-btn {
+            background: #222;
+            border: 1px solid var(--gold-dim);
+            color: #ddd;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            cursor: pointer;
+            font-family: 'Tajawal';
+            transition: 0.2s;
+        }
+        .chip-btn:hover, .chip-btn.active {
+            background: var(--gold-main);
+            color: #000;
+            border-color: var(--gold-main);
+        }
+
+    </style>
+</head>
+<body>
+    <div id="nsw-lock-overlay">
+        <div style="background: #111; border-radius: 15px; border: 2px solid var(--gold-main); box-shadow: 0 0 50px rgba(197, 160, 89, 0.2); padding: 30px; text-align: center;">
+            <h2 style="color: var(--gold-main); margin-bottom: 20px;">🔒 نظام حماية NSW</h2>
+            <input class="lock-input" id="nsw-pass-key" placeholder="****" style="background: #000; border-radius: 8px; border: 1px solid var(--gold-main); color: var(--gold-main); font-size: 20px; letter-spacing: 5px; margin-bottom: 15px; outline: none; padding: 12px; text-align: center; width: 200px;" type="password" />
+            <br />
+            <button class="btn-gold" onclick="unlockPage()" style="width: 100%;">فتح الوصول</button>
+        </div>
+    </div>
+
+    <div id="nswNotify" style="background: var(--gold-main); border-radius: 8px; box-shadow: 0 5px 20px #000; color: black; display: none; font-weight: bold; left: 50%; padding: 10px 20px; position: fixed; top: 20px; transform: translateX(-50%); z-index: 2147483647;"></div>
+
+    <div id="modal-overlay" onclick="closeColorModal()" style="backdrop-filter: blur(3px); background: rgba(0,0,0,0.8); display: none; height: 100%; left: 0; position: fixed; top: 0; width: 100%; z-index: 99998;"></div>
+    <div id="color-modal" style="background: #111; border-radius: 15px; border: 2px solid var(--gold-main); box-shadow: 0 0 50px #000; display: none; left: 50%; padding: 25px; position: fixed; top: 50%; transform: translate(-50%, -50%); width: 300px; z-index: 99999;">
+        <h3 style="color: var(--gold-main); margin-top: 0; text-align: center;">تخصيص الألوان</h3>
+        <label class="label-gold">لون الإطار:</label>
+        <input id="modalMainColor" style="height: 40px; margin-bottom: 10px; width: 100%;" type="color" value="#c5a059" />
+        <label class="label-gold">لون النص:</label>
+        <input id="modalBodyColor" style="height: 40px; margin-bottom: 15px; width: 100%;" type="color" value="#ffffff" />
+        <div style="display: flex; gap: 10px;">
+            <button class="btn-gold" id="confirmColorBtn" style="flex: 2;">تطبيق</button>
+            <button class="btn-gold" onclick="closeColorModal()" style="background: #333; border: none; color: white; flex: 1;">إلغاء</button>
+        </div>
+    </div>
+
+    <div id="nsw-board-container">
+        <!-- شريط التبويبات الرئيسي -->
+        <div class="nsw-main-nav">
+            <button class="nsw-main-tab-btn active" id="tabBtnChapters" onclick="switchTab('chapters')">
+                📑 نشر وتنسيق الفصول
+            </button>
+            <button class="nsw-main-tab-btn" id="tabBtnNewNovel" onclick="switchTab('novels')">
+                📖 نشر وتوليد رواية جديدة ✨
+            </button>
+        </div>
+
+        <!-- ======================= تبويب 1: نشر الفصول (الحالي) ======================= -->
+        <div id="tabContentChapters">
+        <div class="nsw-master-toolbar-ui">
+            <div class="tool-row">
+                <button class="btn-gold" onclick="execCmd('bold')">B</button>
+                <button class="btn-gold" onclick="execCmd('italic')">I</button>
+                <div style="background: #333; height: 20px; margin: 0 5px; width: 1px;"></div>
+                
+                <select class="nsw-input" id="letterStyle" style="color: var(--gold-main); padding: 6px; width: 100px;">
+                    <option value="cultivation">📜 زراعة</option>
+                    <option value="horror">🩸 رعب</option>
+                    <option value="romance">💖 رومانسي</option>
+                    <option value="system">🖥️ نظام</option>
+                </select>
+                <button class="btn-gold" onclick="insertStyledLetter()">✉️ إدراج</button>
+                
+                <div style="background: #333; height: 20px; margin: 0 5px; width: 1px;"></div>
+                
+                <select class="nsw-input" id="sealType" style="color: var(--gold-main); padding: 6px; width: 100px;">
+                    <option value="custom">✍️ نص مخصص</option>
+                </select>
+                <button class="btn-gold" onclick="insertRoyalDoc()">📜 وثيقة</button>
+                <button class="btn-gold" onclick="execCmd('removeFormat')" style="background: #400; color: #ff9999;">🧹</button>
+            </div>
+        </div>
+
+        <div id="connection-settings" style="background: #111; border-radius: 10px; border: 1px dashed var(--gold-main); margin-bottom: 20px; padding: 15px;">
+            <label class="label-gold">تاريخ ووقت النشر (للجدولة):</label>
+            <input class="nsw-input" id="publishDate" type="datetime-local" />
+            <p id="statusMsg" style="color: var(--gold-main); font-size: 12px; margin-top: 10px; text-align: center;"></p>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+            <div style="flex: 1; min-width: 200px;">
+<label class="label-gold">اسم الرواية (اكتب أحرفاً للفلترة والبحث الفوري):</label>
+<input class="nsw-input" id="novelName" list="novelList" oninput="autoFillIndex(); triggerAutoNavDebounced();" placeholder="اكتب أو اختر اسم الرواية..." type="text" style="background: #111; color: var(--gold-main); font-weight: bold;" />
+
+</div>
+            <div style="flex: 1; min-width: 200px;">
+                <label class="label-gold">عنوان الفصل:</label>
+                <input class="nsw-input" id="chapterTitle" oninput="triggerAutoNavDebounced();" placeholder="مثال: الفصل 495: تمثيلية في ساحة المعركة" type="text" />
+            </div>
+        </div>
+        
+        <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px;">
+            <div style="flex: 2; min-width: 250px;"><label class="label-gold">رابط الفهرس / رابط الموقع الأصلي:</label><input class="nsw-input" id="indexLink" type="text" placeholder="https://www.novelskyworld.com/p/..." /></div>
+            <div style="flex: 1; min-width: 150px;">
+                <label class="label-gold">مكان الملاحظة:</label>
+                <select class="nsw-input" id="notePosition">
+                    <option selected="" value="none">بدون</option>
+                    <option value="top">أعلى</option>
+                    <option value="bottom">أسفل</option>
+                </select>
+            </div>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; background: rgba(197, 160, 89, 0.05); border: 1px dashed var(--gold-dim); border-radius: 8px; padding: 10px;">
+            <div style="flex: 1; min-width: 220px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label class="label-gold" style="font-size: 12px; margin: 0;">🔗 رابط الفصل السابق (تلقائي من الشيت):</label>
+                    <span id="prevStatusIcon" style="font-size: 11px; color: #a6e3a1;"></span>
+                </div>
+                <input class="nsw-input" id="prevLink" type="text" placeholder="https://www.novelskyworld.com/..." style="font-size: 12px; direction: ltr;" />
+            </div>
+            <div style="flex: 1; min-width: 220px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label class="label-gold" style="font-size: 12px; margin: 0;">🔗 رابط الفصل التالي (تلقائي من الشيت):</label>
+                    <span id="nextStatusIcon" style="font-size: 11px; color: #a6e3a1;"></span>
+                </div>
+                <input class="nsw-input" id="nextLink" type="text" placeholder="https://www.novelskyworld.com/..." style="font-size: 12px; direction: ltr;" />
+            </div>
+            <div style="display: flex; align-items: flex-end; min-width: 120px;">
+                <button type="button" class="btn-gold" onclick="autoFillNavLinks(true)" style="padding: 9px 12px; font-size: 11px; width: 100%;">⚡ جلب روابط التنقل</button>
+            </div>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px;">
+            <button onclick="smartParseText()" style="background: #1a5fb4; border-radius: 8px; border: none; color: white; cursor: pointer; flex: 2; font-weight: bold; min-width: 120px; padding: 12px;">🚀 توزيع ذكي</button>
+            <button onclick="cleanChapterOnly()" style="background: #a51d2d; border-radius: 8px; border: none; color: white; cursor: pointer; flex: 1; font-weight: bold; min-width: 80px; padding: 12px;">🧹 مسح</button>
+            <button class="btn-gold" onclick="openColorModal()" style="flex: 1; min-width: 80px;">🎨 تخصيص الألوان</button>
+        </div>
+
+        <textarea id="authorNote" placeholder="اكتب ملاحظة المترجم هنا (يدعم Markdown)..." style="background: #1a1a1a; border-radius: 8px; border: 1px solid #333; box-sizing: border-box; color: white; font-family: 'Tajawal'; height: 60px; margin-top: 15px; outline: none; padding: 10px; transition: 0.3s; width: 100%;"></textarea>
+        
+        <div style="margin-top: 15px;">
+            <label class="label-gold">متن الفصل (الصق النص هنا):</label>
+            <div contenteditable="true" id="editor" placeholder="ابدأ بصق أو كتابة الفصل هنا..."></div>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px;">
+            <button onclick="showPreview()" style="background: #222; border-radius: 8px; border: 1px solid #444; color: white; cursor: pointer; flex: 1; font-weight: bold; min-width: 120px; padding: 15px;">👁️ تحديث العرض</button>
+            <button onclick="generateNSWFinal()" style="background: var(--gold-main); border-radius: 8px; border: none; color: black; cursor: pointer; flex: 2; font-weight: bold; min-width: 200px; padding: 15px;">✨ توليد الكود والسيو النهائي</button>
+        </div>
+
+        <button class="btn-publish" onclick="publishDirectToBlogger()" style="background: #2e7d32; border-radius: 8px; border: none; color: white; cursor: pointer; font-weight: bold; margin-top: 10px; padding: 15px; width: 100%;">
+            🚀 نشر وجدولة إلى بلوجر مباشرة (Google Script API)
+        </button>
+
+        <div id="previewArea">
+            <div id="previewContent"></div>
+        </div>
+
+        <div id="bulk-publisher-area" style="background: #0d1117; border-radius: 15px; border: 2px dashed var(--gold-main); margin-top: 30px; padding: 20px;">
+            <h3 style="color: var(--gold-main); text-align: center;">📚 النشر الجماعي (ملف نصي .txt أو Word .docx)</h3>
+            
+            <div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;">
+                <div style="flex: 1; min-width: 200px;">
+                    <label class="label-gold">1. اختر ملف الرواية (.txt أو .docx):</label>
+                    <input accept=".txt,.docx" class="nsw-input" id="bulkFile" style="padding: 8px;" type="file" />
+                </div>
+
+                <div style="flex: 1; min-width: 200px;">
+                    <label class="label-gold">2. نمط الجدولة:</label>
+                    <select class="nsw-input" id="scheduleInterval" onchange="toggleCustomTime()">
+                        <option selected="" value="smart_baghdad">⚡ جدولة ذكية بتوقيت بغداد (أول 50 فوراً + 2 يومياً 09:00 و 16:00)</option>
+                        <option value="0">نشر فوري (الجميع الآن)</option>
+                        <option value="6">كل 6 ساعات</option>
+                        <option value="12">كل 12 ساعة</option>
+                        <option value="24">كل يوم (24 ساعة)</option>
+                        <option value="48">كل يومين</option>
+                        <option value="custom_2">مرتين يومياً (توقيت مخصص) ✨</option>
+                    </select>
+                </div>
+                
+                <div style="flex: 1; min-width: 200px;">
+                    <label class="label-gold">3. تاريخ أول فصل:</label>
+                    <input class="nsw-input" id="bulkStartDate" type="datetime-local" />
+                </div>
+            </div>
+
+            <div id="customTimeArea" style="background: #161b22; border-radius: 8px; border: 1px solid #30363d; display: none; margin-top: 15px; padding: 15px;">
+                <div style="display: flex; gap: 10px;">
+                    <div style="flex: 1;">
+                        <label class="label-gold">وقت الفصل الأول:</label>
+                        <input class="nsw-input" id="timeSlot1" type="time" value="12:00" />
+                    </div>
+                    <div style="flex: 1;">
+                        <label class="label-gold">وقت الفصل الثاني:</label>
+                        <input class="nsw-input" id="timeSlot2" type="time" value="20:00" />
+                    </div>
+                </div>
+                <small style="color: #888888; display: block; margin-top: 5px;">* سيتم نشر فصلين يومياً بناءً على تاريخ البداية المختار بالأعلى.</small>
+            </div>
+
+            <button onclick="processBulkFile()" style="background: #444; border-radius: 8px; border: 1px solid var(--gold-main); color: white; cursor: pointer; font-weight: bold; margin-top: 15px; padding: 10px; width: 100%;">⚙️ تحليل الملف وتقسيم الفصول</button>
+
+            <div id="bulkPreviewResult" style="background: #000; border-radius: 5px; display: none; margin-top: 20px; max-height: 300px; overflow-y: auto; padding: 10px;"></div>
+
+            <div id="bulkControls" style="display: none; margin-top: 15px;">
+                <div style="background: #222; border-radius: 5px; margin-bottom: 10px; padding: 10px;">
+                    <span id="chaptersCount" style="color: lime; font-weight: bold;"></span>
+                </div>
+                <button onclick="startBulkUploadQueue()" style="background: var(--gold-main); border-radius: 8px; border: none; color: black; cursor: pointer; font-size: 16px; font-weight: bold; padding: 15px; width: 100%;">🚀 بدء النشر المتسلسل (لا تغلق الصفحة)</button>
+                <div id="uploadProgress" style="background: #333; border-radius: 5px; height: 10px; margin-top: 10px; overflow: hidden;">
+                    <div id="progressBar" style="background: lime; height: 100%; transition: width 0.3s; width: 0%;"></div>
+                </div>
+                <p id="uploadLog" style="color: #aaaaaa; font-size: 12px; margin-top: 5px; text-align: center;"></p>
+            </div>
+        </div>
+
+        <!-- 📊 لوحة مراقبة الطابور والسيرفر الذكية (Real-time Queue Monitor) -->
+        
+        <!-- 🎭 منظومة صقل واعتماد ونشر فصول Claude Opus (نظام النقرتين السريع) -->
+        <div id="opus-two-click-panel" style="background: linear-gradient(135deg, #111827 0%, #1e1e2e 100%); border: 2px solid var(--gold-main); border-radius: 12px; padding: 20px; margin-top: 25px; margin-bottom: 25px; box-shadow: 0 0 25px rgba(197,160,89,0.25);">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #313244; padding-bottom: 12px; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+                <h4 style="color: var(--gold-main); margin: 0; display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: bold;">
+                    🎭 منظومة صقل واعتماد ونشر فصول Claude Opus (نظام النقرتين)
+                </h4>
+                <div style="display: flex; gap: 8px;">
+                    <span id="opusStatusBadge" style="font-size: 11px; color: #a6e3a1; background: #1e1e2e; border: 1px solid #a6e3a1; padding: 4px 10px; border-radius: 6px; font-weight: bold;">
+                        🟢 متصل بالخادم المحلي
+                    </span>
+                    <button class="btn-gold" onclick="fetchOpusStatus()" style="font-size: 11px; padding: 4px 10px; background: #313244; color: #cdd6f4; border: 1px solid #45475a; cursor: pointer;">
+                        🔄 تحديث الأرقام
+                    </button>
+                </div>
+            </div>
+
+            <!-- بطاقات الإحصائيات اللحظية لطابور أوبس -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 15px;">
+                <div style="background: #181825; border-radius: 8px; padding: 10px; text-align: center; border: 1px solid #313244;">
+                    <span style="font-size: 11px; color: #f9e2af; display: block;">في الانتظار (Pending)</span>
+                    <b id="opusCountPending" style="font-size: 20px; color: #f9e2af;">-</b>
+                </div>
+                <div style="background: #181825; border-radius: 8px; padding: 10px; text-align: center; border: 1px solid #313244;">
+                    <span style="font-size: 11px; color: #a6e3a1; display: block;">المعتمدة (Approved)</span>
+                    <b id="opusCountApproved" style="font-size: 20px; color: #a6e3a1;">-</b>
+                </div>
+                <div style="background: #181825; border-radius: 8px; padding: 10px; text-align: center; border: 1px solid #313244;">
+                    <span style="font-size: 11px; color: #89b4fa; display: block;">المنشورة (Published)</span>
+                    <b id="opusCountPublished" style="font-size: 20px; color: #89b4fa;">-</b>
+                </div>
+            </div>
+
+            <!-- الزرّان البطلان لنظام النقرتين -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                <!-- النقرة 1 -->
+                <button id="btnWebOpusStage" onclick="executeOpusClick1()" style="background: linear-gradient(135deg, #1d4ed8, #2563eb); border: 1px solid #60a5fa; color: white; padding: 14px 10px; font-size: 13px; font-weight: bold; border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; box-shadow: 0 4px 12px rgba(37,99,235,0.3); transition: transform 0.1s;">
+                    <span>📥 [النقرة 1]: سحب الفصول وتجهيز القاموس لكلاود</span>
+                    <small style="font-size: 10px; opacity: 0.85; font-weight: normal;">(تجريد HTML + فلترة القاموس بنسبة 90% + نسخ الأمر للحافظة)</small>
+                </button>
+
+                <!-- النقرة 2 -->
+                <button id="btnWebOpusPublish" onclick="executeOpusClick2()" style="background: linear-gradient(135deg, #047857, #059669); border: 1px solid #34d399; color: white; padding: 14px 10px; font-size: 13px; font-weight: bold; border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; box-shadow: 0 4px 12px rgba(5,150,105,0.3); transition: transform 0.1s;">
+                    <span>🚀 [النقرة 2]: اعتماد ونشر الفصول المصقولة بمواعيدها</span>
+                    <small style="font-size: 10px; opacity: 0.85; font-weight: normal;">(إعادة التغليف الملكي + تثبيت موعد 2027 + تحديث بلوجر والشيت)</small>
+                </button>
+            </div>
+
+            <!-- أدوات مساعدة سريعة -->
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; background: #181825; padding: 8px 12px; border-radius: 6px; border: 1px solid #313244;">
+                <button onclick="copyOpusPromptWeb()" style="background: #4f46e5; border: none; color: white; padding: 6px 14px; border-radius: 4px; font-size: 11px; cursor: pointer; font-weight: bold;">
+                    📋 نسخ أمر كلاود مع القاموس المفلتر للحافظة
+                </button>
+                <button onclick="syncBloggerDatesWeb()" style="background: #374151; border: 1px solid #4b5563; color: #e5e7eb; padding: 6px 14px; border-radius: 4px; font-size: 11px; cursor: pointer;">
+                    🔄 مزامنة تواريخ النشر بين المدونة والجدول ثنائياً
+                </button>
+            </div>
+            
+            <p id="opusWebLog" style="color: #94a3b8; font-size: 12px; margin-top: 10px; margin-bottom: 0; text-align: center; min-height: 18px; font-family: monospace;"></p>
+        </div>
+
+        <div id="queue-monitor-panel" style="background: #090d16; border: 1px solid var(--gold-main); border-radius: 12px; padding: 20px; margin-top: 25px; box-shadow: 0 0 25px rgba(197,160,89,0.15);">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #222; padding-bottom: 12px; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+                <h4 style="color: var(--gold-main); margin: 0; display: flex; align-items: center; gap: 8px; font-size: 16px;">
+                    ⚡ لوحة متابعة طابور النشر المباشر (Live Queue Tracker)
+                </h4>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn-gold" onclick="triggerManualQueueProcess()" style="font-size: 11px; padding: 5px 12px; background: #1e3a8a; border-color: #3b82f6; color: white;">⚡ تشغيل المعالجة الآن</button>
+                    <button class="btn-gold" onclick="fetchLiveQueueStatus()" style="font-size: 11px; padding: 5px 12px;">🔄 تحديث الحالة</button>
+                </div>
+            </div>
+
+            <!-- بطاقات الإحصائيات الحية -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 15px;">
+                <div class="stat-card" style="background: #111827; border-radius: 8px; padding: 10px; text-align: center; border: 1px solid #1f2937;">
+                    <span style="font-size: 11px; color: #9ca3af; display: block;">الإجمالي بالدفعة</span>
+                    <b id="statTotal" style="font-size: 18px; color: #60a5fa;">0</b>
+                </div>
+                <div class="stat-card" style="background: #064e3b; border-radius: 8px; padding: 10px; text-align: center; border: 1px solid #059669;">
+                    <span style="font-size: 11px; color: #a7f3d0; display: block;">تم النشر / الجدولة</span>
+                    <b id="statPublished" style="font-size: 18px; color: #34d399;">0</b>
+                </div>
+                <div class="stat-card" style="background: #78350f; border-radius: 8px; padding: 10px; text-align: center; border: 1px solid #d97706;">
+                    <span style="font-size: 11px; color: #fde68a; display: block;">مسودات مؤمنة</span>
+                    <b id="statDrafts" style="font-size: 18px; color: #fbbf24;">0</b>
+                </div>
+                <div class="stat-card" style="background: #450a0a; border-radius: 8px; padding: 10px; text-align: center; border: 1px solid #dc2626;">
+                    <span style="font-size: 11px; color: #fecaca; display: block;">أخطاء فادحة</span>
+                    <b id="statFailed" style="font-size: 18px; color: #f87171;">0</b>
+                </div>
+                <div class="stat-card" style="background: #1e1b4b; border-radius: 8px; padding: 10px; text-align: center; border: 1px solid #4338ca;">
+                    <span style="font-size: 11px; color: #c7d2fe; display: block;">قيد الانتظار بالشيت</span>
+                    <b id="statPendingQueue" style="font-size: 18px; color: #818cf8;">-</b>
+                </div>
+            </div>
+
+            <!-- شريط التقدم الفعلي والمؤشر -->
+            <div style="background: #1f2937; border-radius: 20px; height: 18px; overflow: hidden; position: relative; margin-bottom: 15px; border: 1px solid #374151;">
+                <div id="liveProgressBar" style="background: linear-gradient(90deg, #c5a059, #10b981); height: 100%; width: 0%; transition: width 0.4s ease;"></div>
+                <span id="liveProgressPercent" style="position: absolute; top: 0; left: 50%; transform: translateX(-50%); font-size: 11px; font-weight: bold; line-height: 18px; color: white;">0%</span>
+            </div>
+
+            <!-- سجل الأحداث المباشر التفصيلي -->
+            <div id="liveLogContainer" style="background: #000; border: 1px solid #222; border-radius: 8px; padding: 12px; max-height: 220px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.7;">
+                <div style="color: #6b7280;">📡 بانتظار إرسال الفصول لبدء المعالجة والتسجيل الحي...</div>
+            </div>
+        </div>
+
+        <div id="resultArea" style="display: none; margin-top: 20px;">
+            <label class="label-gold">الكود الجاهز للصق في بلوجر (HTML):</label>
+            <textarea id="finalHtml" readonly="" style="background: #000; border-radius: 8px; border: 1px solid var(--gold-main); box-sizing: border-box; color: lime; direction: ltr; font-family: monospace; height: 250px; margin-top: 5px; padding: 15px; width: 100%;"></textarea>
+            <button onclick="smartCopy()" style="background: var(--gold-main); border-radius: 8px; border: none; color: black; cursor: pointer; font-weight: bold; margin-top: 10px; padding: 15px; width: 100%;">📋 نسخ الكود النهائي</button>
+        </div>
+        </div>
+        <!-- نهاية تبويب الفصول -->
+
+        <!-- ======================= تبويب 2: نشر وتوليد رواية جديدة ======================= -->
+        <div id="tabContentNovels" style="display: none;">
+            <div style="background: #111; border-radius: 12px; border: 1px solid var(--gold-main); padding: 25px; margin-bottom: 25px;">
+                <h2 style="color: var(--gold-main); margin-top: 0; text-align: center; border-bottom: 1px dashed var(--gold-dim); padding-bottom: 12px;">
+                    📖 منشئ صفحات الروايات الموحد (NSW Novel Generator)
+                </h2>
+                <p style="color: #aaa; font-size: 13px; text-align: center; margin-bottom: 20px;">
+                    أدخل بيانات الرواية لإنشاء صفحة فهرس فائقة السرعة (0ms) متوافقة مع قالب المدونة ومكتبة الروايات.
+                </p>
+
+                <div style="display: flex; flex-wrap: wrap; gap: 15px;">
+                    <div style="flex: 1; min-width: 250px;">
+                        <label class="label-gold">1. اسم الرواية بالعربية:</label>
+                        <input class="nsw-input" id="nnTitleAr" placeholder="مثال: رَمادُ النُّبل وجمرُ التمرد" type="text" oninput="syncNovelKeyFromTitle()" />
+                    </div>
+                    <div style="flex: 1; min-width: 250px;">
+                        <label class="label-gold">2. اسم الرواية بالإنجليزية (أو الأصلي):</label>
+                        <input class="nsw-input" id="nnTitleEn" placeholder="مثال: Ash of Nobility and Ember of Rebellion" type="text" />
+                    </div>
+                </div>
+
+                <div style="display: flex; flex-wrap: wrap; gap: 15px; margin-top: 15px;">
+                    <div style="flex: 1; min-width: 250px;">
+                        <label class="label-gold">3. مفتاح الرواية / وسم بلوجر (Novel Key / Label):</label>
+                        <input class="nsw-input" id="nnKey" placeholder="مثال: رماد النبل وجمر التمرد" type="text" />
+                    </div>
+                    <div style="flex: 1; min-width: 250px;">
+                        <label class="label-gold">4. رابط الغلاف (WebP / JPG):</label>
+                        <input class="nsw-input" id="nnCover" placeholder="https://blogger.googleusercontent.com/img/..." type="text" oninput="updateNovelPreview()" />
+                    </div>
+                </div>
+
+                <div style="display: flex; flex-wrap: wrap; gap: 15px; margin-top: 15px;">
+                    <div style="flex: 2; min-width: 250px;">
+                        <label class="label-gold">5. رابط صفحة الفهرس على بلوجر (بعد إنشائها):</label>
+                        <input class="nsw-input" id="nnIndexUrl" placeholder="https://www.novelskyworld.com/p/novel-name.html" type="text" />
+                    </div>
+                    <div style="flex: 1; min-width: 150px;">
+                        <label class="label-gold">6. حالة الرواية:</label>
+                        <select class="nsw-input" id="nnStatus" onchange="updateNovelPreview()">
+                            <option value="مستمرة" selected>🟢 مستمرة</option>
+                            <option value="مكتملة">🏁 مكتملة</option>
+                        </select>
+                    </div>
+                    <div style="flex: 1; min-width: 200px;">
+                        <label class="label-gold">7. موعد النشر اليومي:</label>
+                        <input class="nsw-input" id="nnSchedule" value="فصلين يومياً | 9:00 ص و 4:00 م (بتوقيت مكة)" type="text" />
+                    </div>
+                </div>
+                <!-- 🌐 خانة المصدر الأصلي للأتمتة الكاملة للسحب والتفريغ -->
+                <div style="margin-top: 15px; background: rgba(197, 160, 89, 0.05); border: 1px dashed var(--gold-main); border-radius: 8px; padding: 12px;">
+                    <label class="label-gold" style="font-size: 13px;">🌐 8. رابط المصدر الأصلي للرواية (Novel543 / 69shuba للسحب والتفريغ التلقائي في الشيت):</label>
+                    <input class="nsw-input" id="nnSourceUrl" placeholder="https://www.novel543.com/0820/123/ أو https://www.69shuba.com/book/54809.htm" type="url" style="border-color: var(--gold-main);" />
+                    <small style="color: #bbb; font-size: 11px; display: block; margin-top: 5px;">
+                        ⚡ <b>نظام الأتمتة الذكي:</b> عند الضغط على زر نشر الصفحة، سيقوم النظام تلقائياً بإرسال هذا الرابط إلى سيرفر Render ليسحب الفصول كاملة ويفرغها في جدول Google Sheet مباشرة ثم يحذفها من ذاكرة السيرفر.
+                    </small>
+                </div>
+
+                <!-- التصنيفات -->
+                <div style="margin-top: 15px;">
+                    <label class="label-gold">8. التصنيفات (Genres):</label>
+                    <input class="nsw-input" id="nnGenres" placeholder="فانتازيا, فنون قتالية, دراما" type="text" oninput="updateNovelPreview()" />
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;">
+                        <button class="chip-btn" onclick="addChip('nnGenres', 'فانتازيا')">+ فانتازيا</button>
+                        <button class="chip-btn" onclick="addChip('nnGenres', 'فنون قتالية')">+ فنون قتالية</button>
+                        <button class="chip-btn" onclick="addChip('nnGenres', 'شيانشيا')">+ شيانشيا</button>
+                        <button class="chip-btn" onclick="addChip('nnGenres', 'دراما')">+ دراما</button>
+                        <button class="chip-btn" onclick="addChip('nnGenres', 'كوميديا')">+ كوميديا</button>
+                        <button class="chip-btn" onclick="addChip('nnGenres', 'شونين')">+ شونين</button>
+                        <button class="chip-btn" onclick="addChip('nnGenres', 'تاريخي')">+ تاريخي</button>
+                        <button class="chip-btn" onclick="addChip('nnGenres', 'حياة مدرسية')">+ حياة مدرسية</button>
+                        <button class="chip-btn" onclick="addChip('nnGenres', 'نظام')">+ نظام</button>
+                    </div>
+                </div>
+
+                <!-- العلامات -->
+                <div style="margin-top: 15px;">
+                    <label class="label-gold">9. العلامات (Tags):</label>
+                    <input class="nsw-input" id="nnTags" placeholder="انتقام, بطل قوي, ولادة من جديد" type="text" oninput="updateNovelPreview()" />
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;">
+                        <button class="chip-btn" onclick="addChip('nnTags', 'ولادة من جديد')">+ ولادة من جديد</button>
+                        <button class="chip-btn" onclick="addChip('nnTags', 'انتقام')">+ انتقام</button>
+                        <button class="chip-btn" onclick="addChip('nnTags', 'بطل قوي منذ البداية')">+ بطل قوي</button>
+                        <button class="chip-btn" onclick="addChip('nnTags', 'إخفاء الهوية')">+ إخفاء الهوية</button>
+                        <button class="chip-btn" onclick="addChip('nnTags', 'بطل هادئ')">+ بطل هادئ</button>
+                        <button class="chip-btn" onclick="addChip('nnTags', 'شريحة من الحياة')">+ شريحة من الحياة</button>
+                        <button class="chip-btn" onclick="addChip('nnTags', 'زراعة')">+ زراعة</button>
+                        <button class="chip-btn" onclick="addChip('nnTags', 'صيني')">+ صيني</button>
+                        <button class="chip-btn" onclick="addChip('nnTags', 'كوري')">+ كوري</button>
+                    </div>
+                </div>
+
+                <!-- القصة والاقتباس -->
+                <div style="margin-top: 15px;">
+                    <label class="label-gold">10. نبذة عن القصة:</label>
+                    <textarea class="nsw-input" id="nnSummary" placeholder="اكتب قصة ونبذة الرواية هنا..." style="height: 100px; resize: vertical;" oninput="updateNovelPreview()"></textarea>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label class="label-gold">11. اقتباس مميز (اختياري):</label>
+                    <input class="nsw-input" id="nnQuote" placeholder="مثال: الجمر لا يخمد بسهولة، والقدر الذي حاولوا قتله هو من سيسقط تيجانهم!" type="text" oninput="updateNovelPreview()" />
+                </div>
+
+                <!-- أزرار الإجراءات -->
+                <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px;">
+                    <button class="btn-gold" onclick="updateNovelPreview()" style="flex: 1; min-width: 140px; padding: 14px; font-size: 14px;">👁️ تحديث المعاينة</button>
+                    <button onclick="generateCleanNovelPage()" style="background: var(--gold-main); border: none; color: #000; border-radius: 6px; cursor: pointer; flex: 1.5; min-width: 180px; font-weight: bold; font-family: 'Tajawal'; font-size: 14px; padding: 14px;">✨ توليد الكود النظيف</button>
+                    <button id="btnDirectPublishPage" onclick="publishNovelPageDirect()" style="background: #1e40af; border: none; color: #fff; border-radius: 6px; cursor: pointer; flex: 2; min-width: 220px; font-weight: bold; font-family: 'Tajawal'; font-size: 14px; padding: 14px; box-shadow: 0 4px 15px rgba(30,64,175,0.4);">🚀 نشر الصفحة مباشرة على بلوجر (API)</button>
+                    <button onclick="saveNovelRecord()" style="background: #2e7d32; border: none; color: #fff; border-radius: 6px; cursor: pointer; flex: 1; min-width: 130px; font-weight: bold; font-family: 'Tajawal'; font-size: 14px; padding: 14px;">💾 حفظ بالنظام</button>
+                </div>
+            </div>
+
+            <!-- منطقة المعاينة الحية لكارت الرواية -->
+            <div id="nnPreviewContainer" style="background: #000; border: 1px dashed #444; border-radius: 12px; padding: 20px; margin-bottom: 25px; display: none;">
+                <h4 style="color: var(--gold-main); margin-top: 0;">👁️ معاينة كرت الرواية المباشر:</h4>
+                <div id="nnLiveCardPreview"></div>
+            </div>
+
+            <!-- منطقة إخراج الكود النهائي -->
+            <div id="nnResultArea" style="display: none; background: #080808; border-radius: 12px; border: 1px solid var(--gold-main); padding: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <label class="label-gold" style="font-size: 14px; margin: 0;">📄 كود صفحة الرواية الخفيف الجاهز للنشر في بلوجر:</label>
+                    <button class="btn-gold" onclick="copyNewNovelCode()" style="padding: 6px 16px;">📋 نسخ الكود</button>
+                </div>
+                <textarea id="nnGeneratedCode" readonly style="background: #000; border: 1px solid #333; border-radius: 8px; color: #34d399; direction: ltr; font-family: monospace; font-size: 13px; height: 260px; outline: none; padding: 15px; width: 100%; box-sizing: border-box;"></textarea>
+                <p style="color: #aaa; font-size: 12px; margin-top: 10px;">
+                    💡 <b>طريقة النشر في بلوجر:</b> ادخل على لوحة بلوجر ➔ الصفحات (Pages) ➔ صفحة جديدة ➔ حول المحرر إلى وضع <b>HTML</b> والصق الكود أعلاه ثم اضغط نشر!
+                </p>
+            </div>
+        </div>
+        <!-- نهاية تبويب الرواية الجديدة -->
+
+    </div> 
+
+    <script>
+        const novelDatabase = {
+            "After Severing Ties": "https://www.novelskyworld.com/p/severing-ties.html?m=1",
+            "Severing Ties": "https://www.novelskyworld.com/p/severing-ties.html?m=1",
+            "بعد قطع الروابط، عائلة الأمير تندم طوال العمر": "https://www.novelskyworld.com/p/severing-ties.html?m=1",
+            "رماد النبل وجمر التمرد": "https://www.novelskyworld.com/p/blog-page_10.html",
+            "رَمادُ النُّبل وجمرُ التمرد": "https://www.novelskyworld.com/p/blog-page_10.html",
+            "نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا": "https://www.novelskyworld.com/p/blog-page_14.html",
+            "المزارع الخبير في المدرسة الابتدائية": "https://www.novelskyworld.com/p/the-expert-cultivator-in-elementary.html?m=1",
+            "The Expert Cultivator in Elementary School": "https://www.novelskyworld.com/p/the-expert-cultivator-in-elementary.html?m=1"
+        };
+
+        // استرجاع الروايات الإضافية المحفوظة محلياً
+        try {
+            const savedCustom = JSON.parse(localStorage.getItem('nsw_custom_novels_db') || '{}');
+            Object.assign(novelDatabase, savedCustom);
+        } catch(e) {}
+
+        const NOVELS_INDEX_SPREADSHEET_ID = "1s-yf1gRHagPIeikEC9_aVIAst7oDaiwoNzLH-hd0Q24";
+
+        async function syncNovelsFromIndexSheet() {
+            const gvizUrl = `https://docs.google.com/spreadsheets/d/${NOVELS_INDEX_SPREADSHEET_ID}/gviz/tq?tqx=out:json`;
+            try {
+                const res = await fetch(gvizUrl);
+                if (!res.ok) return;
+                const text = await res.text();
+                const jsonText = text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
+                const data = JSON.parse(jsonText);
+                const rows = data.table.rows;
+                if (!rows || rows.length === 0) return;
+
+                const datalist = document.getElementById('novelList');
+                rows.forEach(r => {
+                    const c = r.c;
+                    if (!c) return;
+                    const title = c[0] ? (c[0].v || '').toString().trim() : '';
+                    const url = c[2] ? (c[2].v || '').toString().trim() : '';
+                    if (title && url) {
+                        novelDatabase[title] = url;
+                        if (datalist) {
+                            let exists = false;
+                            for (let opt of datalist.options) {
+                                if (opt.value === title) { exists = true; break; }
+                            }
+                            if (!exists) {
+                                const opt = document.createElement('option');
+                                opt.value = title;
+                                datalist.appendChild(opt);
+                            }
+                        }
+                    }
+                });
+                console.log("✅ NSW Sync: تم مزامنة دليل الروايات وفهارسها بنجاح من شيت الفهارس المركزي");
+            } catch(e) {
+                console.warn("تعذر الجلب من شيت الفهارس (سيتم الاعتماد على قاعدة البيانات المضمنة):", e);
+            }
+        }
+
+
+        // ==============================================================================
+        // 🌟 دوال تبويب إنشاء ونشر الروايات الجديدة
+        // ==============================================================================
+        function switchTab(tab) {
+            const tabChapters = document.getElementById('tabContentChapters');
+            const tabNovels = document.getElementById('tabContentNovels');
+            const btnChapters = document.getElementById('tabBtnChapters');
+            const btnNovels = document.getElementById('tabBtnNewNovel');
+
+            if (tab === 'novels') {
+                tabChapters.style.display = 'none';
+                tabNovels.style.display = 'block';
+                btnChapters.classList.remove('active');
+                btnNovels.classList.add('active');
+            } else {
+                tabChapters.style.display = 'block';
+                tabNovels.style.display = 'none';
+                btnChapters.classList.add('active');
+                btnNovels.classList.remove('active');
+            }
+        }
+
+        function addChip(inputId, value) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+            let current = input.value.split(',').map(s => s.trim()).filter(Boolean);
+            if (!current.includes(value)) {
+                current.push(value);
+                input.value = current.join(', ');
+                updateNovelPreview();
+            }
+        }
+
+        function syncNovelKeyFromTitle() {
+            const titleAr = document.getElementById('nnTitleAr').value.trim();
+            const keyInput = document.getElementById('nnKey');
+            if (keyInput && !keyInput.value) {
+                keyInput.value = titleAr;
+            }
+            updateNovelPreview();
+        }
+
+        function updateNovelPreview() {
+            const titleAr = document.getElementById('nnTitleAr').value.trim() || "اسم الرواية بالعربية";
+            const titleEn = document.getElementById('nnTitleEn').value.trim() || "Novel Title in English";
+            const cover = document.getElementById('nnCover').value.trim() || "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEi44S8d8HI6VSRqi3PClNXsCSwy23aHJv4Hmk3Y_HdpekCGzMEhtAnfAOrCSV-aDh3J4vfa2Sgnpe_IRrjlIkfUrIM0-9Vu-t9x1Opsz2ab4P394JnXrYax-y0Af90QY50xvyEb948xN14er5db6c6LEJM-PSi867VfU-T_EYHha-j9oCElXs5Ik0rn0HTf/s0/1000134866.webp";
+            const status = document.getElementById('nnStatus').value || "مستمرة";
+            const genres = document.getElementById('nnGenres').value.split(',').map(s => s.trim()).filter(Boolean);
+            const tags = document.getElementById('nnTags').value.split(',').map(s => s.trim()).filter(Boolean);
+            const summary = document.getElementById('nnSummary').value.trim() || "نبذة مختصرة عن قصة الرواية وأحداثها المشوقة...";
+            const quote = document.getElementById('nnQuote').value.trim();
+
+            const genresHtml = genres.map(g => '<span class="nsw-tag">' + g + '</span>').join(' ');
+            const tagsHtml = tags.map(t => '<span class="nsw-tag">' + t + '</span>').join(' ');
+            const quoteHtml = quote ? '<p style="border-top: 1px dashed var(--gold-border); color: #aaa; font-size: 14px; font-style: italic; margin-top: 10px; opacity: 0.9; padding-top: 10px;">' + quote + '</p>' : '';
+
+            const previewHtml = `
+            <div class="nsw-header-card" style="display: flex; flex-wrap: wrap; gap: 25px; padding: 25px; background: #161616; border-radius: 16px; border: 1px solid var(--gold-border);">
+                <div style="flex: 1; min-width: 200px; text-align: center;">
+                    <img src="${cover}" alt="Cover" style="border-radius: 12px; border: 2px solid var(--gold-main); max-width: 220px; width: 100%; box-shadow: 0 4px 15px rgba(0,0,0,0.5);" />
+                    <div style="display: flex; gap: 8px; justify-content: center; margin-top: 12px; font-size: 12px;">
+                        <span style="background: var(--gold-main); color: #000; font-weight: bold; padding: 3px 10px; border-radius: 4px;">${status}</span>
+                        <span style="border: 1px solid var(--gold-main); color: var(--gold-main); padding: 3px 10px; border-radius: 4px;">... فصل</span>
+                    </div>
+                </div>
+                <div style="flex: 2; min-width: 280px;">
+                    <h2 style="color: var(--h1-color, #e5c15d); font-size: 22px; margin: 0 0 5px 0;">${titleEn}</h2>
+                    <h3 style="color: var(--h2-color, #ffd700); font-size: 16px; margin: 0 0 15px 0; opacity: 0.9;">${titleAr}</h3>
+                    <div style="margin-bottom: 15px;">
+                        <div><strong style="color: #fff; font-size: 13px;">النوع:</strong> ${genresHtml || '<span style="color:#666;">غير محدد</span>'}</div>
+                        <div style="margin-top: 6px;"><strong style="color: #fff; font-size: 13px;">العلامات:</strong> ${tagsHtml || '<span style="color:#666;">غير محدد</span>'}</div>
+                    </div>
+                    <div class="nsw-summary-box" style="background: rgba(255,255,255,0.03); border-right: 4px solid var(--gold-main); padding: 15px; border-radius: 8px;">
+                        <h4 style="color: var(--gold-main); margin: 0 0 8px 0;">نبذة عن القصة:</h4>
+                        <p style="color: #eee; font-size: 14px; line-height: 1.6; margin: 0;">${summary}</p>
+                        ${quoteHtml}
+                    </div>
+                </div>
+            </div>`;
+
+            document.getElementById('nnPreviewContainer').style.display = 'block';
+            document.getElementById('nnLiveCardPreview').innerHTML = previewHtml;
+        }
+
+        function generateCleanNovelPage() {
+            const titleAr = document.getElementById('nnTitleAr').value.trim();
+            const titleEn = document.getElementById('nnTitleEn').value.trim();
+            const key = document.getElementById('nnKey').value.trim();
+            const cover = document.getElementById('nnCover').value.trim();
+            const status = document.getElementById('nnStatus').value || "مستمرة";
+            const schedule = document.getElementById('nnSchedule').value.trim() || "فصلين يومياً | 9:00 ص و 4:00 م (بتوقيت مكة)";
+            const genres = document.getElementById('nnGenres').value.split(',').map(s => s.trim()).filter(Boolean);
+            const tags = document.getElementById('nnTags').value.split(',').map(s => s.trim()).filter(Boolean);
+            const summary = document.getElementById('nnSummary').value.trim();
+            const quote = document.getElementById('nnQuote').value.trim();
+
+            if (!titleAr || !key) {
+                alert("⚠️ يرجى إدخال اسم الرواية بالعربية ومفتاح الرواية (Label) على الأقل!");
+                return;
+            }
+
+            const genresHtml = genres.map(g => '<span class="nsw-tag">' + g + '</span>').join(' ');
+            const tagsHtml = tags.map(t => '<span class="nsw-tag">' + t + '</span>').join(' ');
+            const quoteHtml = quote ? '<p class="quote">' + quote + '</p>' : '';
+
+            const cleanHtml = `<div class="nsw-novel-wrapper" id="nsw-novel-page" data-novel-key="${key}" data-schedule="${schedule}">
+
+    <!-- صندوق استئناف القراءة -->
+    <div class="nsw-resume-wrapper" id="nsw-resume-box">
+        <div class="resume-text">
+            <h4 style="color: var(--gold-main); margin: 0px;">استئناف القراءة</h4>
+            <p id="resume-msg" style="color: var(--text-muted); font-size: 14px; margin: 5px 0px 0px;"></p>
+        </div>
+        <a class="nsw-resume-btn" href="#" id="resume-link">متابعة ⤞</a>
+    </div>
+
+    <!-- كرت تفاصيل الرواية -->
+    <div class="nsw-header-card" id="nsw-novel-header">
+        <div class="nsw-cover-container">
+            <img alt="Cover" src="${cover || 'https://via.placeholder.com/300x400'}" />
+            <div class="nsw-cover-badges">
+                <span class="nsw-badge-status">${status}</span>
+                <span class="nsw-badge-count" id="ch-count-badge">... فصل</span>
+            </div>
+        </div>
+        <div class="nsw-details-container">
+            <h1 class="nsw-title-en">${titleEn || titleAr}</h1>
+            <h2 class="nsw-title-ar">${titleAr}</h2>
+            <div class="nsw-meta-tags">
+                <div><strong>النوع:</strong> ${genresHtml}</div>
+                <div><strong>العلامات:</strong> ${tagsHtml}</div>
+            </div>
+            <div class="nsw-summary-box">
+                <h3>نبذة عن القصة:</h3>
+                <p>${summary}</p>
+                ${quoteHtml ? '                ' + quoteHtml + '\n' : ''}            </div>
+        </div>
+    </div>
+
+    <!-- شريط الأدوات والفهرس -->
+    <div class="nsw-toolbar">
+        <div class="nsw-toolbar-title-wrap">
+            <h3>قائمة الفصول</h3>
+            <span class="nsw-sync-indicator" id="sync-indicator">⚡ متزامن حياً مع جدول النشر</span>
+        </div>
+        <div class="nsw-toolbar-tools">
+            <button class="nsw-btn-tool" onclick="toggleSort()">⇅ ترتيب</button>
+        </div>
+    </div>
+    
+    <div id="nsw-list-alerts"></div>
+    <div id="pagination-container"></div>
+    <div class="nsw-chapters-grid" id="chapters-container">
+        <div style="color: var(--text-muted); grid-column: 1 / -1; padding: 20px; text-align: center;">جاري تحميل الفصول...</div>
+    </div>
+</div>`;
+
+            document.getElementById('nnGeneratedCode').value = cleanHtml;
+            document.getElementById('nnResultArea').style.display = 'block';
+            updateNovelPreview();
+            notify("✨ تم توليد كود صفحة الرواية بنجاح!");
+        }
+
+        function copyNewNovelCode() {
+            const textarea = document.getElementById('nnGeneratedCode');
+            if (!textarea || !textarea.value) return;
+            textarea.select();
+            document.execCommand('copy');
+            notify("📋 تم نسخ كود صفحة الرواية!");
+        }
+
+        function saveNovelRecord() {
+            const key = document.getElementById('nnKey').value.trim();
+            const indexUrl = document.getElementById('nnIndexUrl').value.trim();
+            const titleAr = document.getElementById('nnTitleAr').value.trim();
+
+            if (!key) {
+                alert("⚠️ يرجى إدخال اسم أو مفتاح الرواية!");
+                return;
+            }
+
+            // حفظ في قاعدة الفهارس المحلية
+            novelDatabase[key] = indexUrl;
+            if (titleAr) novelDatabase[titleAr] = indexUrl;
+
+            // حفظ في التخزين المحلي للمتصفح
+            try {
+                let customNovels = JSON.parse(localStorage.getItem('nsw_custom_novels_db') || '{}');
+                customNovels[key] = indexUrl;
+                if (titleAr) customNovels[titleAr] = indexUrl;
+                localStorage.setItem('nsw_custom_novels_db', JSON.stringify(customNovels));
+
+                // إضافة للقائمة المنسدلة
+                saveCurrentNovelName(key);
+                if (titleAr) saveCurrentNovelName(titleAr);
+            } catch(e) {}
+
+            notify("💾 تم حفظ الرواية وإضافتها لقائمة النشر!");
+            alert("✅ تم حفظ الرواية [" + key + "] بنجاح! ستظهر الآن في قائمة الاختيار السريع للفصول.");
+        }
+
+        async function publishNovelPageDirect() {
+            const titleAr = document.getElementById('nnTitleAr').value.trim();
+            const titleEn = document.getElementById('nnTitleEn').value.trim();
+            const key = document.getElementById('nnKey').value.trim();
+            const cover = document.getElementById('nnCover').value.trim();
+            const status = document.getElementById('nnStatus').value || "مستمرة";
+            const schedule = document.getElementById('nnSchedule').value.trim() || "فصلين يومياً | 9:00 ص و 4:00 م (بتوقيت مكة)";
+            const genres = document.getElementById('nnGenres').value.split(',').map(s => s.trim()).filter(Boolean);
+            const tags = document.getElementById('nnTags').value.split(',').map(s => s.trim()).filter(Boolean);
+            const summary = document.getElementById('nnSummary').value.trim();
+
+            if (!titleAr || !key) {
+                alert("⚠️ يرجى إدخال اسم الرواية بالعربية ومفتاح الرواية (Label) على الأقل!");
+                return;
+            }
+
+            // توليد الكود النظيف أولاً إذا لم يكن مولداً
+            let codeArea = document.getElementById('nnGeneratedCode');
+            if (!codeArea || !codeArea.value) {
+                generateCleanNovelPage();
+            }
+            const cleanHtml = document.getElementById('nnGeneratedCode').value;
+
+            const btn = document.getElementById('btnDirectPublishPage');
+            const originalText = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = "⏳ جاري النشر على بلوجر...";
+
+            try {
+                notify("📡 جاري الاتصال بـ Blogger API لنشر صفحة الرواية...");
+                const payload = {
+                    action: "publishNovelPage",
+                    title: titleAr,
+                    content: cleanHtml,
+                    novelData: {
+                        titleAr: titleAr,
+                        titleEn: titleEn,
+                        key: key,
+                        cover: cover,
+                        status: status,
+                        schedule: schedule,
+                        genres: genres,
+                        tags: tags,
+                        summary: summary
+                    }
+                };
+
+                const res = await fetch(scriptURL, {
+                    method: 'POST',
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await res.json();
+
+                if (result.status === "success") {
+                    const pageUrl = result.pageUrl || "";
+                    document.getElementById('nnIndexUrl').value = pageUrl;
+                    
+                    // الحفظ في النظام محلياً أيضاً
+                    saveNovelRecord();
+                    notify("🎉 تم نشر صفحة الرواية على بلوجر بنجاح!");
+
+                    // 🚀 إطلاق خط السحب والتفريغ التلقائي في الشيت عبر سيرفر Render
+                    const sourceUrl = document.getElementById('nnSourceUrl') ? document.getElementById('nnSourceUrl').value.trim() : "";
+                    if (sourceUrl) {
+                        notify("📡 جاري إرسال أمر السحب والتفريغ التلقائي لسيرفر Render...");
+                        fetch("https://2-yqmt.onrender.com/api/start_novel_pipeline", {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                novelName: titleAr,
+                                sourceUrl: sourceUrl,
+                                novelKey: key
+                            })
+                        }).then(r => r.json()).then(pipelineRes => {
+                            console.log("✅ Render Auto-Pipeline:", pipelineRes);
+                            notify("🚀 تم إطلاق سحب فصول الرواية وتفريغها بالشيت بنجاح!");
+                        }).catch(pErr => {
+                            console.warn("تنبيه اتصال Render Pipeline:", pErr);
+                        });
+                    }
+
+                    alert("✅ تم إنشاء ونشر صفحة الرواية بنجاح على بلوجر!\n\n🔗 رابط الصفحة الحية:\n" + pageUrl + (sourceUrl ? "\n\n🚀 تم إرسال أمر السحب التلقائي لسيرفر Render لبدء سحب وتفريغ الفصول في Google Sheet." : ""));
+                } else {
+                    alert("❌ تعذر نشر الصفحة على بلوجر:\n" + (result.message || JSON.stringify(result)));
+                }
+            } catch(err) {
+                console.error(err);
+                alert("❌ حدث خطأ أثناء الاتصال بالخادم:\n" + err.toString());
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+        }
+
+
+        const scriptURL = "https://script.google.com/macros/s/AKfycbxqLaqJru1ag-am7G9Mrwy5Nb7HliZlK5vbIEQD9MeV3wOOquNUvz4d7vWEwZxkBI6zIw/exec";
+
+        let extractedChapters = [];
+        let queuePollingInterval = null;
+        let batchStats = {
+            total: 0,
+            published: 0,
+            drafts: 0,
+            failed: 0,
+            pending: 0
+        };
+
+        function initNovelHistory() {
+            try {
+                const lastNovel = localStorage.getItem('nsw_last_publish_novel');
+                const history = JSON.parse(localStorage.getItem('nsw_novel_publish_history') || '[]');
+                const nameInput = document.getElementById('novelName');
+                
+                if (lastNovel && nameInput && !nameInput.value) {
+                    nameInput.value = lastNovel;
+                    autoFillIndex();
+                }
+                updateNovelDatalist(history);
+            } catch(e) {}
+        }
+
+        function saveCurrentNovelName(name) {
+            if (!name) return;
+            try {
+                localStorage.setItem('nsw_last_publish_novel', name);
+                let history = JSON.parse(localStorage.getItem('nsw_novel_publish_history') || '[]');
+                if (!history.includes(name)) {
+                    history.unshift(name);
+                    if (history.length > 20) history.pop();
+                    localStorage.setItem('nsw_novel_publish_history', JSON.stringify(history));
+                    updateNovelDatalist(history);
+                }
+            } catch(e) {}
+        }
+
+        function updateNovelDatalist(history) {
+            const datalist = document.getElementById('novelList');
+            if (!datalist || !history || !history.length) return;
+            history.forEach(item => {
+                let exists = false;
+                for (let opt of datalist.options) {
+                    if (opt.value === item) { exists = true; break; }
+                }
+                if (!exists) {
+                    const opt = document.createElement('option');
+                    opt.value = item;
+                    datalist.appendChild(opt);
+                }
+            });
+        }
+
+        function autoFillIndex() {
+            const nameInput = document.getElementById('novelName');
+            const linkInput = document.getElementById('indexLink');
+            const currentName = nameInput.value.trim();
+
+            if (novelDatabase[currentName]) {
+                linkInput.value = novelDatabase[currentName];
+                notify("🔗 تم إدراج رابط الفهرس تلقائياً");
+            }
+        }
+
+        // ==============================================================================
+        // ⚡ الجلب التلقائي لروابط الفصل السابق والتالي من شيت المنشورات العام (1IFT...)
+        // ==============================================================================
+        const PUBLIC_PUBLISHED_SPREADSHEET_ID = "1IFT9mKRFByiPhph-ZaSdUT7c6IPUWpLg6Gj2xa9g5mY";
+        let publishedChaptersCache = null;
+        let isFetchingSheetData = false;
+        let autoNavDebounceTimer = null;
+
+        function triggerAutoNavDebounced() {
+            if (autoNavDebounceTimer) clearTimeout(autoNavDebounceTimer);
+            autoNavDebounceTimer = setTimeout(() => {
+                autoFillNavLinks(false);
+            }, 600);
+        }
+
+        function extractChapterNumberFromText(text) {
+            if (!text) return null;
+            // مطابقة نمط: الفصل 495 أو Chapter 495 أو 495
+            const m = text.match(/(?:الفصل|فصل|Chapter|ch\.?)\s*(\d+(?:\.\d+)?)/i) || text.match(/\b(\d+(?:\.\d+)?)\b/);
+            if (m) {
+                return parseFloat(m[1]);
+            }
+            return null;
+        }
+
+        async function fetchPublishedChaptersMap(forceRefresh = false) {
+            if (publishedChaptersCache && !forceRefresh) {
+                return publishedChaptersCache;
+            }
+            if (isFetchingSheetData) {
+                // انتظار انتهاء الجلب الموازي
+                await new Promise(r => setTimeout(r, 800));
+                if (publishedChaptersCache) return publishedChaptersCache;
+            }
+            isFetchingSheetData = true;
+            try {
+                const gvizUrl = `https://docs.google.com/spreadsheets/d/${PUBLIC_PUBLISHED_SPREADSHEET_ID}/gviz/tq?tqx=out:json`;
+                const res = await fetch(gvizUrl);
+                if (!res.ok) throw new Error("تعذر الوصول لجدول المنشورات");
+                const text = await res.text();
+                const jsonText = text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
+                const data = JSON.parse(jsonText);
+                const rows = (data.table && data.table.rows) ? data.table.rows : [];
+
+                // تخزين هيكلي: novelName (lowercase) -> chapterNumber -> postUrl
+                const map = {};
+                rows.forEach(r => {
+                    const c = r.c;
+                    if (!c) return;
+                    const chapNum = c[0] ? parseFloat(c[0].v) : null;
+                    const postUrl = c[5] ? (c[5].v || '').toString().trim() : '';
+                    const novelName = c[7] ? (c[7].v || '').toString().trim() : '';
+
+                    if (chapNum !== null && !isNaN(chapNum) && postUrl) {
+                        const key = (novelName || 'default').trim().toLowerCase();
+                        if (!map[key]) map[key] = {};
+                        map[key][chapNum] = postUrl;
+
+                        // تسجيل في المفتاح العام أيضاً
+                        if (!map['*']) map['*'] = {};
+                        map['*'][chapNum] = postUrl;
+                    }
+                });
+
+                publishedChaptersCache = map;
+                console.log("✅ تم تحديث كاش فصول جدول النشر بنجاح:", Object.keys(map));
+                return map;
+            } catch (err) {
+                console.warn("⚠️ تعذر جلب فصول شيت المنشورات تلقائياً:", err);
+                return null;
+            } finally {
+                isFetchingSheetData = false;
+            }
+        }
+
+        async function autoFillNavLinks(userTriggered = false) {
+            const novelInput = document.getElementById('novelName');
+            const titleInput = document.getElementById('chapterTitle');
+            const prevInput = document.getElementById('prevLink');
+            const nextInput = document.getElementById('nextLink');
+            const prevIcon = document.getElementById('prevStatusIcon');
+            const nextIcon = document.getElementById('nextStatusIcon');
+
+            if (!titleInput) return;
+
+            const currentTitle = titleInput.value.trim();
+            const currentNovel = novelInput ? novelInput.value.trim() : "";
+
+            const currentChapNum = extractChapterNumberFromText(currentTitle);
+            if (currentChapNum === null) {
+                if (userTriggered) notify("⚠️ يرجى كتابة رقم الفصل في عنوان الفصل أولاً (مثال: الفصل 495)");
+                return;
+            }
+
+            const prevChapNum = currentChapNum - 1;
+            const nextChapNum = currentChapNum + 1;
+
+            if (userTriggered) notify(`🔍 جاري البحث عن الفصلين (${prevChapNum}) و (${nextChapNum}) في الشيت...`);
+            if (prevIcon) prevIcon.innerText = "⏳";
+            if (nextIcon) nextIcon.innerText = "⏳";
+
+            const map = await fetchPublishedChaptersMap(userTriggered);
+            if (!map) {
+                if (userTriggered) notify("❌ تعذر الاتصال بجدول المنشورات العام.");
+                if (prevIcon) prevIcon.innerText = "";
+                if (nextIcon) nextIcon.innerText = "";
+                return;
+            }
+
+            // محاولة إيجاد الرواية في الخريطة
+            const novelKey = currentNovel.toLowerCase();
+            let novelMap = map[novelKey];
+            if (!novelMap) {
+                // محاولة البحث الجزئي
+                for (let k of Object.keys(map)) {
+                    if (k !== '*' && (k.includes(novelKey) || novelKey.includes(k))) {
+                        novelMap = map[k];
+                        break;
+                    }
+                }
+            }
+            if (!novelMap) {
+                novelMap = map['*'] || {};
+            }
+
+            let foundPrev = false;
+            let foundNext = false;
+
+            if (prevChapNum > 0 && novelMap[prevChapNum]) {
+                prevInput.value = novelMap[prevChapNum];
+                if (prevIcon) prevIcon.innerText = `✅ الفصل ${prevChapNum}`;
+                foundPrev = true;
+            } else {
+                if (prevChapNum <= 0) {
+                    prevInput.value = "";
+                    if (prevIcon) prevIcon.innerText = "⛔ الفصل الأول";
+                } else {
+                    if (prevIcon) prevIcon.innerText = `⚠️ غير منشور (${prevChapNum})`;
+                }
+            }
+
+            if (novelMap[nextChapNum]) {
+                nextInput.value = novelMap[nextChapNum];
+                if (nextIcon) nextIcon.innerText = `✅ الفصل ${nextChapNum}`;
+                foundNext = true;
+            } else {
+                if (nextIcon) nextIcon.innerText = `⚠️ غير منشور (${nextChapNum})`;
+            }
+
+            if (userTriggered) {
+                if (foundPrev || foundNext) {
+                    notify(`✅ تم ملء الروابط: السابق (${foundPrev ? 'موجود' : 'غير متوفر'}) | التالي (${foundNext ? 'موجود' : 'غير متوفر'})`);
+                } else {
+                    notify(`⚠️ لم يتم العثور على روابط منشورة للفصلين (${prevChapNum}) و (${nextChapNum})`);
+                }
+            }
+        }
+
+        const execCmd = (c) => document.execCommand(c, false, null);
+
+        function notify(m) {
+            const n = document.getElementById('nswNotify');
+            n.innerText = m; n.style.display = 'block';
+            setTimeout(() => n.style.display = 'none', 3000);
+        }
+
+        function unlockPage() {
+            if(document.getElementById('nsw-pass-key').value === "262311") {
+                document.getElementById('nsw-lock-overlay').style.display = 'none';
+            } else alert("❌ الرمز خاطئ");
+        }
+
+        function cleanChapterOnly() {
+            if(confirm("🧹 هل تريد مسح المحتوى؟")) {
+                document.getElementById('editor').innerText = "";
+                notify("تم المسح");
+            }
+        }
+
+        function nswFont(v) {
+            const textBody = document.getElementById('nsw-text-body');
+            if (textBody) {
+                const currentSize = parseInt(window.getComputedStyle(textBody).fontSize);
+                textBody.style.fontSize = (currentSize + v) + 'px';
+            } else {
+                notify("⚠️ حدث المعاينة أولاً لتفعيل التحكم بالخط");
+            }
+        }
+
+        function insertStyledLetter() {
+            const sel = window.getSelection(); 
+            if (!sel.toString().trim()) return alert("⚠️ ظلل النص أولاً!");
+            const style = document.getElementById('letterStyle').value;
+            const formattedText = sel.toString().replace(/\n/g, '<br>');
+            const letter = `<div class="personal-letter ${style}" contenteditable="false"><div>${formattedText}</div></div><p><br></p>`;
+            document.execCommand('insertHTML', false, letter);
+        }
+
+        function insertRoyalDoc() {
+            const sel = window.getSelection(); 
+            if (!sel.toString().trim()) return alert("⚠️ ظلل نص الوثيقة أولاً!");
+            
+            const title = prompt("📜 عنوان الوثيقة:", "مرسوم رسمي");
+            const sealText = prompt("📜 نص الختم:", "مختوم");
+            if(title === null || sealText === null) return;
+            const formattedText = sel.toString().replace(/\n/g, '<br>');
+
+            const doc = `
+            <div class="nsw-official-doc">
+                <span class="doc-title">${title}</span>
+                <div class="doc-body">${formattedText}</div>
+                <div class="doc-seal">${sealText}</div>
+            </div><p><br></p>`;
+            
+            document.execCommand('insertHTML', false, doc);
+        }
+
+        function smartParseText() {
+            const editor = document.getElementById('editor'); 
+            let raw = editor.innerText.trim();
+            let lines = raw.split('\n'); 
+            
+            if (lines[0].includes("الفصل") || lines[0].includes("Chapter")) { 
+                document.getElementById('chapterTitle').value = lines[0].trim(); 
+                lines.shift();
+            }
+            
+            let full = lines.join('\n'); 
+            const keywords = ["ملاحظة المترجم", "ملاحظة:", "Tl note:"];
+            for(let k of keywords) { 
+                if(full.includes(k)) { 
+                    let parts = full.split(k); 
+                    full = parts[0].trim(); 
+                    document.getElementById('authorNote').value = parts[1].trim(); 
+                    break; 
+                } 
+            } 
+            editor.innerText = full; 
+            notify("🚀 تم توزيع النص");
+        }
+
+        function generateSEO(inNovel, inChapter, inContent) {
+            const novel = inNovel || document.getElementById('novelName').value || "رواية";
+            const chapter = inChapter || document.getElementById('chapterTitle').value || "فصل";
+            
+            let cleanText = "";
+            if (inContent) {
+                 const tempDiv = document.createElement("div");
+                 tempDiv.innerHTML = inContent;
+                 cleanText = tempDiv.textContent || tempDiv.innerText || "";
+            } else {
+                 const tempDiv = document.createElement("div");
+                 tempDiv.innerHTML = document.getElementById('editor').innerHTML;
+                 cleanText = tempDiv.textContent || tempDiv.innerText || "";
+            }
+
+            let description = cleanText.replace(/\s+/g, ' ').trim().substring(0, 160) + "...";
+            const indexUrl = document.getElementById('indexLink').value || "#";
+            const homeUrl = "https://www.novelskyworld.com"; 
+
+            const seoData = {
+                "@context": "https://schema.org",
+                "@graph": [
+                    {
+                        "@type": "BlogPosting",
+                        "headline": `${novel} - ${chapter}`,
+                        "description": description,
+                        "isPartOf": { "@type": "CreativeWorkSeries", "name": novel, "url": indexUrl }
+                    },
+                    {
+                        "@type": "BreadcrumbList",
+                        "itemListElement": [
+                            { "@type": "ListItem", "position": 1, "name": "الرئيسية", "item": homeUrl },
+                            { "@type": "ListItem", "position": 2, "name": novel, "item": indexUrl },
+                            { "@type": "ListItem", "position": 3, "name": chapter }
+                        ]
+                    }
+                ]
+            };
+            return '<script type="application/ld+json">' + JSON.stringify(seoData) + '</scr' + 'ipt>';
+        }
+
+        function buildStructure(inNovel, inTitle, inContent, inLink, inPrevLink, inNextLink) {
+            const novel = inNovel || (document.getElementById('novelName') ? document.getElementById('novelName').value.trim() : "") || "Novel Sky World";
+            const title = inTitle || (document.getElementById('chapterTitle') ? document.getElementById('chapterTitle').value.trim() : "") || "عنوان الفصل";
+            const link = inLink || (document.getElementById('indexLink') ? document.getElementById('indexLink').value.trim() : "") || "#";
+            const prevUrl = inPrevLink || (document.getElementById('prevLink') ? document.getElementById('prevLink').value.trim() : "") || "";
+            const nextUrl = inNextLink || (document.getElementById('nextLink') ? document.getElementById('nextLink').value.trim() : "") || "";
+            
+            let rawContent = inContent || document.getElementById('editor').innerHTML;
+            const pos = document.getElementById('notePosition') ? document.getElementById('notePosition').value : "none"; 
+            const authorNoteRaw = document.getElementById('authorNote') ? document.getElementById('authorNote').value : ""; 
+            
+            marked.setOptions({ breaks: true, gfm: true });
+
+            let noteHtml = "";
+            if (authorNoteRaw && authorNoteRaw.trim() !== "") {
+               const cleanNote = authorNoteRaw.replace(/"/g, '&quot;').replace(/\n/g, ' ');
+               noteHtml = `<div style="text-align: center; margin: 15px 0;"><span class="nsw-tooltip-term" onclick="nswShowNoteTooltip('${cleanNote}', event)">🪶 ملاحظة المترجم <span class="nsw-tooltip-icon">💬</span></span></div>`;
+            }
+            
+            let content = rawContent.replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+
+            if (content) {
+                // 🎨 محول الأكواد التنسيقية الجمالية المتطابق مع قالب بلوجر الملكي الجديد
+                content = content.replace(/\[cultivation\]([\s\S]*?)\[\/cultivation\]/gi, '<div class="cultivation">$1</div>');
+                content = content.replace(/\[doc(?:\s+seal=["']?([^"']*)["']?)?\]([\s\S]*?)\[\/doc\]/gi, (m, s, inner) => `<div class="chinese-document"><div class="doc-body">${inner.trim()}</div>${s ? `<div class="doc-seal">${s.trim()}</div>` : ''}</div>`);
+                content = content.replace(/\[doc(?:\s+title=["']?([^"']*)["']?)?\]([\s\S]*?)\[\/doc\]/gi, (m, t, inner) => `<div class="nsw-official-doc"><span class="doc-title">${t ? t.trim() : "مرسوم رسمي"}</span><div class="doc-body">${inner.trim()}</div><div class="doc-seal"></div></div>`);
+                content = content.replace(/\[letter(?:\s+type=["']?([^"']*)["']?)?\]([\s\S]*?)\[\/letter\]/gi, (m, t, inner) => `<div class="personal-letter ${t ? t.trim() : ''}">${inner.trim()}</div>`);
+                content = content.replace(/\[rift.*?\]([\s\S]*?)\[\/rift\]/gi, '<div class="nsw-rift">$1</div>');
+                content = content.replace(/\[system red\]([\s\S]*?)\[\/system\]/gi, '<div class="nsw-rift">$1</div>');
+                content = content.replace(/\[system(.*?)\]([\s\S]*?)\[\/system\]/gi, (m, attr, inner) => `<div class="system">${/red/.test(attr) ? '<span class="nsw-line-red">'+inner.trim()+'</span>' : inner.trim()}</div>`);
+                content = content.replace(/\[tip\]([\s\S]*?)\[\/tip\]/gi, '<div class="nsw-tip">$1</div>');
+                content = content.replace(/\[note="([^"]+)"\]([\s\S]*?)\[\/note\]/gi, '<span class="nsw-tooltip-term" onclick="nswShowNoteTooltip(\'$1\', event)">$2 <span class="nsw-tooltip-icon">💬</span></span>');
+                content = content.replace(/\[note\]([\s\S]*?)\[\/note\]/gi, (m, inner) => `<div class="nsw-translator-note">${inner.trim()}</div>`);
+                content = marked.parse(content);
+            }
+
+            const hasPrev = prevUrl && prevUrl !== "#" && prevUrl !== "";
+            const hasNext = nextUrl && nextUrl !== "#" && nextUrl !== "";
+            const hasIndex = link && link !== "#" && link !== "";
+
+            const prevDisplay = hasPrev ? 'display: flex !important;' : 'display: none !important;';
+            const nextDisplay = hasNext ? 'display: flex !important;' : 'display: none !important;';
+            const indexDisplay = hasIndex ? 'display: flex !important;' : 'display: none !important;';
+
+            return `<div class="nsw-chapter-wrapper">
+    <span id="dynamic-novel-name" style="display: none;">${novel}</span>
+    <div id="reading-content">
+        <h1 style="border-bottom: 1px dashed var(--accent-gold-border, #c5a059); color: var(--accent-gold, #c5a059); text-align: center; margin-bottom: 25px; padding-bottom: 15px;">${title}</h1>
+        ${pos === 'top' ? noteHtml : ""}
+        <div class="actual-text" id="nsw-text-body">
+            ${content}
+        </div>
+        ${pos === 'bottom' ? noteHtml : ""}
+    </div>
+    <div class="nsw-chapter-nav">
+        <a class="nsw-btn-fill" href="${hasPrev ? prevUrl : '#'}" id="prev-btn" style="${prevDisplay}">السابق</a>
+        <a class="nsw-btn-fill" href="${hasIndex ? link : '#'}" id="index-btn" style="${indexDisplay}">الفهرس</a>
+        <a class="nsw-btn-fill" href="${hasNext ? nextUrl : '#'}" id="next-btn" style="${nextDisplay}">التالي</a>
+    </div>
+</div>`;
+        }
+
+        function showPreview() {
+            document.getElementById('previewArea').style.display = 'block';
+            document.getElementById('previewContent').innerHTML = buildStructure();
+            notify("👁️ تم تحديث المعاينة");
+        }
+
+        function generateNSWFinal() {
+            const htmlPart = buildStructure();
+            const seoPart = generateSEO();
+            document.getElementById('finalHtml').value = htmlPart + "\n" + seoPart;
+            document.getElementById('resultArea').style.display = 'block';
+            notify("✨ تم التوليد بنجاح");
+        }
+
+        function addLiveLog(type, message, timeStr) {
+            const container = document.getElementById('liveLogContainer');
+            if (!container) return;
+
+            const timeFormatted = timeStr ? ` <span style="color:#93c5fd;">[${timeStr}]</span>` : "";
+            const now = new Date().toLocaleTimeString('ar-IQ');
+            let itemHtml = "";
+
+            if (type === 'success') {
+                itemHtml = `<div style="color: #34d399; margin-bottom: 4px;">✅ <b>[تم النشر / الجدولة]</b> ${message}${timeFormatted} <small style="color:#6b7280;">(${now})</small></div>`;
+            } else if (type === 'draft') {
+                itemHtml = `<div style="color: #fbbf24; margin-bottom: 4px;">⚠️ <b>[سقف الحصة -> مسودة]</b> ${message} <small style="color:#6b7280;">(${now})</small></div>`;
+            } else if (type === 'failed') {
+                itemHtml = `<div style="color: #f87171; margin-bottom: 4px;">🚨 <b>[فشل النشر -> شيت الأخطاء]</b> ${message} <small style="color:#6b7280;">(${now})</small></div>`;
+            } else {
+                itemHtml = `<div style="color: #cbd5e1; margin-bottom: 4px;">ℹ️ ${message} <small style="color:#6b7280;">(${now})</small></div>`;
+            }
+
+            container.innerHTML += itemHtml;
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function updateDashboardStats(stats) {
+            if (stats.total !== undefined) document.getElementById('statTotal').innerText = stats.total;
+            if (stats.published !== undefined) document.getElementById('statPublished').innerText = stats.published;
+            if (stats.drafts !== undefined) document.getElementById('statDrafts').innerText = stats.drafts;
+            if (stats.failed !== undefined) document.getElementById('statFailed').innerText = stats.failed;
+            if (stats.pending !== undefined) document.getElementById('statPendingQueue').innerText = stats.pending;
+
+            if (stats.total > 0) {
+                const doneCount = (stats.published || 0) + (stats.drafts || 0) + (stats.failed || 0);
+                const percent = Math.min(100, Math.round((doneCount / stats.total) * 100));
+                document.getElementById('liveProgressBar').style.width = percent + '%';
+                document.getElementById('liveProgressPercent').innerText = percent + '%';
+            }
+        }
+
+        async function fetchLiveQueueStatus() {
+            notify("📡 جاري فحص حالة الطابور...");
+            try {
+                const res = await fetch(scriptURL + "?action=getStatus");
+                const data = await res.json();
+                if (data.status === "success") {
+                    document.getElementById('statPendingQueue').innerText = data.queueCount;
+                    document.getElementById('statFailed').innerText = data.failedCount;
+                    notify(`✅ الطابور: ${data.queueCount} فصول | أخطاء: ${data.failedCount}`);
+                    addLiveLog('info', `حالة السيرفر: ${data.queueCount} فصل قيد الانتظار، ${data.failedCount} أخطاء مسجلة، ${data.triggersCount} مشغل نشط.`);
+                    return data;
+                }
+            } catch(e) {
+                addLiveLog('info', "السيرفر يعمل في الخلفية.");
+            }
+            return null;
+        }
+
+        async function triggerManualQueueProcess() {
+            notify("⚡ جاري إرسال إشارة تشغيل المعالجة...");
+            try {
+                await fetch(scriptURL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'text/plain' },
+                    body: JSON.stringify({ action: "triggerProcess" })
+                });
+                notify("🚀 تم إطلاق مشغل المعالجة بالخلفية");
+                addLiveLog('info', "تم إرسال أمر بدء معالجة الطابور إلى السيرفر بنجاح.");
+            } catch(err) {
+                alert("❌ تعذر الاتصال بالسيرفر");
+            }
+        }
+
+        function startLiveQueueMonitor(totalExpected) {
+            batchStats = {
+                total: totalExpected,
+                published: 0,
+                drafts: 0,
+                failed: 0,
+                pending: totalExpected
+            };
+            updateDashboardStats(batchStats);
+
+            if (queuePollingInterval) clearInterval(queuePollingInterval);
+
+            let pollAttempts = 0;
+            queuePollingInterval = setInterval(async () => {
+                pollAttempts++;
+                try {
+                    const status = await fetchLiveQueueStatus();
+                    if (status) {
+                        const remaining = status.queueCount;
+                        const processed = Math.max(0, totalExpected - remaining);
+                        batchStats.published = processed;
+                        batchStats.pending = remaining;
+                        batchStats.failed = status.failedCount || 0;
+                        updateDashboardStats(batchStats);
+
+                        if (remaining === 0) {
+                            clearInterval(queuePollingInterval);
+                            addLiveLog('success', `🎉 اكتملت معالجة كافة الفصول في الطابور بنجاح! الإجمالي: ${totalExpected}`);
+                            updateDashboardStats({ total: totalExpected, published: totalExpected, pending: 0 });
+                            notify("🎉 تم نشر ومعالجة الطابور بالكامل!");
+                        }
+                    }
+                } catch(err) {}
+
+                if (pollAttempts >= 60) clearInterval(queuePollingInterval);
+            }, 5000);
+        }
+
+        async function publishDirectToBlogger() {
+            const novelName = document.getElementById('novelName').value.trim() || "رواية عامة";
+            const chapterTitle = document.getElementById('chapterTitle').value || "فصل جديد";
+            const cleanContentHTML = buildStructure();
+            const scheduledDate = document.getElementById('publishDate').value; 
+
+            if (!cleanContentHTML) return alert("⚠️ المحتوى فارغ!");
+            saveCurrentNovelName(novelName);
+            notify("⏳ جاري إرسال الفصل إلى طابور النشر...");
+            
+            const dateIso = scheduledDate ? new Date(scheduledDate).toISOString() : "";
+            const displayTime = scheduledDate ? new Date(scheduledDate).toLocaleString("ar-IQ") : "فوري الآن";
+
+            const singleChapter = {
+                title: `${novelName} - ${chapterTitle}`,
+                content: cleanContentHTML,
+                publishDate: dateIso,
+                labels: [novelName, "آخر الفصول"]
+            };
+
+            addLiveLog('info', `بدء إرسال: ${singleChapter.title}`);
+
+            try {
+                await fetch(scriptURL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'text/plain' },
+                    body: JSON.stringify({
+                        action: "saveToQueue",
+                        labels: [novelName, "آخر الفصول"],
+                        chapters: [singleChapter]
+                    })
+                });
+                
+                notify("🚀 تم الحفظ في طابور النشر بنجاح!");
+                addLiveLog('success', `${singleChapter.title}`, displayTime);
+                updateDashboardStats({ total: 1, published: 1, pending: 0 });
+                alert(`✅ تم إرسال الفصل لطابور النشر بنجاح!\n\nالرواية: ${novelName}\nالعنوان: ${chapterTitle}`);
+            } catch (error) {
+                addLiveLog('failed', `${singleChapter.title} (خطأ اتصال)`);
+            }
+        } 
+
+        function toggleCustomTime() {
+            const val = document.getElementById('scheduleInterval').value;
+            const area = document.getElementById('customTimeArea');
+            area.style.display = (val === 'custom_2') ? 'block' : 'none';
+        }
+
+        function processBulkFile() {
+            const fileInput = document.getElementById('bulkFile');
+            if (!fileInput.files.length) return alert("⚠️ يرجى اختيار ملف (.txt أو .docx) أولاً");
+
+            const file = fileInput.files[0];
+            const fileName = file.name.toLowerCase();
+
+            document.getElementById('bulkPreviewResult').style.display = 'block';
+            document.getElementById('bulkPreviewResult').innerHTML = '<p style="color:yellow;">⏳ جاري تحليل الفصول وترتيبها بدقة...</p>';
+
+            if (fileName.endsWith('.txt') || file.type === 'text/plain') {
+                const reader = new FileReader();
+                reader.onload = function(e) { parseChaptersFromPlainText(e.target.result); };
+                reader.readAsText(file, 'UTF-8');
+            } else if (fileName.endsWith('.docx')) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    mammoth.convertToHtml({arrayBuffer: event.target.result})
+                        .then(result => parseChaptersLineByLine(result.value))
+                        .catch(err => alert("❌ خطأ في قراءة ملف Word."));
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        }
+
+        function extractChapterNum(str) {
+            if (!str) return 0;
+            const match = str.match(/(?:الفصل|Chapter|Ch\.)\s*(\d+)/i);
+            if (match && match) return parseInt(match, 10);
+            const anyNum = str.match(/\d+/);
+            return anyNum ? parseInt(anyNum[0], 10) : 0;
+        }
+
+        function parseChaptersFromPlainText(plainText) {
+            let text = plainText.replace(/^\uFEFF/, '').trim();
+            extractedChapters = [];
+
+            if (text.includes("===CHAPTER_START===")) {
+                const chapterBlockRegex = /===CHAPTER_START===([\s\S]*?)===CHAPTER_END===/gi;
+                let match;
+                while ((match = chapterBlockRegex.exec(text)) !== null) {
+                    let block = match.trim();
+                    if (!block) continue;
+
+                    let titleMatch = block.match(/TITLE:\s*([^\r\n]+)/i);
+                    let title = titleMatch ? titleMatch.trim() : "فصل بدون عنوان";
+
+                    let content = "";
+                    let contentIndex = block.search(/CONTENT:\s*/i);
+                    if (contentIndex !== -1) {
+                        content = block.substring(contentIndex).replace(/^CONTENT:\s*/i, '').trim();
+                    } else {
+                        content = block.replace(/TITLE:\s*[^\r\n]+/i, '').trim();
+                    }
+
+                    let formattedContent = content.split(/\r?\n\r?\n/).map(p => p.trim()).filter(p => p.length > 0).join('<br><br>');
+
+                    extractedChapters.push({
+                        title: title,
+                        content: formattedContent,
+                        num: extractChapterNum(title)
+                    });
+                }
+            }
+            extractedChapters.sort((a, b) => (a.num || 0) - (b.num || 0));
+            renderBulkPreview();
+        }
+
+        function parseChaptersLineByLine(fullHtml) {
+            let tempDiv = document.createElement('div');
+            tempDiv.innerHTML = fullHtml.replace(/<\/p>/gi, '\n\n').replace(/<br\s*\/?>/gi, '\n').replace(/<\/h\d>/gi, '\n\n');
+            parseChaptersFromPlainText(tempDiv.innerText);
+        }
+
+        function renderBulkPreview() {
+            const previewDiv = document.getElementById('bulkPreviewResult');
+            previewDiv.innerHTML = "";
+            
+            if (extractedChapters.length === 0) {
+                previewDiv.innerHTML = '<p style="color:red;">❌ لم يتم العثور على فصول محصورة بين علامات البداية والنهاية!</p>';
+                return;
+            }
+
+            extractedChapters.forEach((chap, i) => {
+                previewDiv.innerHTML += `
+                    <div style="border-bottom: 1px solid #333; padding: 8px; display: flex; justify-content: space-between;">
+                        <span style="color: var(--gold-main)">#${i+1} [فصل ${chap.num || '؟'}] ✅ ${chap.title}</span>
+                        <span style="font-size: 11px; color: #888;">(${chap.content.length} حرف)</span>
+                    </div>`;
+            });
+
+            document.getElementById('chaptersCount').innerText = `✅ تم استخراج وترتيب ${extractedChapters.length} فصل بنجاح`;
+            document.getElementById('bulkControls').style.display = 'block';
+        }
+
+        async function startBulkUploadQueue() {
+            const novelName = document.getElementById('novelName').value.trim() || "رواية جديدة";
+            const indexLink = document.getElementById('indexLink').value || "#";
+            const mode = document.getElementById('scheduleInterval').value;
+            const startDateInput = document.getElementById('bulkStartDate').value;
+            let baseDate = startDateInput ? new Date(startDateInput) : new Date();
+
+            if (extractedChapters.length === 0) return alert("⚠️ لا توجد فصول لرفعها!");
+            if (!confirm(`سيتم إرسال ${extractedChapters.length} فصلاً إلى طابور النشر.`)) return;
+
+            saveCurrentNovelName(novelName);
+            document.querySelector('#bulkControls button').style.display = 'none';
+            const log = document.getElementById('uploadLog');
+            const progressBar = document.getElementById('progressBar');
+
+            let allChaptersPayload = [];
+            log.innerText = "⚙️ جاري توليد التواقيت وتطبيق الجدولة الذكية...";
+            let lastScheduledMillis = baseDate.getTime();
+
+            for (let i = 0; i < extractedChapters.length; i++) {
+                let chapter = extractedChapters[i];
+                let chapNum = chapter.num || (i + 1);
+                let scheduledTime;
+
+                if (mode === 'smart_baghdad') {
+                    if (chapNum <= 50) {
+                        scheduledTime = new Date(baseDate.getTime() + (i * 10 * 1000));
+                    } else {
+                        let offset = chapNum - 50 - 1;
+                        let dayOffset = Math.floor(offset / 2) + 1;
+                        let slot = offset % 2;
+                        let bHour = (slot === 0) ? 9 : 16;
+                        let sDate = new Date(baseDate.getTime());
+                        sDate.setUTCDate(sDate.getUTCDate() + dayOffset);
+                        sDate.setUTCHours(bHour - 3, 0, 0, 0);
+                        scheduledTime = sDate;
+                    }
+                } else if (mode === '0') {
+                    scheduledTime = new Date(baseDate.getTime() + (i * 10 * 1000));
+                } else {
+                    let intervalHours = parseInt(mode, 10) || 24;
+                    scheduledTime = new Date(baseDate.getTime() + (i * intervalHours * 60 * 60 * 1000));
+                }
+
+                if (scheduledTime.getTime() <= lastScheduledMillis && i > 0) {
+                    scheduledTime = new Date(lastScheduledMillis + (60 * 1000));
+                }
+                lastScheduledMillis = scheduledTime.getTime();
+
+                let htmlStructure = buildStructure(novelName, chapter.title, chapter.content, indexLink);
+                allChaptersPayload.push({
+                    title: `${novelName} - ${chapter.title}`,
+                    content: htmlStructure,
+                    publishDate: scheduledTime.toISOString(),
+                    labels: [novelName, "آخر الفصول"]
+                });
+            }
+
+            progressBar.style.width = "50%";
+
+            try {
+                await fetch(scriptURL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'text/plain' },
+                    body: JSON.stringify({
+                        action: "saveToQueue",
+                        novelName: novelName,
+                        labels: [novelName, "آخر الفصول"],
+                        chapters: allChaptersPayload
+                    })
+                });
+
+                progressBar.style.width = "100%";
+                log.innerText = "✅ تم استلام الدفعة بنجاح!";
+                startLiveQueueMonitor(allChaptersPayload.length);
+                alert(`🎉 تم إيداع ${extractedChapters.length} فصلاً في طابور النشر بنجاح!`);
+            } catch (e) {
+                alert("❌ حدث خطأ في الاتصال.");
+                document.querySelector('#bulkControls button').style.display = 'block';
+            }
+        }  
+
+        function smartCopy() { document.getElementById('finalHtml').select(); document.execCommand('copy'); notify("📋 تم النسخ"); }
+        function openColorModal() { document.getElementById('modal-overlay').style.display = 'block'; document.getElementById('color-modal').style.display = 'block'; }
+        function closeColorModal() { document.getElementById('modal-overlay').style.display = 'none'; document.getElementById('color-modal').style.display = 'none'; }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            initNovelHistory();
+            syncNovelsFromIndexSheet();
+        });
+    
+
+// ==============================================================================
+// 🎭 منظومة تشغيل Claude Opus بنظام النقرتين من صفحة الترجمة والنشر
+// ==============================================================================
+const NSW_LOCAL_API = "http://127.0.0.1:58242";
+
+async function fetchOpusStatus() {
+    const badge = document.getElementById("opusStatusBadge");
+    try {
+        const res = await fetch(NSW_LOCAL_API + "/api/status");
+        if (res.ok) {
+            const data = await res.json();
+            const pEl = document.getElementById("opusCountPending");
+            const aEl = document.getElementById("opusCountApproved");
+            const pubEl = document.getElementById("opusCountPublished");
+            if (pEl) pEl.innerText = data.pending;
+            if (aEl) aEl.innerText = data.approved;
+            if (pubEl) pubEl.innerText = data.published;
+            if (badge) {
+                badge.innerText = "🟢 متصل بالخادم المحلي";
+                badge.style.color = "#a6e3a1";
+                badge.style.borderColor = "#a6e3a1";
+            }
+        }
+    } catch(e) {
+        if (badge) {
+            badge.innerText = "🟡 السيرفر المحلي غير متصل (جاهز للتشغيل)";
+            badge.style.color = "#f9e2af";
+            badge.style.borderColor = "#f9e2af";
+        }
+    }
+}
+
+async function executeOpusClick1() {
+    const logEl = document.getElementById("opusWebLog");
+    const btn = document.getElementById("btnWebOpusStage");
+    if (logEl) logEl.innerText = "⏳ جاري سحب الفصول وتجريدها وفلترة القاموس المعتمد وتجهيز أمر كلاود...";
+    if (btn) btn.disabled = true;
+
+    try {
+        const res = await fetch(NSW_LOCAL_API + "/api/opus/stage", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ limit: 20, novel: "After Severing Ties" })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            if (logEl) logEl.innerText = "🎉 " + data.message;
+            copyOpusPromptWeb();
+            if (typeof notify === "function") notify("✅ تم سحب الفصول وتجهيز أمر كلاود والقاموس بنجاح!");
+        } else {
+            throw new Error("استجابة غير متوقعة من الخادم");
+        }
+    } catch(err) {
+        if (logEl) logEl.innerText = "⚠️ تعذر الاتصال بالخادم المحلي 58242. شغّل لوحة_تحكم_أوبس.bat على اللابتوب.";
+        alert("⚠️ لم يتمكن المتصفح من الاتصال بخادم البايثون المحلي على المنفذ 58242.\nشغّل ملف 'لوحة_تحكم_أوبس.bat' على سطح المكتب، ثم أعد الضغط.");
+    } finally {
+        if (btn) btn.disabled = false;
+        fetchOpusStatus();
+    }
+}
+
+async function executeOpusClick2() {
+    const logEl = document.getElementById("opusWebLog");
+    const btn = document.getElementById("btnWebOpusPublish");
+    if (logEl) logEl.innerText = "🚀 جاري اعتماد الفصول وإعادة التغليف الملكي والرفع لبلوجر بمواعيدها المجدولة...";
+    if (btn) btn.disabled = true;
+
+    try {
+        const res = await fetch(NSW_LOCAL_API + "/api/opus/publish", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ novel: "After Severing Ties" })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            if (logEl) logEl.innerText = "🎉 " + data.message;
+            if (typeof notify === "function") notify("🚀 تم اعتماد ورفع الفصول إلى Blogger وصيانة مواعيد الجدولة بدقة 100%!");
+        } else {
+            throw new Error("استجابة غير متوقعة من الخادم");
+        }
+    } catch(err) {
+        if (logEl) logEl.innerText = "⚠️ تعذر الاتصال بالخادم المحلي 58242. تأكد من تشغيل البوت أو لوحة_تحكم_أوبس.bat.";
+        alert("⚠️ لم يتمكن المتصفح من الاتصال بخادم البايثون المحلي على المنفذ 58242.\nشغّل ملف 'لوحة_تحكم_أوبس.bat' على سطح المكتب، ثم أعد الضغط.");
+    } finally {
+        if (btn) btn.disabled = false;
+        fetchOpusStatus();
+    }
+}
+
+async function copyOpusPromptWeb() {
+    try {
+        const res = await fetch(NSW_LOCAL_API + "/api/opus/prompt");
+        if (res.ok) {
+            const data = await res.json();
+            if (data.prompt) {
+                await navigator.clipboard.writeText(data.prompt);
+                if (typeof notify === "function") notify("📋 تم نسخ أمر كلاود مع القاموس المفلتر إلى الحافظة!");
+                const logEl = document.getElementById("opusWebLog");
+                if (logEl) logEl.innerText = "📋 تم نسخ أمر كلاود أوبس مع القاموس المفلتر بنجاح (جاهز للصق بـ Ctrl+V).";
+                return;
+            }
+        }
+    } catch(e) {}
+    if (typeof notify === "function") notify("ℹ️ يمكنك نسخ الأمر من ملف CLAUDE_PROMPT_FOR_BATCH.txt أو من لوحة أوبس.");
+}
+
+async function syncBloggerDatesWeb() {
+    const logEl = document.getElementById("opusWebLog");
+    if (logEl) logEl.innerText = "🔄 جاري إطلاق المزامنة ثنائية الاتجاه لتواريخ النشر بين Blogger والجداول...";
+    try {
+        const res = await fetch(NSW_LOCAL_API + "/api/sync_dates", { method: "POST" });
+        if (res.ok) {
+            if (typeof notify === "function") notify("🔄 تم إطلاق المزامنة ثنائية الاتجاه لتواريخ النشر بنجاح!");
+            if (logEl) logEl.innerText = "✅ تم تشغيل فحص ومزامنة التواريخ في الخلفية بنجاح.";
+            return;
+        }
+    } catch(e) {}
+    
+    // بديل عبر WebApp مباشرة
+    try {
+        await fetch(scriptURL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ action: "syncBloggerDates" })
+        });
+        if (typeof notify === "function") notify("🔄 تم إرسال أمر المزامنة ثنائية الاتجاه إلى Google Apps Script بنجاح!");
+        if (logEl) logEl.innerText = "✅ تم إرسال أمر المزامنة إلى Google Apps Script.";
+    } catch(err2) {
+        alert("❌ تعذر إرسال طلب المزامنة.");
+    }
+}
+
+setInterval(fetchOpusStatus, 6000);
+window.addEventListener("DOMContentLoaded", fetchOpusStatus);
+
+</script>
+</body>
+</html>

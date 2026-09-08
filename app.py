@@ -380,9 +380,9 @@ with st.sidebar:
     # 3. اختيار نموذج Gemini
     ai_model = st.selectbox(
         "🧠 نموذج الذكاء الاصطناعي للتحليل الفوري",
-        options=["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.8-flash", "gemini-3.5-flash-lite"],
+        options=["gemini-3.6-flash", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-3.5-flash-lite"],
         index=0,
-        help="اختر النموذج الأنسب لمعالجة نصوص الـ HTML."
+        help="اختر النموذج الأنسب لمعالجة نصوص الـ HTML واستخراج المحددات."
     )
 
     # أزرار الفحص والاختبار
@@ -511,11 +511,13 @@ with col_novel_name:
         help="اكتب اسم الرواية هنا ليتم اعتماده وتفريغ الفصول في Google Sheet بهذا الاسم بدلاً من العنوان التلقائي للموقع."
     )
 
-col_btn_primary, col_btn_ai = st.columns([1, 1])
+col_btn_primary, col_btn_ai, col_btn_deep = st.columns([1.2, 1.1, 1.1])
 with col_btn_primary:
     fast_load_clicked = st.button("📑 جلب وفهرسة الفصول", use_container_width=True, type="primary")
 with col_btn_ai:
-    force_ai_clicked = st.button("🤖 تحليل متقدم بـ AI", use_container_width=True)
+    force_ai_clicked = st.button("🤖 استكشاف هجين & AI", use_container_width=True, help="فحص سريع وتحليل بالذكاء الاصطناعي الخفيف")
+with col_btn_deep:
+    deep_ai_clicked = st.button("🧠 طلبك للتحليل المعماري العميق (Pro)", use_container_width=True, help="تحليل معماري شامل بكامل قدرة الذكاء الاصطناعي المتقدم والـ DOM الهندسي")
 
 # معالجة استخراج الدومين والتحقق من التخزين المؤقت
 if toc_url_input:
@@ -581,13 +583,15 @@ if fast_load_clicked and toc_url_input:
             st.warning(f"تعثر الفحص التلقائي: {err_msg}\nيرجى تجربة 'تحليل متقدم بـ AI'.")
 
 # ------------------------------------------------------------------------------
-# معالجة الخطوة 2: التحليل المتقدم بالذكاء الاصطناعي (Gemini AI Fallback)
+# معالجة الخطوة 2: التحليل المتقدم بالذكاء الاصطناعي (Gemini AI Fallback & Deep Analysis)
 # ------------------------------------------------------------------------------
-if (force_ai_clicked or st.session_state.show_ai_fallback) and toc_url_input:
-    if force_ai_clicked:
-        with st.spinner("جاري استخراج كود DOM وتحليله عبر Gemini AI لاستخراج أدق المحددات..."):
+if (force_ai_clicked or deep_ai_clicked or st.session_state.show_ai_fallback) and toc_url_input:
+    if force_ai_clicked or deep_ai_clicked:
+        target_model = "gemini-3.6-flash" if deep_ai_clicked else ai_model
+        model_label = "Gemini 3.6 Flash / Pro (تحليل معماري فائق)" if deep_ai_clicked else ai_model
+        with st.spinner(f"جاري استخراج كود DOM وتحليله عبر {model_label} لاستخراج أدق المحددات..."):
             try:
-                add_log(f"🤖 جاري تشغيل تحليل الذكاء الاصطناعي ({ai_model}) لموقع {toc_url_input}...")
+                add_log(f"🤖 جاري تشغيل تحليل الذكاء الاصطناعي ({target_model}) لموقع {toc_url_input}...")
                 toc_html, ch_html, detected_title = fetch_samples_for_gemini_analysis(toc_url_input)
                 
                 # استخدام رابط الوسيط النشط إذا وُجد
@@ -596,7 +600,7 @@ if (force_ai_clicked or st.session_state.show_ai_fallback) and toc_url_input:
                     toc_html=toc_html,
                     chapter_html=ch_html,
                     api_key=effective_key,
-                    model_name=ai_model,
+                    model_name=target_model,
                     gas_url=active_gas
                 )
 

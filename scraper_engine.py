@@ -11,7 +11,11 @@ from urllib.parse import urljoin, urlparse
 from typing import List, Dict, Any, Optional, Tuple, Callable
 from bs4 import BeautifulSoup
 import tldextract
+import logging
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
+
+logger = logging.getLogger("scraper_engine")
+logging.basicConfig(level=logging.INFO)
 
 import os
 import requests
@@ -412,9 +416,64 @@ def crawl_toc_chapters(
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
     سحب صفحة الفهرس واستخراج كافة روابط الفصول مع التعرف الذكي على الفصول الرقمية:
-    يدعم المواقع التي تستخدم أرقاماً فقط بدون كلمة 'فصل' أو 'Chapter' وترتيبها تصاعدياً.
+    يدعم المواقع التي تستخدم أرقاماً فقط بدون كلمة 'فصل' أو 'Chapter' وترتيبها تصاعدياً،
+    بالإضافة للدعم المباشر لمنصات SPA الحديثة (مثل botitranslation / mystorywave) عبر واجهات API الصاروخية.
     ترجع قائمة الفصول وعنوان الرواية.
     """
+    # 🌟 دعم مباشر لمنصة botitranslation.com عبر واجهة REST API
+    if "botitranslation.com" in toc_url or "mystorywave.com" in toc_url:
+        m_b = re.search(r"/(?:book|chapters)/(\d+)", toc_url)
+        if m_b:
+            b_id = m_b.group(1)
+            try:
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Referer": "https://botitranslation.com/"}
+                # جلب معلومات الرواية
+                b_title = "رواية"
+                try:
+                    b_info = requests.get(f"https://api.mystorywave.com/story-wave-backend/api/v1/content/books/{b_id}", headers=headers, timeout=20).json()
+                    b_title = (b_info.get("data") or {}).get("bookName") or "رواية"
+                except Exception:
+                    pass
+
+                if b_title == "رواية":
+                    m_slug = re.search(r"/book/\d+-([^/?#]+)", toc_url)
+                    if m_slug:
+                        b_title = m_slug.group(1).replace("-", " ").title()
+
+                # جلب كافة الفصول عبر الصفحات بسرعة مع pageSize=100
+                page_num = 1
+                api_chaps = []
+                while page_num <= 100:
+                    api_url = f"https://api.mystorywave.com/story-wave-backend/api/v1/content/chapters/page?bookId={b_id}&pageNumber={page_num}&pageSize=100"
+                    r_api = requests.get(api_url, headers=headers, timeout=20).json()
+                    c_data = r_api.get("data", {})
+                    c_list = c_data.get("list", [])
+                    if not c_list:
+                        break
+                    api_chaps.extend(c_list)
+                    total_pages = c_data.get("totalPages", 1)
+                    if page_num >= total_pages:
+                        break
+                    page_num += 1
+
+                # ترتيب الفصول تصاعدياً من 1 فصاعداً
+                api_chaps.sort(key=lambda x: x.get("chapterOrder", 0))
+                structured = []
+                for item in api_chaps:
+                    c_order = item.get("chapterOrder", 0)
+                    c_id = item.get("id")
+                    c_title = item.get("title", f"الفصل {c_order}").strip()
+                    structured.append({
+                        "chapter_number": c_order,
+                        "title": c_title,
+                        "url": f"https://api.mystorywave.com/story-wave-backend/api/v1/content/chapters/{c_id}"
+                    })
+                if structured:
+                    logger.info(f"[botitranslation API] Extracted {len(structured)} chapters directly via API for book: {b_title}")
+                    return structured, b_title
+            except Exception as e_boti:
+                logger.warning(f"Error fetching botitranslation API: {e_boti}")
+
     normalized_url = normalize_toc_url(toc_url)
     should_close_browser = False
     if browser_instance is None:
@@ -751,9 +810,18 @@ class NovelScrapingSession:
                     self.log(f"👷 [خيط {worker_id}] ➔ سحب الفصل {ch_num}...")
 
                     try:
-                        raw_html, _ = browser.get_page_html(ch_url, wait_selector=content_sel)
-                        ch_title = extract_chapter_title(raw_html, title_sel, fallback_number=ch_num)
-                        clean_content = clean_chapter_content(raw_html, content_sel, purge_sels)
+                        if "api.mystorywave.com" in ch_url:
+                            # ⚡ مسار فائق السرعة عبر API لمنصة botitranslation / mystorywave
+                            headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://botitranslation.com/"}
+                            r_json = requests.get(ch_url, headers=headers, timeout=15).json()
+                            c_dict = r_json.get("data", {})
+                            ch_title = c_dict.get("title") or f"الفصل {ch_num}"
+                            raw_html = c_dict.get("content", "")
+                            clean_content = clean_chapter_content(raw_html, "body", purge_sels)
+                        else:
+                            raw_html, _ = browser.get_page_html(ch_url, wait_selector=content_sel)
+                            ch_title = extract_chapter_title(raw_html, title_sel, fallback_number=ch_num)
+                            clean_content = clean_chapter_content(raw_html, content_sel, purge_sels)
 
                         if not clean_content or len(clean_content) < 50:
                             raise ValueError("المحتوى المستخرج صغير جداً أو محجوب.")

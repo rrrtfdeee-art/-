@@ -14,6 +14,8 @@ Smart Novel Scraper - Gemini AI & Multi-GAS Distributed Pool v2.0
 import json
 import re
 import os
+import time
+import logging
 import itertools
 import threading
 import concurrent.futures
@@ -22,6 +24,8 @@ from typing import Dict, List, Any, Optional, Tuple
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 import database
+
+logger = logging.getLogger("gemini_analyzer")
 
 DEFAULT_GAS_POOL = [
     "https://script.google.com/macros/s/AKfycbwk3rNPfyP6lJw5jkXigqUfTgivsNzgDoyhd61lPiRSFZP49jFShKaz-CfnUqlM9OmH/exec",
@@ -71,6 +75,7 @@ class GoogleAppsScriptPool:
 
     def __init__(self, endpoints: Optional[List[str]] = None):
         self.endpoints: List[str] = []
+        self._exhausted_until: Dict[str, float] = {}  # {endpoint_url: expire_timestamp}
         self._counter = 0
         self.update_endpoints(endpoints)
 
@@ -87,16 +92,28 @@ class GoogleAppsScriptPool:
                 else:
                     self.endpoints = list(DEFAULT_GAS_POOL)
 
-    def get_endpoints(self) -> List[str]:
+    def mark_exhausted(self, endpoint: str, hours: float = 24.0):
+        """حظر وإخراج الوسيط أو المفتاح من الطابور ليوم كامل (24 ساعة) عند نفاد حصته اليومية."""
         with self._lock:
-            return list(self.endpoints)
+            expire_at = time.time() + (hours * 3600)
+            self._exhausted_until[endpoint] = expire_at
+            logger.warning(f"🚫 [إخراج وسيط من الخدمة]: تم تجميد الرابط {endpoint[:35]}... لمدة {hours} ساعة بسبب نفاد الحصة اليومية.")
+
+    def get_endpoints(self) -> List[str]:
+        """الحصول على قائمة السيرفرات النشطة فقط واستبعاد من هم في فترة الحظر (Quarantine)."""
+        with self._lock:
+            now = time.time()
+            # تصفية الروابط التي انتهت مدة حظرها
+            active = [ep for ep in self.endpoints if self._exhausted_until.get(ep, 0) <= now]
+            return active if active else list(self.endpoints)
 
     def get_next_endpoint(self) -> str:
-        """الحصول على الرابط التالي في المجمع عبر Round-Robin."""
+        """الحصول على الرابط التالي في المجمع عبر Round-Robin مع تجاهل المفاتيح المحظورة."""
+        active = self.get_endpoints()
         with self._lock:
-            if not self.endpoints:
+            if not active:
                 return DEFAULT_GAS_URL
-            endpoint = self.endpoints[self._counter % len(self.endpoints)]
+            endpoint = active[self._counter % len(active)]
             self._counter += 1
             return endpoint
 
@@ -218,17 +235,18 @@ def auto_detect_selectors_heuristically(toc_html: str, chapter_html: str) -> Dic
 
 
 ALLOWED_MODELS_POOL = [
-    "gemini-3.5-flash-lite",  # 500 RPD, 15 RPM
-    "gemini-3.1-flash-lite",  # 500 RPD, 15 RPM
-    "gemini-3.8-flash",       # 20 RPD, 5 RPM
-    "gemini-3.7-flash",       # 20 RPD, 5 RPM
+    "gemini-3.6-flash",       # High intelligence, modern flash model
+    "gemini-3.8-flash",       # High reasoning & coding
+    "gemini-3.5-flash-lite",  # High quota fallback
+    "gemini-3.1-flash-lite",  # High quota fallback
+    "gemini-3.7-flash",
 ]
-BLOCKED_ZERO_QUOTA_MODELS = {"gemini-2.5-pro", "gemini-3.1-pro", "gemini-2-flash", "gemini-2-flash-lite"}
+BLOCKED_ZERO_QUOTA_MODELS = {"gemini-2-flash", "gemini-2-flash-lite"}
 
 def call_gemini_api(
     prompt: str,
     api_key: Optional[str] = None,
-    model_name: str = "gemini-3.5-flash-lite",
+    model_name: str = "gemini-3.6-flash",
     gas_url: Optional[str] = None,
     timeout: int = 60
 ) -> str:
@@ -238,9 +256,8 @@ def call_gemini_api(
     وسلسلة تبديل النماذج الذكية المعتمدة على جدول الحصص (Gemini_API_Rate_Limits.xlsx).
     """
     clean_model = model_name.replace("models/", "").strip()
-    # حماية النماذج: منع النماذج ذات الحصة الصفرية (مثل Pro) وتحويلها للنموذج الأساسي
-    if clean_model in BLOCKED_ZERO_QUOTA_MODELS or "pro" in clean_model.lower():
-        clean_model = "gemini-3.5-flash-lite"
+    if clean_model in BLOCKED_ZERO_QUOTA_MODELS:
+        clean_model = "gemini-3.6-flash"
 
     models_to_try = [clean_model]
     for m in ALLOWED_MODELS_POOL:
@@ -249,11 +266,17 @@ def call_gemini_api(
 
     stored_key = (api_key or "").strip() or database.get_setting("gemini_api_key", os.getenv("GEMINI_API_KEY", ""))
 
-    # تجهيز قائمة الوسائط
+    # تجهيز قائمة الوسائط مع تدوير الحمل التلقائي (Round-Robin) لضمان توزيع الطلبات
     if gas_url and gas_url.strip().startswith("http"):
         endpoints_to_try = [gas_url.strip()]
     else:
-        endpoints_to_try = gas_pool.get_endpoints()
+        all_eps = gas_pool.get_endpoints()
+        if all_eps:
+            start_ep = gas_pool.get_next_endpoint()
+            start_idx = all_eps.index(start_ep) if start_ep in all_eps else 0
+            endpoints_to_try = all_eps[start_idx:] + all_eps[:start_idx]
+        else:
+            endpoints_to_try = [DEFAULT_GAS_URL]
 
     last_error = ""
 
@@ -305,7 +328,11 @@ def call_gemini_api(
                 
                 data = res.json()
                 if "error" in data:
-                    last_error = f"خطأ من الوسيط: {data['error']}"
+                    err_msg = str(data["error"])
+                    last_error = f"خطأ من الوسيط: {err_msg}"
+                    # إذا كان الخطأ نفاد الحصة، نعزل هذا السيرفر/المفتاح لمدة 24 ساعة فوراً
+                    if any(q in err_msg.lower() for q in ["quota", "limit", "429", "resource_exhausted", "free tier", "exhausted"]):
+                        gas_pool.mark_exhausted(endpoint, hours=24.0)
                     continue
                 
                 # نجاح الاستجابة
@@ -313,7 +340,10 @@ def call_gemini_api(
                 if text_val:
                     return text_val
             except Exception as e_endpoint:
-                last_error = str(e_endpoint)
+                err_str = str(e_endpoint)
+                last_error = err_str
+                if any(q in err_str.lower() for q in ["quota", "limit", "429", "resource_exhausted"]):
+                    gas_pool.mark_exhausted(endpoint, hours=24.0)
                 continue
 
     raise RuntimeError(f"تعذر استلام الرد من جميع مصادر الذكاء الاصطناعي المتاحة: {last_error}")

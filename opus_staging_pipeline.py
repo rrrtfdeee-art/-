@@ -20,6 +20,7 @@ import sys
 import json
 import logging
 import requests
+from datetime import datetime
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
 from pathlib import Path

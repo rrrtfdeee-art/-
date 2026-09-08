@@ -28,6 +28,7 @@ import database
 import scraper_engine
 import media_engine
 import cinema_engine
+import nsw_healer_engine
 from gemini_analyzer import DEFAULT_GAS_URL
 
 # اسم مستخدم البوت الافتراضي وتوكن التحكم
@@ -229,17 +230,23 @@ def create_bot_app():
             btn_repair = types.InlineKeyboardButton("🛡️ الإصلاح الشامل الفائق", callback_data="cb_nsw_repair")
             btn_dates = types.InlineKeyboardButton("🗓️ إصلاح تواريخ النشر", callback_data="cb_fix_dates_start")
             btn_nav = types.InlineKeyboardButton("🔗 صيانة أزرار التنقل", callback_data="cb_nsw_nav")
-            btn_status = types.InlineKeyboardButton("📊 حالة المنظومة", callback_data="cb_nsw_status")
+            btn_sync = types.InlineKeyboardButton("🔄 مطابقة الشيت مع بلوجر", callback_data="cb_sync_blogger_start")
+            btn_dups = types.InlineKeyboardButton("🧹 تطهير الفصول المكررة", callback_data="cb_purge_dups_start")
+            btn_time = types.InlineKeyboardButton("⏱️ فحص تسلسل الجدولة", callback_data="cb_check_timeline_start")
             btn_gaps = types.InlineKeyboardButton("🧩 سد الفجوات الترقيمية", callback_data="cb_nsw_gaps")
             btn_heal = types.InlineKeyboardButton("🩹 استصلاح المبتورات", callback_data="cb_nsw_heal")
+            btn_export = types.InlineKeyboardButton("📥 تصدير فصول TXT", callback_data="cb_export_chapters_start")
             btn_stage = types.InlineKeyboardButton("🎭 صقل أوبس (Opus)", callback_data="cb_nsw_stage")
+            btn_status = types.InlineKeyboardButton("📊 حالة المنظومة", callback_data="cb_nsw_status")
             btn_stop = types.InlineKeyboardButton("🛑 إيقاف فوري", callback_data="cb_nsw_stop")
             btn_help = types.InlineKeyboardButton("📋 دليل الأوامر", callback_data="cb_nsw_help")
             markup.add(btn_repair)
             markup.add(btn_dates, btn_nav)
+            markup.add(btn_sync, btn_dups)
+            markup.add(btn_time, btn_status)
             markup.add(btn_gaps, btn_heal)
-            markup.add(btn_status, btn_stage)
-            markup.add(btn_stop, btn_help)
+            markup.add(btn_export, btn_stage)
+            markup.add(btn_help, btn_stop)
 
         bot.reply_to(message, text, reply_markup=markup)
 
@@ -551,6 +558,97 @@ def create_bot_app():
                 bot.send_message(message.chat.id, f"❌ خطأ أثناء النشر: {e}")
         threading.Thread(target=_run, daemon=True).start()
 
+    @bot.message_handler(commands=['export_chapters', 'export', 'get_chapters', 'dump_chapters'])
+    def nsw_export_chapters_cmd(message):
+        """تصدير فصول رواية من مدونة بلوجر بملف TXT نظيف."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+            return
+
+        # تحليل الأمر: /export [الرواية] [النطاق] أو /export [النطاق]
+        raw_text = message.text.strip()
+        parts = raw_text.split(None, 1)
+        args_str = parts[1].strip() if len(parts) > 1 else ""
+
+        if not args_str:
+            markup = make_novel_selection_markup("cb_nvexport", include_all=False)
+            bot.reply_to(
+                message,
+                "📥 <b>[تصدير فصول من مدونة بلوجر إلى ملف TXT]</b>\n\n"
+                "اختر الرواية أدناه، أو أرسل الأمر مباشرة بالصيغة:\n"
+                "<code>/export After Severing Ties 400-450</code>\n"
+                "أو لتصدير الرواية الافتراضية:\n"
+                "<code>/export 490-500</code>",
+                reply_markup=markup
+            )
+            return
+
+        # كشف إذا كان المعطى يحتوي على اسم رواية ونطاق
+        import nsw_healer_engine
+        tokens = args_str.rsplit(None, 1)
+        if len(tokens) == 2 and (re.search(r'\d', tokens[1])):
+            novel_name = tokens[0].strip()
+            range_str = tokens[1].strip()
+        elif len(tokens) == 1 and re.search(r'\d', tokens[0]):
+            novel_name = "After Severing Ties"
+            range_str = tokens[0].strip()
+        else:
+            novel_name = args_str
+            range_str = "1-20"
+
+        _run_export_chapters_task(message.chat.id, novel_name, range_str)
+
+    def _run_export_chapters_task(chat_id: int, novel_name: str, range_str: str):
+        status_msg = bot.send_message(
+            chat_id,
+            f"⏳ <b>جاري جلب الفصول ({range_str}) لرواية:</b> <code>{novel_name}</code> من مدونة بلوجر...\n"
+            "يتم الآن استرجاع المنشورات وتجريد كود HTML وتجميع النص الصافي في ملف TXT."
+        )
+
+        def _task():
+            try:
+                import nsw_healer_engine
+                res = nsw_healer_engine.export_chapters_from_blogger_to_txt(
+                    novel_name=novel_name,
+                    range_str=range_str
+                )
+
+                if not res.get("success"):
+                    bot.edit_message_text(
+                        f"❌ <b>تعذر التصدير:</b>\n{res.get('error', 'خطأ غير معروف')}",
+                        chat_id,
+                        status_msg.message_id
+                    )
+                    return
+
+                file_path = res.get("file_path")
+                filename = res.get("filename")
+                exported_cnt = res.get("total_exported", 0)
+                file_size_kb = res.get("file_size_kb", 0)
+                missing = res.get("missing_chapters", [])
+
+                caption = (
+                    f"📚 <b>[تم بنجاح تصدير الفصول من المدونة!]</b> 🚀\n"
+                    f"📖 <b>الرواية:</b> {novel_name}\n"
+                    f"🔢 <b>النطاق:</b> {range_str}\n"
+                    f"📄 <b>الفصول المصدرة:</b> <b>{exported_cnt}</b> فصلاً\n"
+                    f"💾 <b>الحجم:</b> {file_size_kb} KB"
+                )
+                if missing:
+                    caption += f"\n⚠️ <i>لم يتم العثور على {len(missing)} فصول بالمدونة: {missing[:10]}</i>"
+
+                bot.delete_message(chat_id, status_msg.message_id)
+                with open(file_path, "rb") as doc_file:
+                    bot.send_document(
+                        chat_id,
+                        doc_file,
+                        caption=caption
+                    )
+            except Exception as e:
+                bot.edit_message_text(f"❌ خطأ أثناء معالجة التصدير: {e}", chat_id, status_msg.message_id)
+
+        threading.Thread(target=_task, daemon=True).start()
+
     @bot.message_handler(commands=['nsw_stage', 'stage', 'opus_stage', 'opus'])
     def nsw_stage_cmd(message):
         """لوحة تحكم طابور Claude Opus مع زر بدء السحب الفوري."""
@@ -638,6 +736,147 @@ def create_bot_app():
             reply_markup=markup
         )
 
+    @bot.message_handler(commands=['sync_blogger', 'sync_sheet', 'match_blogger'])
+    def nsw_sync_blogger_cmd(message):
+        """مطابقة وإصلاح بيانات Google Sheets من Blogger مباشرة (أمر ➔ تقرير ➔ اتخاذ قرار)."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+            return
+        parts = message.text.strip().split(None, 1)
+        novel_name = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
+        chat_id = message.chat.id
+        wait_msg = bot.reply_to(message, f"🔄 <b>جاري فحص ومطابقة بيانات الشيت مع مدونة بلوجر لرواية:</b> <code>{novel_name}</code>...")
+
+        def _worker():
+            try:
+                res = nsw_healer_engine.sync_and_repair_sheet_from_blogger(novel_name)
+                missing_items = res.get("missing_items", [])
+                missing_nums = res.get("missing_in_sheet", [])
+                
+                report = (
+                    f"📊 <b>[تقرير مطابقة الشيت مع مدونة بلوجر]:</b>\n"
+                    f"📖 الرواية: <b>{novel_name}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"• فصول بلوجر الإجمالية: <b>{res.get('total_blogger', 0)}</b> فصل\n"
+                    f"• فصول الشيت المسجلة: <b>{res.get('total_sheet', 0)}</b> فصل\n"
+                    f"• فصول على بلوجر غير مسجلة بالشيت: <b>{len(missing_nums)}</b> فصل\n"
+                    f"• تعارض في معرف المنشور (PostID): <b>{len(res.get('id_mismatches', []))}</b> فصل\n"
+                )
+                markup = None
+                if missing_nums:
+                    USER_SESSIONS[chat_id] = USER_SESSIONS.get(chat_id, {})
+                    USER_SESSIONS[chat_id]["pending_sync_sheet"] = {
+                        "novel_name": novel_name,
+                        "missing_items": missing_items
+                    }
+                    sample = [str(x) for x in missing_nums[:15]]
+                    report += f"⚠️ <b>أرقام الفصول غير المسجلة بالشيت:</b> {', '.join(sample)}\n\n"
+                    report += "💡 <i>هذه الفصول موجودة على بلوجر ولكن تنقص في الشيت. هل ترغب بإدراجها في جدول الشيت الآن؟</i>"
+                    markup = types.InlineKeyboardMarkup(row_width=1)
+                    markup.add(
+                        types.InlineKeyboardButton(f"📥 تحديث وإدراج الـ {len(missing_nums)} فصلاً في الشيت الآن", callback_data=f"cb_exec_sync_sheet:{novel_name}"),
+                        types.InlineKeyboardButton("❌ إلغاء", callback_data="CANCEL_ACTION")
+                    )
+                else:
+                    report += "\n✅ كافة فصول بلوجر مسجلة في الشيت بتطابق تام 100%!"
+
+                bot.edit_message_text(report, chat_id, wait_msg.message_id, reply_markup=markup)
+            except Exception as e:
+                bot.edit_message_text(f"❌ خطأ أثناء مطابقة الشيت: {e}", chat_id, wait_msg.message_id)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    @bot.message_handler(commands=['check_timeline', 'timeline_anomalies', 'audit_timeline'])
+    def nsw_check_timeline_cmd(message):
+        """كشف الاضطراب الزمني والتضارب في ترتيب تواريخ النشر."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+            return
+        parts = message.text.strip().split(None, 1)
+        novel_name = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
+        chat_id = message.chat.id
+        wait_msg = bot.reply_to(message, f"⏱️ <b>جاري فحص التسلسل الزمني لرواية:</b> <code>{novel_name}</code>...")
+
+        def _worker():
+            try:
+                res = nsw_healer_engine.detect_timeline_anomalies(novel_name)
+                anomalies = res.get("anomalies", [])
+                report = (
+                    f"⏱️ <b>[تقرير رصد الاضطراب الزمني في الجدولة]:</b>\n"
+                    f"📖 الرواية: <b>{novel_name}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"• إجمالي الفصول المفحوصة: <b>{res.get('total_chapters', 0)}</b> فصل\n"
+                    f"• حالات الاضطراب المعكوسة: <b>{len(anomalies)}</b> حالة\n"
+                )
+                markup = None
+                if anomalies:
+                    report += "⚠️ <b>أبرز حالات التضارب المكتشفة:</b>\n"
+                    for a in anomalies[:5]:
+                        report += f"• الفصل <b>{a['next_chapter']}</b> يسبق الفصل <b>{a['prev_chapter']}</b> بفارق {a['time_difference_hours']} ساعة!\n"
+                    report += "\n💡 <i>هل ترغب بإعادة تنسيق وضبط الجدولة وفق نمط زمني ذكي؟</i>"
+                    markup = types.InlineKeyboardMarkup(row_width=1)
+                    markup.add(
+                        types.InlineKeyboardButton("🗓️ إصلاح وتنسيق الجدولة الآن (/fix_dates)", callback_data="cb_fix_dates_start"),
+                        types.InlineKeyboardButton("❌ إغلاق", callback_data="CANCEL_ACTION")
+                    )
+                else:
+                    report += "\n✅ الجدول الزمني متسق ومنتظم تصاعدياً بنسبة 100%!"
+
+                bot.edit_message_text(report, chat_id, wait_msg.message_id, reply_markup=markup)
+            except Exception as e:
+                bot.edit_message_text(f"❌ خطأ أثناء فحص التسلسل الزمني: {e}", chat_id, wait_msg.message_id)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    @bot.message_handler(commands=['purge_duplicates', 'check_duplicates', 'clean_duplicates'])
+    def nsw_purge_duplicates_cmd(message):
+        """كشف وتطهير الفصول المكررة على بلوجر والشيت (أمر ➔ تقرير ➔ اتخاذ قرار)."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+            return
+        parts = message.text.strip().split(None, 1)
+        novel_name = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
+        chat_id = message.chat.id
+        wait_msg = bot.reply_to(message, f"🧹 <b>جاري فحص ورصد الفصول المكررة لرواية:</b> <code>{novel_name}</code>...")
+
+        def _worker():
+            try:
+                res = nsw_healer_engine.detect_and_purge_duplicate_posts(novel_name, dry_run=True)
+                dups_cnt = res.get("duplicates_count", 0)
+                to_purge = res.get("to_purge", [])
+                
+                report = (
+                    f"🧹 <b>[تقرير رصد الفصول المكررة - معاينة]:</b>\n"
+                    f"📖 الرواية: <b>{novel_name}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"• فصول تحتوي على تكرار: <b>{dups_cnt}</b> فصول\n"
+                    f"• التدوينات الزائدة المستهدفة للحذف: <b>{len(to_purge)}</b> تدوينة\n"
+                )
+                markup = None
+                if to_purge:
+                    USER_SESSIONS[chat_id] = USER_SESSIONS.get(chat_id, {})
+                    USER_SESSIONS[chat_id]["pending_purge_dups"] = {
+                        "novel_name": novel_name,
+                        "to_purge": to_purge
+                    }
+                    report += "📋 <b>تفاصيل التدوينات المكررة المرشحة للحذف:</b>\n"
+                    for p in to_purge[:5]:
+                        report += f"• الفصل <b>{p['chapter_number']}</b> [PostID: <code>{p['post_id']}</code>] بتاريخ ({p['date_raw'][:10]})\n"
+                    report += "\n⚠️ <i>هل ترغب بتأكيد حذف وتطهير هذه التدوينات المكررة من مدونة بلوجر الآن؟</i>"
+                    markup = types.InlineKeyboardMarkup(row_width=1)
+                    markup.add(
+                        types.InlineKeyboardButton(f"🗑️ تأكيد تطهير وحذف الـ {len(to_purge)} تدوينات المكررة الآن", callback_data=f"cb_exec_purge_dups:{novel_name}"),
+                        types.InlineKeyboardButton("❌ إلغاء العملية", callback_data="CANCEL_ACTION")
+                    )
+                else:
+                    report += "\n🛡️ لا توجد أي تدوينات مكررة على الإطلاق، النظام خلوٌ تام من أي تكرار!"
+
+                bot.edit_message_text(report, chat_id, wait_msg.message_id, reply_markup=markup)
+            except Exception as e:
+                bot.edit_message_text(f"❌ خطأ أثناء فحص الفصول المكررة: {e}", chat_id, wait_msg.message_id)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     @bot.message_handler(commands=['nsw_nav', 'nav', 'repair_nav', 'nav_repair'])
     def nsw_nav_cmd(message):
         """صيانة وربط أزرار التنقل (السابق/التالي/الفهرس) لكافة فصول الرواية المنشورة والمجدولة."""
@@ -666,20 +905,24 @@ def create_bot_app():
             return
         text = (
             "📋 <b>أوامر نظام NSW الشامل للنشر والترجمة:</b>\n\n"
-            "🛡️ <code>/nsw_repair [رواية]</code> — <b>الإصلاح الشامل الكامل</b> (سد الفجوات + استصلاح المبتورات + صيانة أزرار التنقل دفعة واحدة)\n"
+            "🛡️ <code>/repair [رواية]</code> — <b>الإصلاح الشامل الكامل</b> (سد الفجوات + استصلاح المبتورات + صيانة أزرار التنقل)\n"
             "🗓️ <code>/fix_dates</code> — <b>إصلاح وتنسيق تواريخ النشر</b> المجدولة بذكاء وفق نمط زمني\n"
-            "🔍 <code>/nsw_audit [رواية]</code> — <b>فحص شامل عند الطلب</b> لمدونة بلوجر والجداول\n"
-            "🗓️ <code>/nsw_weekly</code> — <b>تفعيل الفحص الأسبوعي الدوري</b> (كل إثنين 09:00 ص فقط)\n"
-            "🔗 <code>/nsw_nav [رواية] [فصل_البداية]</code> — <b>صيانة وربط أزرار التنقل</b> (السابق/التالي/الفهرس) من الشيت\n"
-            "📊 <code>/nsw_status</code> — حالة المحرك والمهام الآنية\n"
-            "🧩 <code>/nsw_gaps [رواية]</code> — فحص وسد الفصول المفقودة فقط\n"
-            "🩹 <code>/nsw_heal [رواية]</code> — فحص واستصلاح الفصول المبتورة فقط\n"
-            "🎭 <code>/nsw_stage [رواية]</code> — تجهيز دفعة الـ 20 فصلاً لـ Claude Opus\n"
-            "🎯 <code>/nsw_fix [رواية] [رقم]</code> — إصلاح وترجمة فصل محدد\n"
-            "🚀 <code>/nsw_publish [رواية] [فصول]</code> — نشر فصول بعينها\n"
-            "🛑 <code>/nsw_stop</code> — إيقاف العملية الجارية فوراً\n\n"
-            "💡 <b>اختصارات سريعة:</b>\n"
-            "<code>/repair</code> · <code>/fix_dates</code> · <code>/audit</code> · <code>/weekly</code> · <code>/nav</code> · <code>/status</code> · <code>/gaps</code> · <code>/heal</code> · <code>/stage</code> · <code>/fix</code> · <code>/publish</code> · <code>/stop</code>"
+            "🔄 <code>/sync_blogger [رواية]</code> — <b>مطابقة فصول بلوجر وتحديث جدول الشيت</b>\n"
+            "🧹 <code>/purge_duplicates [رواية]</code> — <b>كشف وتطهير الفصول المكررة</b> من بلوجر والشيت\n"
+            "⏱️ <code>/check_timeline [رواية]</code> — <b>كشف الاضطراب والتضارب الزمني</b> في الجدولة\n"
+            "📥 <code>/export [رواية] [نطاق]</code> — <b>تصدير فصول المدونة كملف TXT نظيف</b>\n"
+            "🎭 <code>/stage [رواية]</code> — تجهيز دفعة الـ 20 فصلاً لصقل Claude Opus\n"
+            "📖 <code>/audit_novel [رواية]</code> — تشغيل التدقيق الأدبي الشامل لرواية كاملة\n"
+            "⏹️ <code>/stop_audit</code> — إيقاف التدقيق الشامل للرواية الجاري\n"
+            "🔗 <code>/nav [رواية] [فصل_البداية]</code> — <b>صيانة وربط أزرار التنقل</b> (السابق/التالي/الفهرس)\n"
+            "🧩 <code>/gaps [رواية]</code> — فحص وسد الفصول المفقودة والمسودات\n"
+            "🩹 <code>/heal [رواية]</code> — استصلاح الفصول المبتورة أو الناقصة\n"
+            "📊 <code>/status</code> — فحص حالة المنظومة والمهام اللحظية\n"
+            "🎯 <code>/fix [رواية] [رقم]</code> — إصلاح أو ترجمة فصل فردي محدد\n"
+            "🚀 <code>/publish [رواية] [فصول]</code> — نشر فصول مخصصة\n"
+            "👑 <code>/admin</code> — لوحة تحكم المشرف وإدارة الوصول\n"
+            "🛑 <code>/stop</code> — إيقاف فوري طارئ لكافة مهام المحرك\n\n"
+            "💡 <i>جميع الأوامر متاحة أيضاً بأزرار تفاعلية مباشرة عبر: /menu</i>"
         )
         bot.reply_to(message, text)
 
@@ -764,6 +1007,12 @@ def create_bot_app():
         chat_id = message.chat.id
 
         session_state = USER_SESSIONS.get(chat_id, {}).get("state")
+        if session_state and session_state.startswith("AWAITING_EXPORT_RANGE:"):
+            target_novel = session_state.replace("AWAITING_EXPORT_RANGE:", "").strip() or "After Severing Ties"
+            USER_SESSIONS.get(chat_id, {}).pop("state", None)
+            _run_export_chapters_task(chat_id, target_novel, user_text.strip())
+            return
+
         if session_state == "WAITING_FIX_DATE_PATTERN":
             novel_name = USER_SESSIONS.get(chat_id, {}).get("novel_name", "After Severing Ties")
             import nsw_healer_engine
@@ -1249,9 +1498,102 @@ def create_bot_app():
             _run_full_repair(chat_id, None)
             return
 
+        elif data == "cb_sync_blogger_start":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            nsw_sync_blogger_cmd(call.message)
+            return
+
+        elif data == "cb_purge_dups_start":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            nsw_purge_duplicates_cmd(call.message)
+            return
+
+        elif data == "cb_check_timeline_start":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            nsw_check_timeline_cmd(call.message)
+            return
+
+        elif data == "cb_export_chapters_start":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            markup = make_novel_selection_markup("cb_nvexport", include_all=False)
+            bot.send_message(
+                chat_id,
+                "📥 <b>[تصدير فصول من مدونة بلوجر إلى ملف TXT]</b>\n\n"
+                "اختر الرواية أدناه، أو أرسل الأمر مباشرة بالصيغة:\n"
+                "<code>/export After Severing Ties 400-450</code>\n"
+                "أو لتصدير الرواية الافتراضية:\n"
+                "<code>/export 490-500</code>",
+                reply_markup=markup
+            )
+            return
+
+        elif data.startswith("cb_nvexport_"):
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            idx_str = data.replace("cb_nvexport_", "")
+            target_novel = get_novel_from_catalog_idx(idx_str) or "After Severing Ties"
+            USER_SESSIONS[chat_id] = USER_SESSIONS.get(chat_id, {})
+            USER_SESSIONS[chat_id]["state"] = f"AWAITING_EXPORT_RANGE:{target_novel}"
+            bot.send_message(
+                chat_id,
+                f"📖 <b>الرواية المختارة:</b> <code>{target_novel}</code>\n\n"
+                "أرسل الآن نطاق الفصول المطلوب تصديرها (مثال: <code>400-450</code> أو <code>490, 492, 495</code>):"
+            )
+            return
+
+        elif data.startswith("cb_exec_sync_sheet:"):
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            novel_name = data.replace("cb_exec_sync_sheet:", "").strip() or "After Severing Ties"
+            pending = session_data.get("pending_sync_sheet", {})
+            missing_items = pending.get("missing_items")
+            bot.send_message(chat_id, f"🚀 <b>جاري إدراج وتوثيق الفصول في Google Sheet لرواية '{novel_name}'...</b>\nسيصلك تقرير تفصيلي فور الانتهاء.")
+            def _exec_sync_thread():
+                try:
+                    import nsw_healer_engine
+                    res = nsw_healer_engine.execute_sync_blogger_to_sheet(novel_name, missing_items)
+                    if res.get("success"):
+                        bot.send_message(chat_id, f"🎉 <b>تم بنجاح تحديث جدول الشيت وإدراج {res.get('added_count', 0)} فصلاً!</b>")
+                    else:
+                        bot.send_message(chat_id, f"⚠️ تنبيه أثناء تحديث الشيت: {res.get('error', 'تعذر الإدراج')}")
+                except Exception as ex:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء مزامنة الشيت: {ex}")
+            threading.Thread(target=_exec_sync_thread, daemon=True).start()
+            USER_SESSIONS.get(chat_id, {}).pop("pending_sync_sheet", None)
+            return
+
+        elif data.startswith("cb_exec_purge_dups:"):
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            novel_name = data.replace("cb_exec_purge_dups:", "").strip() or "After Severing Ties"
+            bot.send_message(chat_id, f"🧹 <b>جاري تنفيذ تطهير وحذف التدوينات المكررة من مدونة بلوجر لرواية '{novel_name}'...</b>\nسيصلك تقرير تفصيلي بعد المعالجة.")
+            def _exec_purge_thread():
+                try:
+                    import nsw_healer_engine
+                    res = nsw_healer_engine.detect_and_purge_duplicate_posts(novel_name, dry_run=False)
+                    bot.send_message(chat_id, f"🎉 <b>اكتملت عملية التطهير بنجاح!</b> تم تنظيف التدوينات المكررة من بلوجر بنجاح.")
+                except Exception as ex:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء تطهير المكررات: {ex}")
+            threading.Thread(target=_exec_purge_thread, daemon=True).start()
+            USER_SESSIONS.get(chat_id, {}).pop("pending_purge_dups", None)
+            return
+
         elif data == "CANCEL_ACTION":
             USER_SESSIONS.get(chat_id, {}).pop("state", None)
             USER_SESSIONS.get(chat_id, {}).pop("pending_date_fix", None)
+            USER_SESSIONS.get(chat_id, {}).pop("pending_sync_sheet", None)
+            USER_SESSIONS.get(chat_id, {}).pop("pending_purge_dups", None)
             bot.send_message(chat_id, "🛑 تم إلغاء العملية بأمان. لن يتم إجراء أي تعديل أو نشر.")
             return
 
