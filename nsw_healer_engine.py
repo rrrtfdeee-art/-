@@ -2187,26 +2187,52 @@ def preview_and_repair_novel_dates(
     updated_success = []
     failed_items = []
 
-    for item in to_update:
-        c_n = item["chapter_number"]
-        p_id = item["post_id"]
-        t_iso = item["target_iso"]
-
-        try:
-            payload = {
-                "action": "syncSheetDateToBlogger",
-                "postId": str(p_id),
-                "publishedDate": t_iso,
-                "chapterNumber": c_n
+    # 1. محاولة التحديث الدفعي السريع (Bulk Update) بطلب واحد متكامل
+    bulk_payload = {
+        "action": "bulkSyncDatesToBlogger",
+        "updates": [
+            {
+                "postId": str(item["post_id"]),
+                "publishedDate": item["target_iso"],
+                "chapterNumber": item["chapter_number"]
             }
-            res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=30).json()
-            if res.get("status") == "success" or res.get("published"):
-                updated_success.append(item)
-                logger.info(f"✅ تم تعديل موعد الفصل {c_n} بنجاح إلى: {item['target_date']}")
-            else:
-                failed_items.append((c_n, res.get("message", "فشل التعديل")))
-        except Exception as ex:
-            failed_items.append((c_n, str(ex)))
+            for item in to_update if item.get("post_id")
+        ]
+    }
+    use_bulk = False
+    try:
+        bulk_res = requests.post(PUBLISH_WEBAPP_URL, json=bulk_payload, timeout=50).json()
+        if bulk_res.get("success") or bulk_res.get("status") == "success":
+            use_bulk = True
+            updated_success = to_update
+            logger.info(f"⚡ تم بنجاح تعديل مواعيد {len(to_update)} فصلاً دفعة واحدة عبر Bulk Sync!")
+    except Exception as e_bulk:
+        logger.warning(f"ملاحظة التعديل الدفعي: {e_bulk}")
+
+    if not use_bulk:
+        for item in to_update:
+            c_n = item["chapter_number"]
+            p_id = item["post_id"]
+            t_iso = item["target_iso"]
+
+            try:
+                payload = {
+                    "action": "syncSheetDateToBlogger",
+                    "postId": str(p_id),
+                    "publishedDate": t_iso,
+                    "chapterNumber": c_n
+                }
+                res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=25).json()
+                if res.get("status") == "success" or res.get("published") or res.get("success"):
+                    updated_success.append(item)
+                    logger.info(f"✅ تم تعديل موعد الفصل {c_n} بنجاح إلى: {item['target_date']}")
+                else:
+                    failed_items.append((c_n, res.get("message", "فشل التعديل")))
+            except Exception as ex:
+                failed_items.append((c_n, str(ex)))
+
+    # فحص ما إذا كان سبب الفشل هو عدم نشر النسخة الجديدة في Apps Script
+    is_gas_outdated = any("غير معروف" in str(err) for _, err in failed_items)
 
     summary_msg = (
         f"🗓️ <b>[تقرير اكتمال إصلاح تواريخ النشر]:</b>\n"
@@ -2219,7 +2245,14 @@ def preview_and_repair_novel_dates(
     )
     if failed_items:
         summary_msg += f"• ⚠️ تعذر تحديث: <b>{len(failed_items)}</b> فصل\n"
-    summary_msg += "🛡️ تم حفظ وتثبيت المواعيد في الشيت وبلوجر."
+        if is_gas_outdated:
+            summary_msg += (
+                "\n⚠️ <b>سبب التعذر:</b>\n"
+                "الخادم السحابي (Google Apps Script) يعمل بإصدار سابق ولا يحتوي على دالة التعديل بعد.\n"
+                "💡 <b>الحل:</b> افتح محرر Apps Script واضغط: <b>نشر (Deploy) ➔ إدارة عمليات النشر ➔ تعديل ➔ إصدار جديد (New version) ➔ نشر</b>."
+            )
+    else:
+        summary_msg += "🛡️ تم حفظ وتثبيت المواعيد في الشيت وبلوجر بنجاح."
     notify_admin(summary_msg)
 
     return {
