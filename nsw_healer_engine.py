@@ -3074,10 +3074,10 @@ def export_chapters_from_blogger_to_txt(
     }
 
 
-def clean_and_unify_chapter_titles(novel_name: str = "", dry_run: bool = False, max_batch: int = 500) -> Dict[str, Any]:
+def clean_and_unify_chapter_titles(novel_name: str = "", dry_run: bool = False, max_batch: int = 35) -> Dict[str, Any]:
     """
     توحيد صيغة عناوين الفصول في بلوجر والشيت عبر استدعاء كود النشر (بصلاحية المحرر).
-    يحول الصيغ المكررة إلى: الفصل X: العنوان
+    يحول الصيغ المكررة إلى: الفصل X: العنوان (بدفعات سريعة لتجنب timeout)
     """
     payload = {
         "action": "fixTitles",
@@ -3086,7 +3086,7 @@ def clean_and_unify_chapter_titles(novel_name: str = "", dry_run: bool = False, 
         "maxBatch": max_batch
     }
     try:
-        resp = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=120)
+        resp = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=60)
         if resp.status_code == 200:
             return resp.json()
         return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text}"}

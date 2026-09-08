@@ -403,27 +403,66 @@ def create_bot_app():
         def _worker():
             try:
                 import nsw_healer_engine
-                res = nsw_healer_engine.clean_and_unify_chapter_titles(novel_name, dry_run=dry_run, max_batch=500)
-                if res.get("success"):
+                total_updated_blogger = 0
+                total_updated_sheets = 0
+                total_scanned = 0
+                total_matched = 0
+                samples = []
+                batch_round = 0
+                max_rounds = 30  # أقصى حد للدفعات لحماية العملية
+
+                while batch_round < max_rounds:
+                    batch_round += 1
+                    res = nsw_healer_engine.clean_and_unify_chapter_titles(novel_name, dry_run=dry_run, max_batch=35)
+                    if not res.get("success"):
+                        err_msg = res.get('message', res.get('error', 'تعذر إتمام المهمة'))
+                        bot.edit_message_text(f"⚠️ تنبيه من كود النشر: {err_msg}", chat_id, wait_msg.message_id)
+                        return
+
                     st = res.get("stats", {})
-                    out = (
-                        f"✅ <b>[اكتمل فحص وتوحيد عناوين الفصول بنجاح]</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"• المنشورات المفحوصة في بلوجر: <b>{st.get('totalScanned', 0)}</b>\n"
-                        f"• منشورات الرواية المطابقة: <b>{st.get('matchedNovel', 0)}</b>\n"
-                        f"• عناوين تم تصحيحها في Blogger: <b>{st.get('updatedBlogger', 0)}</b>\n"
-                        f"• عناوين تم تصحيحها في الشيت: <b>{st.get('updatedSheets', 0)}</b>\n"
-                    )
-                    if st.get('failedBlogger', 0) > 0:
-                        out += f"⚠️ فشل التعديل في بلوجر: <b>{st.get('failedBlogger')}</b>\n"
-                    samples = st.get("samples", [])
-                    if samples:
-                        out += "\n📋 <b>عينات من العناوين المصححة:</b>\n"
-                        for s in samples[:6]:
-                            out += f"• <code>{s.get('from','')[:40]}...</code>\n  ↳ <b>{s.get('to')}</b> ({s.get('status','')})\n"
-                    bot.edit_message_text(out, chat_id, wait_msg.message_id)
-                else:
-                    bot.edit_message_text(f"⚠️ تنبيه من كود النشر: {res.get('message', res.get('error', 'تعذر إتمام المهمة'))}", chat_id, wait_msg.message_id)
+                    up_b = st.get("updatedBlogger", 0)
+                    up_s = st.get("updatedSheets", 0)
+                    total_scanned = max(total_scanned, st.get("totalScanned", 0))
+                    total_matched = max(total_matched, st.get("matchedNovel", 0))
+                    total_updated_blogger += up_b
+                    total_updated_sheets += up_s
+
+                    if not samples and st.get("samples"):
+                        samples = st.get("samples")
+
+                    # إذا لم يعد هناك فصول تحتاج للتعديل
+                    if up_b == 0:
+                        break
+
+                    # تحديث رسالة التقدم اللحظي في تيليجرام
+                    try:
+                        bot.edit_message_text(
+                            f"🏷️ <b>جاري توحيد وتصحيح العناوين عبر الدفعات الذكية...</b>\n"
+                            f"• الوضع: {mode_str}\n"
+                            f"• تم تعديل <b>{total_updated_blogger}</b> عنوناً حتى الآن (الدفعة #{batch_round})...\n"
+                            f"⏳ جاري معالجة الدفعة التالية فوراً دون توقف...",
+                            chat_id, wait_msg.message_id
+                        )
+                    except Exception:
+                        pass
+
+                    import time
+                    time.sleep(1)
+
+                out = (
+                    f"✅ <b>[اكتمل فحص وتوحيد عناوين الفصول بنجاح تام]</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"• الوضع: <b>{mode_str}</b>\n"
+                    f"• إجمالي الفصول المفحوصة في Blogger: <b>{total_scanned}</b>\n"
+                    f"• إجمالي الفصول التي تم تصحيحها في Blogger: <b>{total_updated_blogger}</b>\n"
+                    f"• إجمالي الفصول التي تم تصحيحها في الشيت: <b>{total_updated_sheets}</b>\n"
+                    f"• النتيجة: أصبحت كافة العناوين بصيغة <code>الفصل X: العنوان</code> 🎯"
+                )
+                if samples:
+                    out += "\n\n📋 <b>عينات من العناوين بعد التوحيد:</b>\n"
+                    for s in samples[:5]:
+                        out += f"• <code>{s.get('from','')[:40]}...</code>\n  ↳ <b>{s.get('to')}</b>\n"
+                bot.edit_message_text(out, chat_id, wait_msg.message_id)
             except Exception as e:
                 bot.edit_message_text(f"❌ خطأ أثناء تشغيل دالة تصحيح العناوين: {e}", chat_id, wait_msg.message_id)
 
