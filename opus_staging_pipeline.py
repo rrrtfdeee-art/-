@@ -137,15 +137,31 @@ def wrap_clean_story_to_royal_html(
 
 def fetch_pending_chapters_for_opus_review(
     max_chapters: int = 20,
-    novel_name: str = "After Severing Ties"
+    novel_name: str = "After Severing Ties",
+    start_chapter: int = 1,
+    include_live: bool = True,
+    exclude_staged: bool = True
 ) -> List[Dict[str, Any]]:
     """
-    جلب دفعة تصل إلى 20 فصلاً تنتظر الاعتماد الأدبي:
+    جلب دفعة فصول تنتظر الاعتماد الأدبي:
     1. يفحص أولاً طابور التدقيق ReviewQueue أو TranslateQueue في الشيت.
-    2. إذا كان العدد أقل من 20، يستكمل الباقي من الفصول المجدولة أو الحية في بلوجر.
+    2. يستكمل الفصول المجدولة أو الحية في بلوجر وفق الأولوية:
+       - الأولوية 1 (القصوى): التعديلات والاستصلاحات (فصول مبتورة أو بحاجة لإصلاح).
+       - الأولوية 2: الفصول الأقرب وقتاً للنشر (Closest scheduled date).
     """
     chapters_batch = []
     collected_nums = set()
+
+    # استبعاد الفصول الموجودة مسبقاً في مجلدات العمل إذا طُلب ذلك
+    staged_nums = set()
+    if exclude_staged:
+        for folder_name in ["pending", "approved"]:
+            f_path = STAGING_DIR / folder_name
+            if f_path.exists():
+                for p in f_path.glob("chapter_*.txt"):
+                    m = re.search(r'\d+', p.name)
+                    if m:
+                        staged_nums.add(int(m.group(0)))
 
     # 1. فحص الشيت (TranslateQueue أو ReviewQueue)
     try:
@@ -162,7 +178,7 @@ def fetch_pending_chapters_for_opus_review(
                 m = re.search(r'\d+', title)
                 c_num = int(m.group(0)) if m else 0
 
-                if c_num > 0 and c_num not in collected_nums and len(content) > 200:
+                if c_num >= start_chapter and c_num not in collected_nums and c_num not in staged_nums and len(content) > 200:
                     clean_text = strip_html_to_clean_story(content)
                     chapters_batch.append({
                         "chapter_number": c_num,
@@ -179,9 +195,8 @@ def fetch_pending_chapters_for_opus_review(
     except Exception as e_sheet:
         logger.warning(f"ملاحظة جلب الفصول من الشيت لدفعة أوبس: {e_sheet}")
 
-    # 2. إذا كانت الفصول أقل من 20، نجلب الفصول المجدولة في بلوجر
+    # 2. إذا كانت الفصول أقل من المطلوب، نجلب الفصول المجدولة أو الحية من بلوجر
     if len(chapters_batch) < max_chapters:
-        needed = max_chapters - len(chapters_batch)
         try:
             audit_url = f"{PUBLISH_WEBAPP_URL}?action=scanGaps&novelName={requests.utils.quote(novel_name)}"
             r = requests.get(audit_url, timeout=60)
@@ -190,21 +205,50 @@ def fetch_pending_chapters_for_opus_review(
                 return chapters_batch
             res = r.json()
             all_chaps = res.get("allChapters", {})
+            trunc_chaps = set()
+            for t in res.get("truncatedChapters", []):
+                try:
+                    trunc_chaps.add(int(float(t.get("chapNum", 0))))
+                except (ValueError, TypeError):
+                    pass
             
-            # فرز تصاعدي لأرقام الفصول
-            sorted_nums = sorted([int(float(k)) for k in all_chaps.keys() if str(k).isdigit()])
+            from nsw_healer_engine import parse_any_datetime
+            now_dt = datetime.now()
+
+            def chapter_priority_key(c_num: int):
+                c_info = all_chaps.get(str(c_num), {})
+                c_chars = c_info.get("charCount", 0)
+                p_date_raw = c_info.get("publishedDate", "")
+                dt = parse_any_datetime(p_date_raw)
+                if dt and getattr(dt, 'tzinfo', None) is not None:
+                    dt = dt.replace(tzinfo=None)
+
+                # الأولوية 1: فصول بحاجة لتعديل أو استصلاح عاجل (مبتورة أو تالفة)
+                is_needs_fix = (c_chars < 600 and c_chars > 0) or (c_num in trunc_chaps)
+                tier = 0 if is_needs_fix else 1
+
+                # الأولوية 2: الفصول الأقرب وقتاً للنشر (Closest to now)
+                time_diff = (dt - now_dt).total_seconds() if dt else 999999999
+                if time_diff < 0:
+                    time_diff = abs(time_diff) * 0.1  # الفصول المتأخرة أو الحالية تأتي فوراً
+
+                return (tier, time_diff, c_num)
+
+            # فرز ذكي صارم: التعديلات أولاً ثم الفصول الأقرب وقتاً
+            sorted_nums = sorted([int(float(k)) for k in all_chaps.keys() if str(k).isdigit()], key=chapter_priority_key)
             for c_num in sorted_nums:
                 if len(chapters_batch) >= max_chapters:
                     break
-                if c_num in collected_nums:
+                if c_num < start_chapter or c_num in collected_nums or c_num in staged_nums:
                     continue
 
                 c_info = all_chaps.get(str(c_num), {})
                 c_chars = c_info.get("charCount", 0)
                 c_status = c_info.get("statusDisplay", "")
                 
-                # نستهدف الفصول المجدولة ذات المحتوى لمراجعتها وصقلها قبل موعد النشر
-                if "مجدول" in c_status and c_chars > 200:
+                # استهداف الفصول المجدولة أو الحية للمراجعة والتنقيح
+                is_eligible = ("مجدول" in c_status) or (include_live and "حي" in c_status) or (c_num in trunc_chaps)
+                if is_eligible and c_chars > 50:
                     c_title = c_info.get("title", f"الفصل {c_num}")
                     post_id = c_info.get("postId", "")
                     post_url = c_info.get("postUrl", "")

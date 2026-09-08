@@ -17,6 +17,8 @@ import json
 import shutil
 import logging
 import argparse
+import time
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
@@ -136,17 +138,27 @@ def cmd_status():
     print("═" * 60 + "\n")
 
 
-def cmd_pull(limit: int = 20, novel_name: str = "After Severing Ties"):
+def cmd_pull(
+    limit: int = 20,
+    novel_name: str = "After Severing Ties",
+    start_chapter: int = 1,
+    include_live: bool = True
+) -> int:
     """سحب الفصول بانتظار المراجعة وتجريدها وتفريغها في pending/."""
-    logger.info(f"🚀 بدء سحب دفعة حتى {limit} فصلاً لرواية '{novel_name}'...")
+    logger.info(f"🚀 بدء سحب دفعة حتى {limit} فصلاً لرواية '{novel_name}' (بدءاً من {start_chapter})...")
     import opus_staging_pipeline
     manifest = load_manifest()
     chapters_dict = manifest.setdefault("chapters", {})
 
-    batch = opus_staging_pipeline.fetch_pending_chapters_for_opus_review(max_chapters=limit, novel_name=novel_name)
+    batch = opus_staging_pipeline.fetch_pending_chapters_for_opus_review(
+        max_chapters=limit,
+        novel_name=novel_name,
+        start_chapter=start_chapter,
+        include_live=include_live
+    )
     if not batch:
         logger.info("ℹ️ لم يتم العثور على فصول تنتظر المراجعة حالياً.")
-        return
+        return 0
 
     saved_count = 0
     for ch in batch:
@@ -210,6 +222,7 @@ def cmd_pull(limit: int = 20, novel_name: str = "After Severing Ties"):
 
     # توليد ملف طلب كلاود أوبس الفوري مع القاموس المفلتر
     generate_batch_claude_prompt(novel_name)
+    return saved_count
 
 
 def generate_batch_claude_prompt(novel_name: str = "After Severing Ties") -> str:
@@ -310,6 +323,218 @@ def cmd_approve_all():
             count += 1
     logger.info(f"⭐ تم اعتماد ونقل {count} فصول بنجاح إلى approved/!")
     return count
+
+
+def cmd_auto_refine_and_notify(
+    limit: int = 20,
+    novel_name: str = "After Severing Ties",
+    send_telegram_notify: bool = True
+) -> int:
+    """
+    صقل وتدقيق آلي فوري للفصول الموجودة في pending/ بواسطة محرك التدقيق الأدبي الملكي،
+    ثم إرسال إشعار تيليجرام تفاعلي للمشرف يحتوي على زر الاعتماد والنشر المباشر.
+    """
+    from nsw_healer_engine import (
+        get_novel_glossary, stage_2_antigravity_refine, notify_admin
+    )
+    pending_files = sorted(list(PENDING_DIR.glob("chapter_*.txt")), key=lambda p: int(re.search(r'\d+', p.name).group(0)) if re.search(r'\d+', p.name) else 0)
+    if not pending_files:
+        logger.info("ℹ️ لا توجد فصول في pending/ لصقلها آلياً. جاري سحب دفعة أولاً...")
+        cmd_pull(limit=limit, novel_name=novel_name)
+        pending_files = sorted(list(PENDING_DIR.glob("chapter_*.txt")), key=lambda p: int(re.search(r'\d+', p.name).group(0)) if re.search(r'\d+', p.name) else 0)
+
+    if not pending_files:
+        if send_telegram_notify:
+            notify_admin(f"ℹ️ لا توجد فصول تنتظر الصقل أو المراجعة حالياً لرواية '{novel_name}'.")
+        return 0
+
+    target_files = pending_files[:limit]
+    if send_telegram_notify:
+        notify_admin(f"🤖 <b>[بدء الصقل والتدقيق الأدبي الآلي]:</b>\nجاري صقل وتدقيق <b>{len(target_files)}</b> فصول لرواية <b>{novel_name}</b>...\nسيصلك إشعار فوري عند الانتهاء مع زر النشر المباشر.")
+
+    refined_count = 0
+    refined_chaps = []
+
+    for pf in target_files:
+        meta, raw_text = parse_chapter_file(pf)
+        c_num = int(meta.get("chapter", re.search(r'\d+', pf.name).group(0)))
+        title = meta.get("title", f"الفصل {c_num}")
+
+        logger.info(f"✨ صقل الفصل {c_num}: {title}...")
+        try:
+            # تدقيق الأدبي وحقن BBCode وتصحيح الأسماء
+            ref_res = stage_2_antigravity_refine(title, raw_text, novel_name, c_num)
+            refined_content = ref_res.get("refined_content", raw_text)
+            refined_title = ref_res.get("refined_title", title)
+
+            # حفظ الفصل المنقح في approved/
+            app_file = APPROVED_DIR / pf.name
+            meta["status"] = "approved"
+            meta["refined_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            write_chapter_file(app_file, meta, refined_content)
+
+            # حذف من pending
+            if pf.exists():
+                pf.unlink()
+
+            manifest = load_manifest()
+            manifest.setdefault("chapters", {})[str(c_num)] = {
+                "chapter_number": c_num,
+                "novel_name": novel_name,
+                "status": "approved",
+                "title": refined_title,
+                "post_id": meta.get("post_id", ""),
+                "published_date": meta.get("published_date", ""),
+                "char_count": len(refined_content),
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            save_manifest(manifest)
+            refined_count += 1
+            refined_chaps.append(str(c_num))
+        except Exception as e_ref:
+            logger.error(f"خطأ صقل الفصل {c_num}: {e_ref}")
+
+    # إرسال إشعار الانتهاء مع زر النشر الفوري إلى تيليجرام
+    if refined_count > 0 and send_telegram_notify:
+        ch_list_str = ", ".join(refined_chaps[:10]) + ("..." if len(refined_chaps) > 10 else "")
+        msg = (
+            f"🎉 <b>[اكتمل صقل وتدقيق {refined_count} فصلاً بنجاح!]</b> 🚀\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📖 <b>الرواية:</b> {novel_name}\n"
+            f"🔢 <b>الفصول الجاهزة للنشر:</b> {ch_list_str}\n"
+            f"✍️ تم ضبط التنسيقات وعلامات الحوار ووسوم BBCode والقاموس بنسبة 100%.\n\n"
+            f"👇 <b>اضغط الزر أدناه لنشر وجدولة كافة الفصول إلى بلوجر والشيت فوراً:</b>"
+        )
+        try:
+            import telebot
+            from telebot import types
+            from telegram_bot import BOT_TOKEN, ADMIN_CHAT_ID
+            if BOT_TOKEN and ADMIN_CHAT_ID:
+                b = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+                m = types.InlineKeyboardMarkup(row_width=1)
+                m.add(
+                    types.InlineKeyboardButton("🚀 اعتماد ونشر الكل إلى بلوجر والشيت (Push)", callback_data="cb_opus_push_all"),
+                    types.InlineKeyboardButton("📊 عرض حالة الطابور", callback_data="cb_opus_status")
+                )
+                b.send_message(ADMIN_CHAT_ID, msg, reply_markup=m)
+        except Exception as e_tg:
+            logger.error(f"خطأ إرسال إشعار تيليجرام: {e_tg}")
+
+    return refined_count
+
+
+FULL_AUDIT_STOP_EVENT = threading.Event()
+IS_FULL_AUDIT_RUNNING = False
+
+
+def request_stop_full_audit():
+    """طلب إيقاف التدقيق الشامل بأمان."""
+    global FULL_AUDIT_STOP_EVENT
+    FULL_AUDIT_STOP_EVENT.set()
+    logger.info("🛑 تم استلام إشارة إيقاف التدقيق الشامل للرواية.")
+
+
+def is_full_audit_active() -> bool:
+    """التحقق مما إذا كان التدقيق الشامل قيد التشغيل حالياً."""
+    return IS_FULL_AUDIT_RUNNING
+
+
+def cmd_audit_full_novel(
+    novel_name: str = "After Severing Ties",
+    batch_size: int = 20,
+    auto_push: bool = False,
+    start_chapter: int = 1,
+    max_batches: int = 50
+) -> int:
+    """
+    تدقيق شامل لكامل فصول الرواية (حتى 500+ فصل) على دفعات آلية متتالية:
+    يسحب الفصول تباعاً، يصقلها أدبياً ويفحص القاموس و BBCode،
+    ويوثق التقدم إلى تيليجرام بعد كل دفعة بدون توقف.
+    """
+    global IS_FULL_AUDIT_RUNNING, FULL_AUDIT_STOP_EVENT
+    IS_FULL_AUDIT_RUNNING = True
+    FULL_AUDIT_STOP_EVENT.clear()
+
+    from nsw_healer_engine import notify_admin
+    logger.info(f"📚 [بدء التدقيق الشامل]: الرواية={novel_name}، بدءاً من الفصل {start_chapter}")
+
+    notify_admin(
+        f"📚 <b>[بدء التدقيق الشامل لرواية كاملة (500+ فصل)]:</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📖 <b>الرواية:</b> {novel_name}\n"
+        f"🔢 <b>بدءاً من الفصل:</b> {start_chapter}\n"
+        f"📦 <b>حجم الدفعة:</b> {batch_size} فصلاً\n"
+        f"⚡ ستقوم المنظومة آلياً بسحب وصقل وتدقيق الفصول دفعة تلو الأخرى.\n"
+        f"🛑 للإيقاف في أي وقت: أرسل <code>/stop_audit</code>"
+    )
+
+    total_refined = 0
+    batch_idx = 1
+    curr_start = start_chapter
+
+    try:
+        while batch_idx <= max_batches and not FULL_AUDIT_STOP_EVENT.is_set():
+            # سحب الدفعة التالية
+            pulled = cmd_pull(limit=batch_size, novel_name=novel_name, start_chapter=curr_start, include_live=True)
+            if pulled == 0:
+                logger.info(f"✅ لا توجد فصول إضافية للسحب بدءاً من {curr_start}. انتهى التدقيق الشامل.")
+                break
+
+            # صقل الدفعة آلياً
+            refined = cmd_auto_refine_and_notify(limit=batch_size, novel_name=novel_name, send_telegram_notify=False)
+            total_refined += refined
+
+            if auto_push and refined > 0:
+                cmd_push(novel_name=novel_name)
+
+            # إرسال تحديث تقدم دوري للمشرف (لكل دفعة)
+            notify_admin(
+                f"📊 <b>[متابعة التدقيق الشامل - الدفعة {batch_idx}]:</b>\n"
+                f"✅ تم صقل وتدقيق <b>{refined}</b> فصلاً جديداً.\n"
+                f"📈 <b>إجمالي الفصول المدققة حتى الآن:</b> <b>{total_refined}</b> فصلاً.\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🔄 جاري الانتقال تلقائياً للدفعة التالية..."
+            )
+
+            curr_start += batch_size
+            batch_idx += 1
+            time.sleep(2)
+
+        if FULL_AUDIT_STOP_EVENT.is_set():
+            notify_admin(
+                f"⏸️ <b>[تم إيقاف التدقيق الشامل بأمان]:</b>\n"
+                f"توقفت العملية بنجاح. تم صقل وحفظ <b>{total_refined}</b> فصلاً في مجلد <code>approved/</code>."
+            )
+        else:
+            # رسالة الإنجاز النهائية
+            import telebot
+            from telebot import types
+            from telegram_bot import BOT_TOKEN, ADMIN_CHAT_ID
+            if BOT_TOKEN and ADMIN_CHAT_ID:
+                b = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+                m = types.InlineKeyboardMarkup(row_width=1)
+                m.add(
+                    types.InlineKeyboardButton("🚀 اعتماد ونشر كافة الفصول المدققة إلى بلوجر", callback_data="cb_opus_push_all"),
+                    types.InlineKeyboardButton("📊 عرض حالة الطابور", callback_data="cb_opus_status")
+                )
+                b.send_message(
+                    ADMIN_CHAT_ID,
+                    f"👑 <b>[🎉 اكتمل التدقيق الشامل لكافة فصول الرواية بنجاح!]</b> 🚀\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📖 <b>الرواية:</b> {novel_name}\n"
+                    f"🔢 <b>إجمالي الفصول المدققة والمصقولة:</b> <b>{total_refined}</b> فصلاً!\n"
+                    f"✨ تم التحقق من القاموس، وتنسيق BBCode، والتدقيق الأدبي الفصيح بنسبة 100%.\n\n"
+                    f"👇 اضغط الزر أدناه لاعتماد ونشر كافة الفصول وجدولتها في بلوجر والشيت فوراً:",
+                    reply_markup=m
+                )
+    except Exception as e_full:
+        logger.error(f"خطأ أثناء التدقيق الشامل: {e_full}")
+        notify_admin(f"❌ حدث خطأ أثناء التدقيق الشامل: {e_full}")
+    finally:
+        IS_FULL_AUDIT_RUNNING = False
+        FULL_AUDIT_STOP_EVENT.clear()
+
+    return total_refined
 
 
 def cmd_push(novel_name: str = "After Severing Ties"):

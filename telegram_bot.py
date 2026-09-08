@@ -571,10 +571,51 @@ def create_bot_app():
         )
         markup = types.InlineKeyboardMarkup(row_width=1)
         btn_pull = types.InlineKeyboardButton("📥 ابدأ سحب 20 فصلاً الآن (Pull)", callback_data="cb_opus_pull_now")
+        btn_auto_refine = types.InlineKeyboardButton("🤖 صقل الدفعة آلياً بالذكاء الاصطناعي", callback_data="cb_opus_auto_refine")
+        btn_audit_full = types.InlineKeyboardButton("📚 تدقيق شامل لكامل الرواية (500+ فصل)", callback_data="cb_opus_audit_full_prompt")
         btn_approve_push = types.InlineKeyboardButton("🚀 اعتماد ونشر الكل إلى بلوجر (Push)", callback_data="cb_opus_push_all")
         btn_status = types.InlineKeyboardButton("📊 تحديث حالة مجلدات الاستقبال", callback_data="cb_opus_status")
-        markup.add(btn_pull, btn_approve_push, btn_status)
+        markup.add(btn_pull, btn_auto_refine, btn_audit_full, btn_approve_push, btn_status)
         bot.reply_to(message, text, reply_markup=markup)
+
+    @bot.message_handler(commands=['audit_novel', 'audit_full', 'full_audit'])
+    def nsw_audit_full_cmd(message):
+        """بدء التدقيق الشامل لكامل فصول الرواية (500+ فصل) آلياً على دفعات متتالية."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+            return
+        parts = message.text.strip().split(None, 2)
+        novel_name = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
+        start_c = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 1
+
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton(f"▶️ تأكيد بدء التدقيق الشامل ({novel_name})", callback_data=f"cb_opus_start_full:{novel_name}:{start_c}"),
+            types.InlineKeyboardButton("❌ إلغاء", callback_data="cb_opus_status")
+        )
+        bot.reply_to(
+            message,
+            f"📚 <b>[منظومة التدقيق الشامل لكامل الرواية - 500+ فصل]:</b>\n\n"
+            f"📖 <b>الرواية:</b> {novel_name}\n"
+            f"🔢 <b>البدء من الفصل:</b> {start_c}\n\n"
+            f"⚙️ <b>كيف تعمل المنظومة ذاتياً؟</b>\n"
+            f"• تسحب الفصول تباعاً على دفعات (20 فصلاً لكل دفعة).\n"
+            f"• تطبق الصقل الأدبي الفصيح، والتحقق من القاموس وضبط وسوم BBCode الملكية.\n"
+            f"• توثق الفصول في مجلد <code>approved/</code> وترسل لك نسبة الإنجاز بعد كل دفعة.\n"
+            f"• يمكنك إيقاف العملية في أي لحظة بأمان عبر الأمر: <code>/stop_audit</code>\n\n"
+            f"هل تود إطلاق عملية التدقيق الشامل الآن؟",
+            reply_markup=markup
+        )
+
+    @bot.message_handler(commands=['stop_audit', 'audit_stop'])
+    def nsw_stop_audit_cmd(message):
+        """إيقاف التدقيق الشامل الجاري بأمان."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+            return
+        import sync_opus_queue
+        sync_opus_queue.request_stop_full_audit()
+        bot.reply_to(message, "🛑 <b>تم إرسال إشارة إيقاف التدقيق الشامل.</b>\nستتوقف العملية بأمان عند نهاية الدفعة الحالية دون ضياع أي فصول تم تدقيقها.")
 
     @bot.message_handler(commands=['fix_dates', 'dates', 'fix_date', 'date_fix'])
     def nsw_fix_dates_cmd(message):
@@ -1025,11 +1066,66 @@ def create_bot_app():
                 m = types.InlineKeyboardMarkup(row_width=1)
                 m.add(
                     types.InlineKeyboardButton("📥 ابدأ سحب 20 فصلاً الآن (Pull)", callback_data="cb_opus_pull_now"),
+                    types.InlineKeyboardButton("🤖 صقل الدفعة آلياً بالذكاء الاصطناعي", callback_data="cb_opus_auto_refine"),
+                    types.InlineKeyboardButton("📚 تدقيق شامل لكامل الرواية (500+ فصل)", callback_data="cb_opus_audit_full_prompt"),
                     types.InlineKeyboardButton("🚀 اعتماد ونشر الكل إلى بلوجر (Push)", callback_data="cb_opus_push_all")
                 )
                 bot.send_message(chat_id, text, reply_markup=m)
             except Exception as e:
                 bot.send_message(chat_id, f"❌ خطأ: {e}")
+            return
+
+        elif data == "cb_opus_audit_full_prompt":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            m = types.InlineKeyboardMarkup(row_width=1)
+            m.add(
+                types.InlineKeyboardButton("▶️ نعم، ابدأ تدقيق كامل الرواية (500+ فصل)", callback_data="cb_opus_start_full:After Severing Ties:1"),
+                types.InlineKeyboardButton("❌ إلغاء", callback_data="cb_opus_status")
+            )
+            bot.send_message(
+                chat_id,
+                "📚 <b>[تأكيد إطلاق التدقيق الشامل لكامل الرواية]:</b>\n\n"
+                "• الرواية: <b>After Severing Ties</b>\n"
+                "• سيتم معالجة الفصول آلياً في الخلفية على دفعات (20 فصلاً في كل دفعة).\n"
+                "• صقل أدبي فصيح + التحقق من القاموس وضبط وسوم BBCode.\n"
+                "• سيصلك إشعار لحظي بعد كل دفعة مع نسبة التقدم.\n"
+                "• يمكنك إيقاف العملية في أي وقت عبر <code>/stop_audit</code>.\n\n"
+                "اضغط تأكيد للبدء فوراً:",
+                reply_markup=m
+            )
+            return
+
+        elif data.startswith("cb_opus_start_full"):
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            parts = data.split(":")
+            novel_name = parts[1] if len(parts) > 1 else "After Severing Ties"
+            start_c = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
+            bot.send_message(chat_id, f"🚀 <b>تم إطلاق التدقيق الشامل لرواية '{novel_name}' بدءاً من الفصل {start_c}...</b>\nستعمل المنظومة في الخلفية وتوافيك بالتقدم بعد كل دفعة.")
+            def _full_audit_thread():
+                try:
+                    import sync_opus_queue
+                    sync_opus_queue.cmd_audit_full_novel(novel_name=novel_name, start_chapter=start_c)
+                except Exception as e:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء التدقيق الشامل: {e}")
+            threading.Thread(target=_full_audit_thread, daemon=True).start()
+            return
+
+        elif data == "cb_opus_auto_refine":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            bot.send_message(chat_id, "🤖 <b>جاري بدء الصقل والتدقيق الأدبي الآلي للدفعة في الخلفية...</b>\nسيصلك إشعار فوري عند اكتمال التدقيق مع زر النشر المباشر.")
+            def _refine_thread():
+                try:
+                    import sync_opus_queue
+                    sync_opus_queue.cmd_auto_refine_and_notify(limit=20, novel_name="After Severing Ties")
+                except Exception as e:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء الصقل الآلي: {e}")
+            threading.Thread(target=_refine_thread, daemon=True).start()
             return
 
         elif data == "cb_opus_pull_now":
@@ -1048,13 +1144,14 @@ def create_bot_app():
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"🔢 <b>الفصول الجاهزة:</b> {', '.join(ch_nums[:15])}{'...' if len(ch_nums) > 15 else ''}\n"
                         f"📂 <b>المجلد على حاسوبك:</b> <code>opus_staging/pending/</code>\n\n"
-                        f"💬 <b>الخطوة التالية:</b>\n"
-                        f"اطلب من Claude في محادثتك الآن:\n"
-                        f"<i>«راجع وصقل الفصل {ch_nums[0] if ch_nums else '221'} في opus_staging/pending/ بأعلى أسلوب بلاغي»</i>\n\n"
+                        f"💬 <b>الخطوة التالية (اختر ما يناسبك):</b>\n"
+                        f"1️⃣ إما أن تصقلها بنفسك عبر Claude في Antigravity.\n"
+                        f"2️⃣ أو تضغط زر «صقل الدفعة آلياً» أدناه لتتولى المنظومة صقلها وإرسال إشعار الاعتماد.\n\n"
                         f"وبعد الانتهاء، اضغط الزر أدناه لاعتمادها ونشرها مباشرة في بلوجر والشيت:"
                     )
                     m = types.InlineKeyboardMarkup(row_width=1)
                     m.add(
+                        types.InlineKeyboardButton("🤖 صقل الدفعة آلياً الآن", callback_data="cb_opus_auto_refine"),
                         types.InlineKeyboardButton("✍️ اعتماد كافة الفصول المصقولة", callback_data="cb_opus_approve_all"),
                         types.InlineKeyboardButton("🚀 رفع ونشر الكل إلى بلوجر والشيت (Push)", callback_data="cb_opus_push_all")
                     )
