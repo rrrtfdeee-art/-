@@ -19,6 +19,7 @@
 | `opus_staging_pipeline.py` | محرك صقل الفصول عبر **Claude Opus**: تجريد المتن من وسوم HTML، تجهيز دفعة الـ 20 فصلاً، إعادة التغليف الملكي التلقائي، والتحديث المزدوج (شيت أو بلوجر PATCH). |
 | `gemini_analyzer.py` | وسيط الذكاء الاصطناعي: إدارة مجمع وسائط Multi-GAS Pool، وسلسلة النماذج النشطة (`gemini-3.5-flash-lite` ➔ `gemini-3.1-flash-lite` ➔ `gemini-3.8-flash`)، وحظر النماذج ذات الحصة الصفرية. |
 | `scraper_engine.py` | محرك التصفح الخفي والسحب المتقدم مع تجاوز الحماية واستخراج المتون من المواقع المصدرية. |
+| `novel_glossary_miner.py` | محرك استخراج وتعدين قاموس الرواية قبل الترجمة: مسح الفصول الصينية، كشف المصطلحات المتكررة، وتجهيز دفعات كلاود لإثراء القاموس المعتمد. |
 | `database.py` | إدارة قاعدة البيانات المحلية SQLite (`novel_scraper.db`) لحفظ الإعدادات والمصطلحات وحالة المهام. |
 
 ### كود Google Apps Script السحابي (`c:\Novelskyworld\نظام ترجمة ونشر الفصول\كود النشر.txt` و `test_clean.js`):
@@ -193,5 +194,10 @@
   - `wrap_clean_story_to_royal_html`: التغليف الملكي التلقائي.
   - `stage_chapters_for_opus_review`: تفريغ الدفعات في `opus_staging/pending/`.
   - `push_opus_refined_chapters`: رفع الفصول المصقولة وحفظ الجدولة.
+* `novel_glossary_miner.py`:
+  - `extract_potential_glossary_terms`: التعدين اللغوي للكيانات الصينية عبر الفصول.
+  - `build_claude_enrichment_prompt`: صياغة أمر التوليد والإثراء لكلاود أوبس.
+  - `export_mined_terms_to_csv`: تصدير القاموس التمهيدي كـ CSV.
 * `opus_controller_gui.py`: الواجهة المكتبية المحلية الخفيفة (زر سحب 20 فصلاً، زر فتح المجلد، زر اعتماد الكل، وزر الرفع لبلوجر).
 * `telegram_bot.py`: واجهة التحكم مع نوافذ التأكيد والأزرار التفاعلية ومراعاة المشرف.
+
