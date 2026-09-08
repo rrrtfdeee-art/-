@@ -58,6 +58,28 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/
 
 MIN_SAFE_TEXT_LENGTH = 800
 
+# أسماء الروايات الرسمية المسجلة بالمنظومة للتعرف الدقيق وتفادي تجزئة العناوين
+KNOWN_NOVELS = [
+    "After Severing Ties",
+    "المزارع الخبير في المدرسة الابتدائية",
+    "رماد النبل وجمر التمرد",
+    "نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا"
+]
+
+def resolve_novel_name_from_title(title: str, fallback: str = "After Severing Ties") -> str:
+    """استخراج دقيق لاسم الرواية من العنوان وتفادي تقسيم أرقام الفصول كأسماء روايات."""
+    if not title:
+        return fallback
+    clean = str(title).strip()
+    for kn in KNOWN_NOVELS:
+        if kn.lower() in clean.lower():
+            return kn
+    if " - " in clean:
+        candidate = clean.split(" - ")[0].strip()
+        if not re.match(r'^(?:الفصل|chapter|chap)\s*\d+$', candidate, re.IGNORECASE):
+            return candidate
+    return fallback
+
 # ================================================================
 # 🛑 متغير الإيقاف الفوري اللحظي — يمكن تفعيله من تليجرام بأمر /nsw_stop
 # ================================================================
@@ -258,9 +280,9 @@ def get_all_known_chapters_across_system() -> Dict[str, Dict[int, Dict[str, Any]
                 chap_num = int(m.group(0)) if m else 0
             
             novel = str(c[7].get("v", "") if len(c) > 7 and c[7] else "").strip()
-            if not novel and " - " in title:
-                novel = title.split(" - ")[0].strip()
-            novel = novel or "عام"
+            if not novel or novel == "عام":
+                novel = resolve_novel_name_from_title(title)
+            novel = novel or "After Severing Ties"
             
             post_id = str(c[4].get("v", "") if len(c) > 4 and c[4] else "").strip()
             post_url = str(c[5].get("v", "") if len(c) > 5 and c[5] else "").strip()
@@ -281,7 +303,7 @@ def get_all_known_chapters_across_system() -> Dict[str, Dict[int, Dict[str, Any]
             if not chap_num:
                 m = re.search(r'\d+', title)
                 chap_num = int(m.group(0)) if m else 0
-            novel = title.split(" - ")[0].strip() if " - " in title else "عام"
+            novel = resolve_novel_name_from_title(title)
             content = str(c[2].get("v", "") if len(c) > 2 and c[2] else "")
             register(novel, chap_num, "Publish Queue", content_len=len(content))
 
@@ -336,14 +358,8 @@ def get_all_known_chapters_across_system() -> Dict[str, Dict[int, Dict[str, Any]
                 c_url = c_info.get("postUrl", "")
                 c_date = c_info.get("publishedDate", "")
                 
-                # استخراج اسم الرواية من العنوان
-                c_nov = "After Severing Ties"
-                if " - " in c_title:
-                    c_nov = c_title.split(" - ")[0].strip()
-                elif ":" in c_title:
-                    parts = c_title.split(":")
-                    if len(parts) > 1 and any(ch.isalpha() for ch in parts[0]):
-                        c_nov = parts[0].strip()
+                # استخراج اسم الرواية من العنوان بدقة فائقة
+                c_nov = resolve_novel_name_from_title(c_title, fallback="After Severing Ties")
                 
                 # الفصول المجدولة أو الحية ذات المحتوى تسجل فوراً في النظام
                 if c_chars > 50 or "مجدول" in c_status or "حي" in c_status:
@@ -359,8 +375,8 @@ def get_all_known_chapters_across_system() -> Dict[str, Dict[int, Dict[str, Any]
 def detect_system_gaps(target_novel: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     كشف جميع الفجوات المفقودة في تسلسل فصول الروايات.
-    يدعم كشف الفجوات المفردة (مثل 474 بين 473 و 475، و 477 بين 476 و 478)
-    والفجوات المتعددة، مع استبعاد المسودات الفارغة (0 حرف) من الحسبان.
+    يدعم كشف الفجوات المفردة والمتعددة مع استبعاد المسودات الفارغة (0 حرف)
+    والفصول المنشورة بالفعل والتي تمتلك معرف تدوينة أو رابطاً أو محتوى كاملاً.
     """
     all_novels = get_all_known_chapters_across_system()
     gaps = []
@@ -369,10 +385,13 @@ def detect_system_gaps(target_novel: Optional[str] = None) -> List[Dict[str, Any
         if target_novel and target_novel.lower() not in novel.lower():
             continue
 
-        # نعتبر الفصل موجوداً فقط إذا كان له محتوى حقيقي (> 50 حرف) أو كان منشوراً حياً/مجدولاً
+        # نعتبر الفصل موجوداً وسليماً إذا كان له محتوى حقيقي (> 50 حرف) أو رابط/معرف تدوينة أو كان مجدولاً/حياً/بقوائم النشر
         valid_nums = sorted([
             n for n, info in chaps_map.items() 
-            if info.get("content_len", 0) > 50 or any("مجدول" in s or "حي" in s or "Queue" in s for s in info.get("sources", []))
+            if info.get("content_len", 0) > 50 
+            or info.get("post_id") 
+            or info.get("post_url")
+            or any("مجدول" in s or "حي" in s or "Queue" in s or "Published" in s for s in info.get("sources", []))
         ])
         
         if len(valid_nums) < 2:
@@ -416,12 +435,36 @@ def fill_single_missing_gap(
     4. ترحيل الرابط وتوثيق الفصل في جداول المنظومة.
     5. تحديث أزرار التنقل (السابق والتالي) تسلسلياً بحيث يرتبط كل فصل بسابقه ولاحقه الفعلي المباشر فقط!
     """
-    logger.info(f"🧩 [بدء ملء الفجوة] سحب وترجمة ونشر الفصل المفقود {missing_chap_num} لرواية '{novel_name}'...")
-    notify_admin(f"🧩 <i>جاري سحب وترجمة الفصل المفقود رقم {missing_chap_num} لرواية '{novel_name}' لملء الفجوة...</i>")
+    logger.info(f"🧩 [بدء ملء الفجوة] فحص وسحب وترجمة الفصل {missing_chap_num} لرواية '{novel_name}'...")
 
     if is_stop_requested():
         logger.warning("🛑 تم إيقاف ملء الفجوة فوراً بطلب المشرف.")
         return {"success": False, "error": "تم الإيقاف فوراً بطلب المشرف"}
+
+    # 0. التحقق الأمني الاستباقي لمنع التكرار: هل الفصل موجود بالفعل وكامل في بلوجر (> 500 حرف)؟
+    try:
+        audit_url = f"{PUBLISH_WEBAPP_URL}?action=scanGaps"
+        audit_res = requests.get(audit_url, timeout=25).json()
+        all_chaps = audit_res.get("allChapters", {})
+        chap_str = str(missing_chap_num)
+        if chap_str in all_chaps:
+            c_data = all_chaps[chap_str]
+            chars = c_data.get("charCount", 0)
+            status_disp = c_data.get("statusDisplay", "")
+            # إذا كان الفصل منشوراً حياً أو مجدولاً وله محتوى حقيقي كافٍ (> 500 حرف)، يمنع إعادة سحبه وترجمته نهائياً!
+            if chars >= 500 or ("حي" in status_disp and chars > 200):
+                logger.info(f"✅ الفصل {missing_chap_num} لرواية '{novel_name}' موجود بالفعل وسليم في بلوجر ({chars} حرف - {status_disp}). تم تخطيه فوراً لمنع التكرار.")
+                return {
+                    "success": True,
+                    "already_exists": True,
+                    "chap_num": missing_chap_num,
+                    "post_id": c_data.get("postId"),
+                    "post_url": c_data.get("postUrl")
+                }
+    except Exception as preflight_err:
+        logger.warning(f"ملاحظة الفحص الاستباقي للفصل {missing_chap_num}: {preflight_err}")
+
+    notify_admin(f"🧩 <i>جاري سحب وترجمة الفصل المفقود رقم {missing_chap_num} لرواية '{novel_name}' لملء الفجوة...</i>")
 
     # 1. إيجاد مصدر الرواية
     source_info = get_novel_source_info(novel_name)
@@ -839,7 +882,7 @@ def fetch_live_feed_chapters(novel_name: Optional[str] = None, max_results: int 
             if m2:
                 chap_num = int(m2.group(0))
 
-        entry_novel_name = title.split(" - ")[0].strip() if " - " in title else "عام"
+        entry_novel_name = resolve_novel_name_from_title(title, fallback="After Severing Ties")
 
         feed_chapters.append({
             "chapter_number": chap_num,
