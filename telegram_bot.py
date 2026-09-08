@@ -936,12 +936,16 @@ def acquire_bot_lock() -> bool:
     global _BOT_SOCKET_LOCK
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.bind(('127.0.0.1', 49250))
+        s.bind(('127.0.0.1', 58241))
         _BOT_SOCKET_LOCK = s
         return True
+    except OSError as e:
+        if getattr(e, 'winerror', None) == 10048 or getattr(e, 'errno', None) in (98, 10048):
+            print("[Telegram Bot] ⚠️ هناك نسخة أخرى من البوت تعمل بالفعل. تم تخطي التشغيل لمنع خطأ 409 Conflict.")
+            return False
+        return True
     except Exception:
-        print("[Telegram Bot] ⚠️ هناك نسخة أخرى من البوت تعمل بالفعل. تم تخطي التشغيل لمنع خطأ 409 Conflict.")
-        return False
+        return True
 
 
 def run_telegram_bot_loop():

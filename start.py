@@ -23,6 +23,7 @@ def run_streamlit():
     subprocess.run(
         [sys.executable, "-m", "streamlit", "run", "app.py",
          "--server.port", "8501",
+         "--server.address", "0.0.0.0",
          "--server.headless", "true"],
         cwd=os.path.dirname(os.path.abspath(__file__))
     )
