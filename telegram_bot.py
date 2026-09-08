@@ -122,6 +122,7 @@ def create_bot_app():
             types.BotCommand("menu", "📑 القائمة الرئيسية وأزرار التحكم"),
             types.BotCommand("repair", "🛡️ الإصلاح الشامل (فجوات + مبتورات + تنقل)"),
             types.BotCommand("fix_dates", "🗓️ إصلاح وتنسيق تواريخ نشر الفصول"),
+            types.BotCommand("fix_titles", "🏷️ توحيد صيغة العناوين (الفصل X: العنوان)"),
             types.BotCommand("nav", "🔗 صيانة وربط أزرار التنقل (السابق/التالي/الفهرس)"),
             types.BotCommand("status", "📊 حالة المنظومة والمهام اللحظية"),
             types.BotCommand("gaps", "🧩 فحص وسد الفصول المفقودة والمسودات"),
@@ -243,9 +244,11 @@ def create_bot_app():
             markup.add(btn_repair)
             markup.add(btn_dates, btn_nav)
             markup.add(btn_sync, btn_dups)
-            markup.add(btn_time, btn_status)
+            markup.add(btn_time)
             markup.add(btn_gaps, btn_heal)
-            markup.add(btn_export, btn_stage)
+            btn_titles = types.InlineKeyboardButton("🏷️ توحيد صيغة العناوين", callback_data="cb_fix_titles_start")
+            markup.add(btn_export, btn_titles)
+            markup.add(btn_stage, btn_status)
             markup.add(btn_help, btn_stop)
 
         bot.reply_to(message, text, reply_markup=markup)
@@ -368,6 +371,63 @@ def create_bot_app():
     # ================================================================
     # أوامر إدارة NSW (نظام النشر والترجمة على Blogger)
     # ================================================================
+
+    
+    @bot.message_handler(commands=['fix_titles', 'clean_titles'])
+    def nsw_fix_titles_cmd(message):
+        """توحيد وتصحيح صيغة عناوين الفصول لتصبح 'الفصل X: العنوان' في بلوجر والشيت."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+            return
+
+        chat_id = message.chat.id
+        parts = message.text.strip().split()
+        dry_run = ("--dry-run" in parts or "معاينة" in parts)
+        novel_name = ""
+        for p in parts[1:]:
+            if not p.startswith("--") and p != "معاينة":
+                novel_name += (" " + p if novel_name else p)
+
+        mode_str = "🔍 [معاينة تجريبية - Dry Run]" if dry_run else "⚡ [تنفيذ فعلي وتعديل في Blogger والشيت]"
+        novel_str = novel_name if novel_name else "كافة الروايات"
+
+        wait_msg = bot.reply_to(
+            message,
+            f"🏷️ <b>جاري تشغيل دالة توحيد وتصحيح عناوين الفصول...</b>\n"
+            f"• <b>الوضع:</b> {mode_str}\n"
+            f"• <b>الرواية المستهدفة:</b> <code>{novel_str}</code>\n"
+            f"• <b>الصيغة الموحدة:</b> <code>الفصل X: العنوان</code>\n\n"
+            f"⏳ يتم الآن فحص تدوينات Blogger (بما فيها المجدولة والمسودات) وتعديلها عبر محرك كود النشر..."
+        )
+
+        def _worker():
+            try:
+                import nsw_healer_engine
+                res = nsw_healer_engine.clean_and_unify_chapter_titles(novel_name, dry_run=dry_run, max_batch=500)
+                if res.get("success"):
+                    st = res.get("stats", {})
+                    out = (
+                        f"✅ <b>[اكتمل فحص وتوحيد عناوين الفصول بنجاح]</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"• المنشورات المفحوصة في بلوجر: <b>{st.get('totalScanned', 0)}</b>\n"
+                        f"• منشورات الرواية المطابقة: <b>{st.get('matchedNovel', 0)}</b>\n"
+                        f"• عناوين تم تصحيحها في Blogger: <b>{st.get('updatedBlogger', 0)}</b>\n"
+                        f"• عناوين تم تصحيحها في الشيت: <b>{st.get('updatedSheets', 0)}</b>\n"
+                    )
+                    if st.get('failedBlogger', 0) > 0:
+                        out += f"⚠️ فشل التعديل في بلوجر: <b>{st.get('failedBlogger')}</b>\n"
+                    samples = st.get("samples", [])
+                    if samples:
+                        out += "\n📋 <b>عينات من العناوين المصححة:</b>\n"
+                        for s in samples[:6]:
+                            out += f"• <code>{s.get('from','')[:40]}...</code>\n  ↳ <b>{s.get('to')}</b> ({s.get('status','')})\n"
+                    bot.edit_message_text(out, chat_id, wait_msg.message_id)
+                else:
+                    bot.edit_message_text(f"⚠️ تنبيه من كود النشر: {res.get('message', res.get('error', 'تعذر إتمام المهمة'))}", chat_id, wait_msg.message_id)
+            except Exception as e:
+                bot.edit_message_text(f"❌ خطأ أثناء تشغيل دالة تصحيح العناوين: {e}", chat_id, wait_msg.message_id)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     @bot.message_handler(commands=['nsw_status', 'status'])
     def nsw_status_cmd(message):

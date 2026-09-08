@@ -1687,7 +1687,7 @@
             const displayTime = scheduledDate ? new Date(scheduledDate).toLocaleString("ar-IQ") : "فوري الآن";
 
             const singleChapter = {
-                title: `${novelName} - ${chapterTitle}`,
+                title: cleanChapterTitleFormat(chapterTitle, novelName),
                 content: cleanContentHTML,
                 publishDate: dateIso,
                 labels: [novelName, "آخر الفصول"]
@@ -1746,6 +1746,38 @@
                 reader.readAsArrayBuffer(file);
             }
         }
+
+        
+        function cleanChapterTitleFormat(rawTitle, novelName) {
+  var t = String(rawTitle || "").trim();
+  if (!t) return "";
+
+  // 1. استخراج رقم الفصل
+  var m = t.match(/(?:الفصل|فصل|Chapter)\s*(\d+(?:\.\d+)?)/i);
+  if (!m) return t;
+  var chapNum = m[1];
+
+  // 2. تقسيم النص بالاعتماد على مؤشر الفصل ورقم الفصل
+  var regexSplit = new RegExp("(?:الفصل|فصل|Chapter)\\s*" + chapNum + "\\s*[:\\-–—]?", "gi");
+  var parts = t.split(regexSplit);
+  var subtitle = parts.length > 0 ? parts[parts.length - 1].trim() : "";
+
+  // 3. تنظيف أي بقايا لاسم الرواية أو فواصل من بداية العنوان الفرعي
+  if (novelName) {
+    var escNov = novelName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    subtitle = subtitle.replace(new RegExp("^" + escNov + "\\s*[:\\-–—]?\\s*", "i"), "");
+  }
+  // إزالة أسماء الروايات الشائعة إن وجدت في العنوان الفرعي
+  subtitle = subtitle.replace(/^(?:After Severing Ties|المزارع الخبير في المدرسة الابتدائية|رماد النبل وجمر التمرد|نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا)\s*[-:–—]?\s*/i, "");
+  // إزالة أي فواصل أو نقطتين متصدرة أو مسافات زائدة
+  subtitle = subtitle.replace(/^[:\-–—\s]+/, "").trim();
+
+  // 4. بناء الصيغة الموحدة الرسمية: الفصل X: العنوان
+  if (subtitle && subtitle !== ("الفصل " + chapNum) && subtitle !== chapNum) {
+    return "الفصل " + chapNum + ": " + subtitle;
+  }
+  return "الفصل " + chapNum;
+}
 
         function extractChapterNum(str) {
             if (!str) return 0;
@@ -1866,9 +1898,10 @@
                 }
                 lastScheduledMillis = scheduledTime.getTime();
 
-                let htmlStructure = buildStructure(novelName, chapter.title, chapter.content, indexLink);
+                let unifiedTitle = cleanChapterTitleFormat(chapter.title, novelName);
+                let htmlStructure = buildStructure(novelName, unifiedTitle, chapter.content, indexLink);
                 allChaptersPayload.push({
-                    title: `${novelName} - ${chapter.title}`,
+                    title: cleanChapterTitleFormat(chapter.title, novelName),
                     content: htmlStructure,
                     publishDate: scheduledTime.toISOString(),
                     labels: [novelName, "آخر الفصول"]

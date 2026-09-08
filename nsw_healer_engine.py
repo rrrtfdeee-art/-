@@ -3078,3 +3078,23 @@ def export_chapters_from_blogger_to_txt(
     }
 
 
+def clean_and_unify_chapter_titles(novel_name: str = "", dry_run: bool = False, max_batch: int = 500) -> Dict[str, Any]:
+    """
+    توحيد صيغة عناوين الفصول في بلوجر والشيت عبر استدعاء كود النشر (بصلاحية المحرر).
+    يحول الصيغ المكررة إلى: الفصل X: العنوان
+    """
+    payload = {
+        "action": "fixTitles",
+        "novelName": novel_name,
+        "dryRun": dry_run,
+        "maxBatch": max_batch
+    }
+    try:
+        resp = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=120)
+        if resp.status_code == 200:
+            return resp.json()
+        return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text}"}
+    except Exception as e:
+        logger.error(f"Error invoking fixTitles in GAS: {e}")
+        return {"success": False, "error": str(e)}
+
