@@ -22,6 +22,9 @@ import logging
 import requests
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
+from pathlib import Path
+BASE_DIR = Path(__file__).resolve().parent
+STAGING_DIR = BASE_DIR / "opus_staging"
 
 from nsw_healer_engine import (
     PUBLISH_WEBAPP_URL,
