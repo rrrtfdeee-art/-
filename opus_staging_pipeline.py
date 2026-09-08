@@ -259,22 +259,46 @@ def apply_opus_review_and_sync(
     pub_date = chapter_item.get("published_date", "")
     source = chapter_item.get("source", "")
 
-    # 1. التغليف الملكي التلقائي
+    # استرجاع روابط التنقل وتاريخ الجدولة الفعلي من التدوينة الأصلية إن وجدت
+    prev_url = "#"
+    next_url = "#"
+    iso_pub_date = None
+
+    if pub_date:
+        dt_obj = parse_any_datetime(pub_date)
+        iso_pub_date = dt_obj.strftime("%Y-%m-%dT%H:%M:%S.000Z") if dt_obj else str(pub_date)
+
+    if post_id:
+        try:
+            get_res = requests.get(f"{PUBLISH_WEBAPP_URL}?action=getPost&postId={post_id}", timeout=15).json()
+            if get_res.get("status") == "success":
+                p_data = get_res.get("data", {})
+                orig_c = p_data.get("content", "")
+                if not iso_pub_date:
+                    orig_pub = p_data.get("published", "")
+                    if orig_pub:
+                        dt_o = parse_any_datetime(orig_pub)
+                        iso_pub_date = dt_o.strftime("%Y-%m-%dT%H:%M:%S.000Z") if dt_o else orig_pub
+                # الحفاظ على روابط التنقل الأصلية
+                m_prev = re.search(r'id=["\']prev-btn["\'][^>]*href=["\']([^"\']+)["\']', orig_c) or re.search(r'href=["\']([^"\']+)["\'][^>]*id=["\']prev-btn["\']', orig_c)
+                if m_prev and m_prev.group(1) != "#":
+                    prev_url = m_prev.group(1)
+                m_next = re.search(r'id=["\']next-btn["\'][^>]*href=["\']([^"\']+)["\']', orig_c) or re.search(r'href=["\']([^"\']+)["\'][^>]*id=["\']next-btn["\']', orig_c)
+                if m_next and m_next.group(1) != "#":
+                    next_url = m_next.group(1)
+        except Exception as e_fetch_orig:
+            logger.warning(f"ملاحظة فحص التدوينة الأصلية للفصل {c_num}: {e_fetch_orig}")
+
+    # 1. التغليف الملكي التلقائي مع الحفاظ على أزرار التنقل السليمة
     royal_html = wrap_clean_story_to_royal_html(
         novel_name=novel_name,
         standard_title=final_title,
         clean_text=refined_clean_story,
-        prev_url="#",
-        next_url="#"
+        prev_url=prev_url,
+        next_url=next_url
     )
 
     result = {"success": True, "chapter_number": c_num, "title": final_title}
-
-    # ضبط التاريخ بصيغة ISO الصارمة
-    iso_pub_date = None
-    if pub_date:
-        dt_obj = parse_any_datetime(pub_date)
-        iso_pub_date = dt_obj.strftime("%Y-%m-%dT%H:%M:%S.000Z") if dt_obj else str(pub_date)
 
     # 2. التحديث حسب المصدر
     # الحالة أ: المنشور موجود على بلوجر (مجدول أو حي) ➔ إرسال طلب PATCH لتحديث المحتوى فقط

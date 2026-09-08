@@ -199,6 +199,7 @@ def cmd_pull(limit: int = 20, novel_name: str = "After Severing Ties"):
             "source": meta["source"],
             "post_id": meta["post_id"],
             "post_url": meta["post_url"],
+            "published_date": meta.get("published_date", ""),
             "char_count": len(raw_story),
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
@@ -206,6 +207,72 @@ def cmd_pull(limit: int = 20, novel_name: str = "After Severing Ties"):
 
     save_manifest(manifest)
     logger.info(f"✅ تم سحب وتجهيز {saved_count} فصلاً ناصعاً بنجاح في مجلد: {PENDING_DIR}")
+
+    # توليد ملف طلب كلاود أوبس الفوري مع القاموس المفلتر
+    generate_batch_claude_prompt(novel_name)
+
+
+def generate_batch_claude_prompt(novel_name: str = "After Severing Ties") -> str:
+    """توليد أمر فوري متكامل مع القاموس المفلتر للدفعة الموجودة في pending/."""
+    from nsw_healer_engine import get_novel_glossary, filter_glossary_for_chapter
+
+    pending_files = sorted(list(PENDING_DIR.glob("chapter_*.txt")), key=lambda p: int(re.search(r'\d+', p.name).group(0)) if re.search(r'\d+', p.name) else 0)
+    if not pending_files:
+        return "لا توجد فصول في الانتظار حالياً."
+
+    all_glossary = get_novel_glossary(novel_name)
+    all_text = ""
+    for pf in pending_files:
+        _, txt = parse_chapter_file(pf)
+        all_text += " " + txt
+
+    # فلترة القاموس للدفعة
+    matched_glossary = filter_glossary_for_chapter(all_text, all_glossary, novel_name)
+
+    # بناء التعليمات الصارمة لكلاود أوبس
+    prompt_lines = [
+        f"👑 [أمر الصقل والمراجعة الأدبية لدفعة فصول رواية: {novel_name}]",
+        "المطلوب: مراجعة وصقل الفصول الموجودة في مجلد `opus_staging/pending/` بأعلى أسلوب بلاغي فصيح.",
+        "",
+        "📜 القواعد الذهبية الصارمة:",
+        "1. الالتزام التام والقطعي بأسماء الشخصيات والمصطلحات الواردة في القاموس المرفق أدناه.",
+        "2. الحفاظ الصارم على كافة وسوم التنسيق الجمالية BBCode دون حذفها أو تعديل شكلها:",
+        "   - [cultivation]...[/cultivation] لتقنيات واختراقات ومراحل المزارعة والطاقة.",
+        "   - [system]...[/system] لنوافذ وشاشات النظام السيبراني والمهمات.",
+        "   - [system red]...[/system] لتحذيرات الخطر والموت.",
+        "   - [doc]...[/doc] للوثائق والمراسيم.",
+        "   - [letter]...[/letter] للرسائل والمذكرات الشخصية.",
+        "   - [tip]...[/tip] للتلميحات الإرشادية.",
+        "   - [note]...[/note] للملاحظات والهوامش.",
+        "3. إخراج المتن المصقول كفقرات نقية بدون أي أكواد HTML إضافية.",
+        "",
+        "📌 القاموس المعتمد المخصص لهذه الدفعة:"
+    ]
+    for g in matched_glossary:
+        cat = f" ({g.get('category')})" if g.get('category') else ""
+        gender = f" [{g.get('gender')}]" if g.get('gender') else ""
+        prompt_lines.append(f"• {g['original']} ➔ {g['arabic']}{cat}{gender}")
+
+    prompt_text = "\n".join(prompt_lines)
+    prompt_file = STAGING_DIR / "CLAUDE_PROMPT_FOR_BATCH.txt"
+    prompt_file.write_text(prompt_text, encoding="utf-8")
+    logger.info(f"📝 تم توليد ملف أمر كلاود مع القاموس المفلتر: {prompt_file}")
+
+    # توليد ملف مجمّع كامل يحتوي على الأمر والمتون سوياً للنسخ المباشر
+    bundle_lines = [prompt_text, "\n" + "=" * 60, "📦 [متون الفصول المراد صقلها للدفعة الحالية]", "=" * 60 + "\n"]
+    for pf in pending_files:
+        meta, txt = parse_chapter_file(pf)
+        c_num = meta.get("chapter", re.search(r'\d+', pf.name).group(0))
+        c_title = meta.get("title", f"الفصل {c_num}")
+        bundle_lines.append(f"\n--- [بداية الفصل {c_num}: {c_title}] ---")
+        bundle_lines.append(txt)
+        bundle_lines.append(f"--- [نهاية الفصل {c_num}] ---\n")
+
+    bundle_file = STAGING_DIR / "CLAUDE_FULL_BATCH_BUNDLE.txt"
+    bundle_file.write_text("\n".join(bundle_lines), encoding="utf-8")
+    logger.info(f"📦 تم توليد ملف الدفعة المجمعة الكاملة: {bundle_file}")
+
+    return prompt_text
 
 
 def cmd_approve(chapter_num: int):
@@ -263,10 +330,13 @@ def cmd_push(novel_name: str = "After Severing Ties"):
     for af in approved_files:
         meta, refined_text = parse_chapter_file(af)
         c_num = int(meta.get("chapter", re.search(r'\d+', af.name).group(0)))
-        title = meta.get("title", f"الفصل {c_num}")
-        post_id = meta.get("post_id", "")
-        pub_date = meta.get("published_date", "")
-        source = meta.get("source", "")
+        
+        # استرجاع الميتاداتا الأصلية مع دعم الاسترجاع الاحتياطي التام من سجل manifest
+        cached_info = chapters_dict.get(str(c_num), {})
+        title = meta.get("title") or cached_info.get("title") or f"الفصل {c_num}"
+        post_id = meta.get("post_id") or cached_info.get("post_id", "")
+        pub_date = meta.get("published_date") or cached_info.get("published_date", "")
+        source = meta.get("source") or cached_info.get("source", "")
 
         chapter_item = {
             "chapter_number": c_num,
@@ -337,13 +407,20 @@ def main():
 
     # أمر push
     push_parser = subparsers.add_parser("push", help="نشر وتحديث الفصول المعتمدة في بلوجر والشيت")
-    push_parser.add_argument("--novel", type=str, default="After Severing Ties", help="اسم الرواية")
+    # أمر stage-all (النقرة 1)
+    stage_parser = subparsers.add_parser("stage-all", help="النقرة 1: سحب وتجهيز الفصول وتوليد القاموس لكلاود")
+    stage_parser.add_argument("--limit", type=int, default=20, help="عدد الفصول")
+    stage_parser.add_argument("--novel", type=str, default="After Severing Ties", help="اسم الرواية")
+
+    # أمر publish-all (النقرة 2)
+    pub_parser = subparsers.add_parser("publish-all", help="النقرة 2: اعتماد ونشر كافة الفصول المصقولة بمواعيدها لبلوجر")
+    pub_parser.add_argument("--novel", type=str, default="After Severing Ties", help="اسم الرواية")
 
     args = parser.parse_args()
 
     if args.command == "status" or not args.command:
         cmd_status()
-    elif args.command == "pull":
+    elif args.command in ["pull", "stage-all"]:
         cmd_pull(limit=args.limit, novel_name=args.novel)
     elif args.command == "approve":
         if args.chapter.lower() in ["all", "--all", "*"]:
@@ -353,7 +430,9 @@ def main():
                 cmd_approve(chapter_num=int(args.chapter))
             except ValueError:
                 logger.error(f"❌ رقم الفصل غير صالح: {args.chapter}. أدخل رقماً أو 'all'.")
-    elif args.command == "push":
+    elif args.command in ["push", "publish-all"]:
+        if args.command == "publish-all":
+            cmd_approve_all()
         cmd_push(novel_name=args.novel)
     else:
         parser.print_help()
@@ -361,3 +440,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

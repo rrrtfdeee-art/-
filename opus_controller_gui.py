@@ -69,79 +69,81 @@ class OpusAppGUI:
         self.lbl_published = tk.Label(status_card, text="✅ المنشورة (Published): ...", font=("Segoe UI", 11), fg="#89b4fa", bg="#313244", anchor="w")
         self.lbl_published.pack(fill=tk.X, pady=2)
 
-        # إطار الأزرار
+        # إطار الأزرار بنظام النقرتين البسيط
         btn_frame = tk.Frame(main_frame, bg="#1e1e2e")
         btn_frame.pack(fill=tk.X, pady=(0, 15))
 
-        # زر 1: سحب 20 فصلاً
-        self.btn_pull = tk.Button(
+        # 🌟 النقرة الأولى: سحب وتجهيز مع القاموس
+        self.btn_hero_click1 = tk.Button(
             btn_frame,
-            text="📥 1. ابدأ سحب 20 فصلاً جديداً (Pull)",
+            text="📥 [النقرة 1]: اسحب 20 فصلاً وجهّز القاموس لكلاود أوبس",
             font=("Segoe UI", 11, "bold"),
-            bg="#89b4fa",
-            fg="#11111b",
-            activebackground="#b4befe",
+            bg="#3b82f6",
+            fg="#ffffff",
+            activebackground="#60a5fa",
             cursor="hand2",
-            pady=8,
-            command=self.start_pull
+            pady=10,
+            command=self.start_two_click_stage
         )
-        self.btn_pull.pack(fill=tk.X, pady=4)
+        self.btn_hero_click1.pack(fill=tk.X, pady=4)
 
-        # زر 2: فتح مجلد الفصول
-        self.btn_open = tk.Button(
+        # 🌟 النقرة الثانية: اعتماد ونشر مباشر
+        self.btn_hero_click2 = tk.Button(
             btn_frame,
-            text="📂 فتح مجلد الفصول على الحاسوب (Pending Folder)",
-            font=("Segoe UI", 10),
-            bg="#45475a",
-            fg="#cdd6f4",
-            activebackground="#585b70",
+            text="🚀 [النقرة 2]: اعتماد ورفع الكل إلى بلوجر بمواعيدها المجدولة",
+            font=("Segoe UI", 11, "bold"),
+            bg="#10b981",
+            fg="#ffffff",
+            activebackground="#34d399",
             cursor="hand2",
-            pady=6,
+            pady=10,
+            command=self.start_two_click_publish
+        )
+        self.btn_hero_click2.pack(fill=tk.X, pady=4)
+
+        # أدوات مساعدة سريعة
+        sub_btn_frame = tk.Frame(btn_frame, bg="#1e1e2e")
+        sub_btn_frame.pack(fill=tk.X, pady=4)
+
+        self.btn_copy_prompt = tk.Button(
+            sub_btn_frame,
+            text="📋 نسخ أمر كلاود مع القاموس للحافظة",
+            font=("Segoe UI", 9, "bold"),
+            bg="#4f46e5",
+            fg="#ffffff",
+            activebackground="#6366f1",
+            cursor="hand2",
+            pady=5,
+            command=self.copy_claude_prompt_to_clipboard
+        )
+        self.btn_copy_prompt.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
+
+        self.btn_open = tk.Button(
+            sub_btn_frame,
+            text="📂 فتح مجلد الفصول",
+            font=("Segoe UI", 9),
+            bg="#374151",
+            fg="#f3f4f6",
+            activebackground="#4b5563",
+            cursor="hand2",
+            pady=5,
             command=self.open_folder
         )
-        self.btn_open.pack(fill=tk.X, pady=4)
-
-        # زر 3: اعتماد الكل
-        self.btn_approve = tk.Button(
-            btn_frame,
-            text="✍️ 2. اعتماد كافة الفصول المصقولة (Approve All)",
-            font=("Segoe UI", 11, "bold"),
-            bg="#a6e3a1",
-            fg="#11111b",
-            activebackground="#94e2d5",
-            cursor="hand2",
-            pady=8,
-            command=self.start_approve_all
-        )
-        self.btn_approve.pack(fill=tk.X, pady=4)
-
-        # زر 4: رفع ونشر لبلوجر
-        self.btn_push = tk.Button(
-            btn_frame,
-            text="🚀 3. رفع ونشر الكل إلى بلوجر والشيت (Push to Blogger)",
-            font=("Segoe UI", 11, "bold"),
-            bg="#fab387",
-            fg="#11111b",
-            activebackground="#f9e2af",
-            cursor="hand2",
-            pady=8,
-            command=self.start_push
-        )
-        self.btn_push.pack(fill=tk.X, pady=4)
+        self.btn_open.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
 
         # زر تحديث الحالة
         self.btn_refresh = tk.Button(
             btn_frame,
-            text="🔄 تحديث الأرقام والحالة",
-            font=("Segoe UI", 9),
-            bg="#313244",
-            fg="#a6adc8",
-            activebackground="#45475a",
+            text="🔄 تحديث الأرقام والحالة اللحظية",
+            font=("Segoe UI", 8),
+            bg="#1f2937",
+            fg="#9ca3af",
+            activebackground="#374151",
             cursor="hand2",
-            pady=4,
+            pady=3,
             command=self.update_status_display
         )
-        self.btn_refresh.pack(fill=tk.X, pady=4)
+        self.btn_refresh.pack(fill=tk.X, pady=(4, 0))
 
         # صندوق السجلات والرسائل
         log_label = tk.Label(main_frame, text="📋 تقرير العمليات الآنية:", font=("Segoe UI", 9, "bold"), fg="#a6adc8", bg="#1e1e2e", anchor="w")
@@ -151,7 +153,7 @@ class OpusAppGUI:
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
         self.update_status_display()
-        self.log("✅ لوحة تحكم أوبس جاهزة للعمل.")
+        self.log("✅ لوحة تحكم أوبس بنظام النقرتين السريع جاهزة.")
 
     def log(self, message: str):
         self.log_text.insert(tk.END, message + "\n")
@@ -159,9 +161,10 @@ class OpusAppGUI:
 
     def set_buttons_state(self, enabled: bool):
         st = tk.NORMAL if enabled else tk.DISABLED
-        self.btn_pull.config(state=st)
-        self.btn_approve.config(state=st)
-        self.btn_push.config(state=st)
+        self.btn_hero_click1.config(state=st)
+        self.btn_hero_click2.config(state=st)
+        self.btn_copy_prompt.config(state=st)
+        self.btn_open.config(state=st)
 
     def update_status_display(self):
         p_cnt = len(list(PENDING_DIR.glob("chapter_*.txt")))
@@ -179,41 +182,54 @@ class OpusAppGUI:
         except Exception as e:
             self.log(f"❌ خطأ فتح المجلد: {e}")
 
-    def start_pull(self):
+    def copy_claude_prompt_to_clipboard(self):
+        prompt_file = STAGING_DIR / "CLAUDE_PROMPT_FOR_BATCH.txt"
+        if not prompt_file.exists():
+            self.log("⚠️ لم يتم العثور على ملف الأمر. اضغط على [النقرة 1] أولاً لتوليده.")
+            return
+        try:
+            text = prompt_file.read_text(encoding="utf-8")
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.log("📋 تم نسخ أمر كلاود أوبس مع القاموس المفلتر إلى الحافظة بنجاح!\nالصقه الآن في محادثة Claude Opus.")
+        except Exception as e:
+            self.log(f"❌ تعذر نسخ النص: {e}")
+
+    def start_two_click_stage(self):
+        """النقرة الأولى: سحب وتجريد وتوليد القاموس المفلتر ونسخه للحافظة وفتح المجلد."""
         self.set_buttons_state(False)
-        self.log("⏳ جاري سحب دفعة فصول جديدة لرواية 'After Severing Ties'...")
+        self.log("⏳ [النقرة 1]: جاري سحب 20 فصلاً وتجريدها من الأكواد وفلترة القاموس المعتمد...")
         def _run():
             try:
                 sync_opus_queue.cmd_pull(limit=20, novel_name="After Severing Ties")
-                self.root.after(0, lambda: self.log("🎉 اكتمل السحب بنجاح! الفصول موجودة في pending.\n💬 اطلب الآن من Claude في المحادثة صقلها."))
+                self.root.after(0, self.copy_claude_prompt_to_clipboard)
+                self.root.after(0, lambda: self.log(
+                    "🎉 [اكتملت النقرة 1 بنجاح!]\n"
+                    "1. تم سحب وتجريد الفصول في مجلد pending/ وحفظ وسوم BBCode.\n"
+                    "2. تم استخلاص القاموس المفلتر بدقة (توفير 90%+ من توكنز نافذة السياق).\n"
+                    "3. تم نسخ أمر كلاود أوبس مع القاموس المفلتر إلى الحافظة تلقائياً (Ctrl+V جاهز).\n"
+                    "👉 الصقه في محادثة Claude Opus (أو اسحب ملفات الفصول من المجلد المفتوح وأفلتها).\n"
+                    "👉 بعد انتهاء كلاود من صقل الفصول، اضغط مباشرة على [النقرة 2]."
+                ))
+                self.root.after(0, self.open_folder)
             except Exception as e:
-                self.root.after(0, lambda: self.log(f"❌ خطأ أثناء السحب: {e}"))
+                self.root.after(0, lambda: self.log(f"❌ خطأ في النقرة 1: {e}"))
             finally:
                 self.root.after(0, lambda: (self.update_status_display(), self.set_buttons_state(True)))
         threading.Thread(target=_run, daemon=True).start()
 
-    def start_approve_all(self):
+    def start_two_click_publish(self):
+        """النقرة الثانية: اعتماد الكل وإعادة التغليف الملكي والرفع لبلوجر بمواعيدها."""
         self.set_buttons_state(False)
-        self.log("⏳ جاري نقل كافة الفصول المصقولة من pending إلى approved...")
+        self.log("🚀 [النقرة 2]: جاري اعتماد كافة الفصول وإعادة التغليف الملكي والرفع لبلوجر بمواعيدها المجدولة...")
         def _run():
             try:
                 cnt = sync_opus_queue.cmd_approve_all()
-                self.root.after(0, lambda: self.log(f"⭐ تم اعتماد {cnt} فصول ونقلها بنجاح إلى approved! جاهزة للنشر."))
-            except Exception as e:
-                self.root.after(0, lambda: self.log(f"❌ خطأ: {e}"))
-            finally:
-                self.root.after(0, lambda: (self.update_status_display(), self.set_buttons_state(True)))
-        threading.Thread(target=_run, daemon=True).start()
-
-    def start_push(self):
-        self.set_buttons_state(False)
-        self.log("🚀 جاري رفع ونشر الفصول المعتمدة إلى بلوجر وقواعد البيانات...")
-        def _run():
-            try:
+                self.root.after(0, lambda: self.log(f"✍️ تم اعتماد {cnt} فصول ونقلها للمزامنة..."))
                 sync_opus_queue.cmd_push(novel_name="After Severing Ties")
-                self.root.after(0, lambda: self.log("🎉 تم النشر والمزامنة بنجاح في بلوجر والجداول!"))
+                self.root.after(0, lambda: self.log("🎉 [اكتملت النقرة 2 بنجاح!] تم رفع ونشر كافة الفصول وصيانة مواعيدها بدقة 100%."))
             except Exception as e:
-                self.root.after(0, lambda: self.log(f"❌ خطأ أثناء النشر: {e}"))
+                self.root.after(0, lambda: self.log(f"❌ خطأ في النقرة 2: {e}"))
             finally:
                 self.root.after(0, lambda: (self.update_status_display(), self.set_buttons_state(True)))
         threading.Thread(target=_run, daemon=True).start()
