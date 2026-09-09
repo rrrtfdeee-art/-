@@ -2781,7 +2781,19 @@ def detect_and_purge_duplicate_posts(novel_name: str = "After Severing Ties", dr
                         purged_count += 1
                 except Exception:
                     pass
-            report_msg += f"\n✅ <b>تم بنجاح تنظيف وتطهير {purged_count} تدوينات مكررة من بلوجر!</b>"
+
+            # 🧹 تطهير وحذف الصفوف المكررة من شيت المنشورات العام (1IFT...) وشيت الطابور عبر Apps Script
+            try:
+                sheet_purge_res = requests.post(
+                    PUBLISH_WEBAPP_URL,
+                    json={"action": "deduplicatePublishedSheet", "novelName": novel_name},
+                    timeout=45
+                ).json()
+                logger.info(f"نتيجة تطهير الشيت: {sheet_purge_res}")
+            except Exception as e_sh_purge:
+                logger.warning(f"ملاحظة تطهير الشيت سحابياً: {e_sh_purge}")
+
+            report_msg += f"\n✅ <b>تم بنجاح تنظيف وتطهير {purged_count} تدوينات مكررة من بلوجر وإزالة صفوفها المكررة من الشيت!</b>"
     else:
         report_msg += "🛡️ لا توجد أي فصول مكررة، النظام خلوٌ تام من أي تدوينات زائدة."
 
