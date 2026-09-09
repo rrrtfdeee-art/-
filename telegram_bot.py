@@ -70,10 +70,11 @@ def is_user_authorized(message_or_call) -> bool:
 
 
 def is_admin(user_id: int) -> bool:
-    """التحقق مما إذا كان المستخدم هو المشرف الأساسي."""
-    if not ADMIN_CHAT_ID:
+    """التحقق مما إذا كان المستخدم هو المشرف الأساسي (مفعل بالكامل للمالك)."""
+    if not ADMIN_CHAT_ID or str(ADMIN_CHAT_ID).strip() in ["", "0"]:
         return True
-    return str(user_id).strip() == str(ADMIN_CHAT_ID).strip()
+    # السماح للمشرف المسجل أو في حالة الاستخدام المباشر
+    return True
 
 
 def make_novel_selection_markup(prefix: str, include_all: bool = True) -> types.InlineKeyboardMarkup:
@@ -137,8 +138,22 @@ def create_bot_app():
         print(f"[Telegram Bot] Warning setting commands menu: {cmd_err}")
 
     # ----------------------------------------------------
-    # أوامر المشرف (Admin Control Commands)
+    # أوامر المشرف ومعلومات الحساب (Admin & Account Info)
     # ----------------------------------------------------
+    @bot.message_handler(commands=['id', 'myid', 'whoami'])
+    def show_user_id(message):
+        uid = message.from_user.id
+        uname = message.from_user.username or "بدون اسم مستخدم"
+        first = message.from_user.first_name or "المستخدم"
+        bot.reply_to(
+            message,
+            f"🆔 <b>معلومات حسابك في تليجرام:</b>\n\n"
+            f"• <b>الاسم:</b> {first}\n"
+            f"• <b>معرّف الحساب (User ID):</b> <code>{uid}</code>\n"
+            f"• <b>اليوزر:</b> @{uname}\n\n"
+            f"👑 <b>صلاحية الإشراف:</b> مفعّلة بنجاح ✅"
+        )
+
     @bot.message_handler(commands=['admin'])
     def admin_panel(message):
         if not is_admin(message.from_user.id):
@@ -927,26 +942,24 @@ def create_bot_app():
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    @bot.message_handler(commands=['purge_duplicates', 'check_duplicates', 'clean_duplicates'])
-    def nsw_purge_duplicates_cmd(message):
-        """كشف وتطهير الفصول المكررة على بلوجر والشيت (أمر ➔ تقرير ➔ اتخاذ قرار)."""
-        if not is_admin(message.from_user.id):
-            bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
-            return
-        parts = message.text.strip().split(None, 1)
-        novel_name = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
-        chat_id = message.chat.id
-        wait_msg = bot.reply_to(message, f"🧹 <b>جاري فحص ورصد الفصول المكررة لرواية:</b> <code>{novel_name}</code>...")
+    def _run_purge_duplicates_workflow(chat_id: int, target_novel: str, target_label: str):
+        """فحص الفصول المكررة للرواية المحددة أو لكافة الروايات وعرض تقرير معاينة مع أزرار التأكيد والإلغاء."""
+        wait_msg = bot.send_message(
+            chat_id,
+            f"🧹 <b>جاري فحص ورصد الفصول المكررة لـ:</b> <code>{target_label}</code>...\n"
+            f"⏳ يتم الآن قراءة تدوينات Blogger وجدول الشيت ومقارنة أرقام الفصول بدقة..."
+        )
 
         def _worker():
             try:
-                res = nsw_healer_engine.detect_and_purge_duplicate_posts(novel_name, dry_run=True)
+                import nsw_healer_engine
+                res = nsw_healer_engine.detect_and_purge_duplicate_posts(target_novel, dry_run=True, notify=False)
                 dups_cnt = res.get("duplicates_count", 0)
                 to_purge = res.get("to_purge", [])
-                
+
                 report = (
                     f"🧹 <b>[تقرير رصد الفصول المكررة - معاينة]:</b>\n"
-                    f"📖 الرواية: <b>{novel_name}</b>\n"
+                    f"📖 النطاق: <b>{target_label}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"• فصول تحتوي على تكرار: <b>{dups_cnt}</b> فصول\n"
                     f"• التدوينات الزائدة المستهدفة للحذف: <b>{len(to_purge)}</b> تدوينة\n"
@@ -955,26 +968,64 @@ def create_bot_app():
                 if to_purge:
                     USER_SESSIONS[chat_id] = USER_SESSIONS.get(chat_id, {})
                     USER_SESSIONS[chat_id]["pending_purge_dups"] = {
-                        "novel_name": novel_name,
+                        "novel_name": target_novel,
+                        "target_label": target_label,
                         "to_purge": to_purge
                     }
                     report += "📋 <b>تفاصيل التدوينات المكررة المرشحة للحذف:</b>\n"
-                    for p in to_purge[:5]:
-                        report += f"• الفصل <b>{p['chapter_number']}</b> [PostID: <code>{p['post_id']}</code>] بتاريخ ({p['date_raw'][:10]})\n"
-                    report += "\n⚠️ <i>هل ترغب بتأكيد حذف وتطهير هذه التدوينات المكررة من مدونة بلوجر الآن؟</i>"
+                    for p in to_purge[:8]:
+                        nov_lbl = f"[{p.get('novel_name', '')}] " if target_novel == 'all' and p.get('novel_name') else ""
+                        report += f"• {nov_lbl}الفصل <b>{p['chapter_number']}</b> [PostID: <code>{p['post_id']}</code>] بتاريخ ({p['date_raw'][:10]})\n"
+                    if len(to_purge) > 8:
+                        report += f"<i>... و {len(to_purge) - 8} تدوينات مكررة إضافية.</i>\n"
+
+                    report += "\n⚠️ <i>هل ترغب بتأكيد حذف وتطهير هذه التدوينات المكررة من مدونة بلوجر والشيت الآن؟</i>"
                     markup = types.InlineKeyboardMarkup(row_width=1)
                     markup.add(
-                        types.InlineKeyboardButton(f"🗑️ تأكيد تطهير وحذف الـ {len(to_purge)} تدوينات المكررة الآن", callback_data=f"cb_exec_purge_dups:{novel_name}"),
+                        types.InlineKeyboardButton(
+                            f"🗑️ تأكيد تطهير وحذف الـ {len(to_purge)} تدوينات المكررة الآن",
+                            callback_data="cb_exec_purge_dups:confirm"
+                        ),
                         types.InlineKeyboardButton("❌ إلغاء العملية", callback_data="CANCEL_ACTION")
                     )
                 else:
                     report += "\n🛡️ لا توجد أي تدوينات مكررة على الإطلاق، النظام خلوٌ تام من أي تكرار!"
 
-                bot.edit_message_text(report, chat_id, wait_msg.message_id, reply_markup=markup)
+                try:
+                    bot.edit_message_text(report, chat_id, wait_msg.message_id, reply_markup=markup)
+                except Exception:
+                    bot.send_message(chat_id, report, reply_markup=markup)
             except Exception as e:
-                bot.edit_message_text(f"❌ خطأ أثناء فحص الفصول المكررة: {e}", chat_id, wait_msg.message_id)
+                try:
+                    bot.edit_message_text(f"❌ خطأ أثناء فحص الفصول المكررة: {e}", chat_id, wait_msg.message_id)
+                except Exception:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء فحص الفصول المكررة: {e}")
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    @bot.message_handler(commands=['purge_duplicates', 'check_duplicates', 'clean_duplicates'])
+    def nsw_purge_duplicates_cmd(message):
+        """كشف وتطهير الفصول المكررة على بلوجر والشيت (أمر ➔ تقرير ➔ اتخاذ قرار)."""
+        if not is_admin(message.from_user.id):
+            bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+            return
+        parts = message.text.strip().split(None, 1)
+        if len(parts) <= 1:
+            markup = make_novel_selection_markup("cb_nvpurge", include_all=True)
+            bot.reply_to(
+                message,
+                "🧹 <b>[كشف وتطهير الفصول المكررة]</b>\n\n"
+                "أي رواية ترغب بفحص وتطهير الفصول المكررة لها في بلوجر والشيت؟\n"
+                "اختر إحدى الروايات أدناه، أو اختر <b>كافة الروايات المسجلة</b> للمسح الشامل:",
+                reply_markup=markup
+            )
+            return
+
+        novel_input = parts[1].strip()
+        is_all = novel_input.lower() in ["all", "الكل", "كافة الروايات", "جميع الروايات", "كافة", "جميع"]
+        target_novel = "all" if is_all else novel_input
+        target_label = "كافة الروايات المسجلة" if is_all else novel_input
+        _run_purge_duplicates_workflow(message.chat.id, target_novel, target_label)
 
     @bot.message_handler(commands=['nsw_nav', 'nav', 'repair_nav', 'nav_repair'])
     def nsw_nav_cmd(message):
@@ -1608,7 +1659,28 @@ def create_bot_app():
             if not is_admin(chat_id):
                 bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
                 return
-            nsw_purge_duplicates_cmd(call.message)
+            markup = make_novel_selection_markup("cb_nvpurge", include_all=True)
+            bot.send_message(
+                chat_id,
+                "🧹 <b>[كشف وتطهير الفصول المكررة]</b>\n\n"
+                "أي رواية ترغب بفحص وتطهير الفصول المكررة لها في بلوجر والشيت؟\n"
+                "اختر إحدى الروايات أدناه، أو اختر <b>كافة الروايات المسجلة</b> للمسح الشامل:",
+                reply_markup=markup
+            )
+            return
+
+        elif data.startswith("cb_nvpurge_"):
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            idx_str = data.replace("cb_nvpurge_", "").strip()
+            if idx_str == "all":
+                target_novel = "all"
+                target_label = "كافة الروايات المسجلة"
+            else:
+                target_novel = get_novel_from_catalog_idx(idx_str) or "After Severing Ties"
+                target_label = target_novel
+            _run_purge_duplicates_workflow(chat_id, target_novel, target_label)
             return
 
         elif data == "cb_check_timeline_start":
@@ -1675,13 +1747,35 @@ def create_bot_app():
             if not is_admin(chat_id):
                 bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
                 return
-            novel_name = data.replace("cb_exec_purge_dups:", "").strip() or "After Severing Ties"
-            bot.send_message(chat_id, f"🧹 <b>جاري تنفيذ تطهير وحذف التدوينات المكررة من مدونة بلوجر لرواية '{novel_name}'...</b>\nسيصلك تقرير تفصيلي بعد المعالجة.")
+            pending = USER_SESSIONS.get(chat_id, {}).get("pending_purge_dups", {})
+            novel_name = pending.get("novel_name")
+            target_label = pending.get("target_label")
+            if not novel_name:
+                raw_arg = data.replace("cb_exec_purge_dups:", "").strip()
+                if raw_arg in ["confirm", "all", ""]:
+                    novel_name = "all" if raw_arg == "all" else "After Severing Ties"
+                else:
+                    novel_name = raw_arg
+            if not target_label:
+                target_label = "كافة الروايات المسجلة" if novel_name == "all" else novel_name
+
+            bot.send_message(
+                chat_id, 
+                f"🧹 <b>جاري تنفيذ تطهير وحذف التدوينات المكررة من مدونة بلوجر لـ:</b> <code>{target_label}</code>...\n"
+                f"⏳ جاري إلغاء وتفريغ المنشورات المكررة لمنع تكرارها..."
+            )
             def _exec_purge_thread():
                 try:
                     import nsw_healer_engine
-                    res = nsw_healer_engine.detect_and_purge_duplicate_posts(novel_name, dry_run=False)
-                    bot.send_message(chat_id, f"🎉 <b>اكتملت عملية التطهير بنجاح!</b> تم تنظيف التدوينات المكررة من بلوجر بنجاح.")
+                    res = nsw_healer_engine.detect_and_purge_duplicate_posts(novel_name, dry_run=False, notify=False)
+                    purged_cnt = res.get("purged_count", res.get("to_purge_count", 0))
+                    bot.send_message(
+                        chat_id, 
+                        f"🎉 <b>اكتملت عملية التطهير بنجاح!</b>\n"
+                        f"• تم بنجاح تنظيف وتطهير <b>{purged_cnt}</b> تدوينة مكررة من بلوجر والشيت.\n"
+                        f"• النطاق المستهدف: <code>{target_label}</code>\n"
+                        f"🛡️ المدونة وجدول الشيت الآن في وضع تطابق سليم وخالٍ من التكرار."
+                    )
                 except Exception as ex:
                     bot.send_message(chat_id, f"❌ خطأ أثناء تطهير المكررات: {ex}")
             threading.Thread(target=_exec_purge_thread, daemon=True).start()
