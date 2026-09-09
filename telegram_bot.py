@@ -1934,7 +1934,7 @@ def create_bot_app():
                 if count > 0:
                     bot.edit_message_text(f"✅ <b>اكتمل سحب {count} فصول بنجاح!</b>\nجاري إنشاء ملف الـ TXT ورفعه...", chat_id, status_msg.message_id)
                     temp_file = os.path.join(media_engine.DOWNLOAD_DIR, f"novel_{novel['id']}_chapters_{from_ch}_to_{to_ch}.txt")
-                    with open(temp_file, "w", encoding="utf-8") as f_out:
+                    with open(temp_file, "w", encoding="utf-8-sig") as f_out:
                         f_out.write(full_text)
 
                     media_engine.send_to_telegram(BOT_TOKEN, str(chat_id), temp_file, caption=f"📚 <b>{novel['title']}</b>\nتم بنجاح سحب وتصدير {count} فصول كاملة بنص نظيف ومترابط!")

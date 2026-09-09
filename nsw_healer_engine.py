@@ -3049,7 +3049,7 @@ def export_chapters_from_blogger_to_txt(
         successful_count += 1
 
     full_output_text = "\n".join(collected_content)
-    with open(file_path, "w", encoding="utf-8") as f:
+    with open(file_path, "w", encoding="utf-8-sig") as f:
         f.write(full_output_text)
 
     logger.info(f"✅ تم تصدير {successful_count} فصلاً بنجاح إلى: {file_path}")
