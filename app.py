@@ -719,8 +719,24 @@ if st.session_state.active_novel:
         key=f"scrape_mode_{novel['id']}"
     )
 
-    from_chap = 1
-    to_chap = max(1, total_ch)
+    # حساب أول فصل غير منزل تلقائياً ليكون الخيار الافتراضي
+    first_undownloaded = 1
+    if chapters:
+        for c in chapters:
+            c_num = c.get("chapter_number", 1)
+            c_status = c.get("status", "pending")
+            has_content = bool(c.get("content") and len(str(c.get("content")).strip()) > 50)
+            if c_status != "downloaded" and not has_content:
+                first_undownloaded = c_num
+                break
+        else:
+            first_undownloaded = max(1, total_ch)
+
+    max_scope = max(1, total_ch)
+    default_from = min(max_scope, max(1, first_undownloaded))
+
+    from_chap = default_from
+    to_chap = max_scope
     custom_chaps_list = None
 
     if "مخصصة" in scrape_mode:
@@ -734,13 +750,24 @@ if st.session_state.active_novel:
             st.info(f"🎯 **الفصول المستهدفة للسحب ({len(custom_chaps_list)} فصلاً):** `{custom_chaps_list}`")
     else:
         col_r1, col_r2 = st.columns(2)
-        max_scope = max(1, total_ch)
         with col_r1:
-            from_chap = st.number_input("من الفصل رقم:", min_value=1, max_value=max_scope, value=1, key="from_chap_input")
+            from_chap = st.number_input(
+                "من الفصل رقم (أول فصل غير منزّل):",
+                min_value=1,
+                max_value=max_scope,
+                value=default_from,
+                key=f"from_chap_input_{novel['id']}_{default_from}"
+            )
         with col_r2:
             min_to = int(from_chap)
             max_to = max(min_to, max_scope)
-            to_chap = st.number_input("إلى الفصل رقم:", min_value=min_to, max_value=max_to, value=max_to, key="to_chap_input")
+            to_chap = st.number_input(
+                "إلى الفصل رقم:",
+                min_value=min_to,
+                max_value=max_to,
+                value=max_to,
+                key=f"to_chap_input_{novel['id']}"
+            )
 
     # أزرار التحكم في السحب
     col_ctrl1, col_ctrl2, col_ctrl3, col_ctrl4 = st.columns(4)

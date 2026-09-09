@@ -822,6 +822,16 @@ class NovelScrapingSession:
 
                     ch_num = ch["chapter_number"]
                     ch_url = ch["url"]
+
+                    # فحص إذا كان الفصل مسحوباً مسبقاً ولديه محتوى مكتمل لتفادي تكرار السحب والتفريغ
+                    if ch.get("status") == "downloaded" and ch.get("content") and len(str(ch.get("content")).strip()) > 50:
+                        self.log(f"⏩ [خيط {worker_id}] ➔ الفصل {ch_num} مسحوب ومكتمل مسبقاً، تم تخطيه بنجاح.")
+                        with self._lock:
+                            self.processed_count += 1
+                            if self.progress_callback:
+                                self.progress_callback(self.processed_count, total_in_range, f"تم تخطي الفصل {ch_num} (موجود مسبقاً)")
+                        continue
+
                     self.log(f"👷 [خيط {worker_id}] ➔ سحب الفصل {ch_num}...")
 
                     try:
