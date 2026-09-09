@@ -8,6 +8,7 @@ Smart Telegram Bot Interface - Novel Scraper & Media Downloader v1.0
 import os
 import sys
 import time
+import socket
 import threading
 from typing import Dict, Any, Optional
 
@@ -855,7 +856,15 @@ def create_bot_app():
         def _worker():
             try:
                 import nsw_healer_engine
-                res = nsw_healer_engine.sync_and_repair_sheet_from_blogger(target_novel)
+                res = nsw_healer_engine.sync_and_repair_sheet_from_blogger(target_novel, notify=False)
+                if not res.get("success"):
+                    err_msg = res.get("error", "تعذر استلام بيانات فصول بلوجر")
+                    try:
+                        bot.edit_message_text(f"❌ {err_msg}", chat_id, wait_msg.message_id)
+                    except Exception:
+                        bot.send_message(chat_id, f"❌ {err_msg}")
+                    return
+
                 missing_items = res.get("missing_items", [])
                 missing_nums = [it.get("chapter_number") for it in missing_items if it.get("chapter_number")]
                 
@@ -889,9 +898,16 @@ def create_bot_app():
                     types.InlineKeyboardButton("❌ إلغاء", callback_data="CANCEL_ACTION")
                 )
 
-                bot.edit_message_text(report, chat_id, wait_msg.message_id, reply_markup=markup)
+                try:
+                    bot.edit_message_text(report, chat_id, wait_msg.message_id, reply_markup=markup)
+                except Exception:
+                    bot.send_message(chat_id, report, reply_markup=markup)
             except Exception as e:
-                bot.edit_message_text(f"❌ خطأ أثناء مطابقة الشيت: {e}", chat_id, wait_msg.message_id)
+                err_text = f"❌ خطأ أثناء مطابقة الشيت: {e}"
+                try:
+                    bot.edit_message_text(err_text, chat_id, wait_msg.message_id)
+                except Exception:
+                    bot.send_message(chat_id, err_text)
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -2139,8 +2155,13 @@ def run_telegram_bot_loop():
         try:
             bot.polling(none_stop=True, interval=1, timeout=30)
         except Exception as e:
-            print(f"[Telegram Bot Error] {e}")
-            time.sleep(5)
+            err_str = str(e)
+            if "409" in err_str or "Conflict" in err_str:
+                print(f"[Telegram Bot 409 Conflict] ⚠️ هناك نسخة أخرى تستعلم عن البوت بالتزامن. جاري الانتظار 10 ثوانٍ...")
+                time.sleep(10)
+            else:
+                print(f"[Telegram Bot Error] {e}")
+                time.sleep(5)
 
 
 if __name__ == "__main__":

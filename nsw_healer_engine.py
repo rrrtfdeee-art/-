@@ -2435,7 +2435,7 @@ def preview_and_repair_novel_dates(
 # 🛠️ 15. دوال الاستصلاح الهندسية الثلاث: مطابقة الشيت، كشف الاضطراب الزمني، والتطهير
 # ==============================================================================
 
-def sync_and_repair_sheet_from_blogger(novel_name: str = "After Severing Ties") -> Dict[str, Any]:
+def sync_and_repair_sheet_from_blogger(novel_name: str = "After Severing Ties", notify: bool = True) -> Dict[str, Any]:
     """
     الدالة ❶: مطابقة وإصلاح بيانات Google Sheets من Blogger مباشرة.
     - تستعلم عن كافة فصول الرواية الحية والمجدولة والمسودات على بلوجر عبر scanGaps.
@@ -2444,7 +2444,8 @@ def sync_and_repair_sheet_from_blogger(novel_name: str = "After Severing Ties") 
     - ترسل تقريراً مفصلاً وتصحح التناقضات لتكون بيانات الشيت انعكاساً دقيقاً 100% للمدونة.
     """
     logger.info(f"🔄 [مطابقة الشيت من بلوجر]: بدء الفحص الشامل لرواية '{novel_name}'...")
-    notify_admin(f"🔄 <b>[بدء مطابقة الشيت مع بلوجر]:</b>\nجاري جلب كافة فصول <b>{novel_name}</b> من بلوجر ومطابقتها مع جدول المنشورات...")
+    if notify:
+        notify_admin(f"🔄 <b>[بدء مطابقة الشيت مع بلوجر]:</b>\nجاري جلب كافة فصول <b>{novel_name}</b> من بلوجر ومطابقتها مع جدول المنشورات...")
 
     # 1. جلب فصول بلوجر الشاملة من scanGaps مع إعادة المحاولة لضمان استجابة سيرفر جوجل
     blogger_chapters = {}
@@ -2470,7 +2471,8 @@ def sync_and_repair_sheet_from_blogger(novel_name: str = "After Severing Ties") 
     if not all_ch:
         err = "تعذر استلام بيانات فصول بلوجر عبر Apps Script (تأخر استجابة الخادم السحابي)."
         logger.error(err)
-        notify_admin(f"⚠️ {err}")
+        if notify:
+            notify_admin(f"⚠️ {err}")
         return {"success": False, "error": err}
 
     for c_str, info in all_ch.items():
@@ -2559,7 +2561,8 @@ def sync_and_repair_sheet_from_blogger(novel_name: str = "After Severing Ties") 
     else:
         report_msg += "✅ كافة فصول بلوجر مسجلة في الشيت بتطابق تام."
 
-    notify_admin(report_msg)
+    if notify:
+        notify_admin(report_msg)
     return {
         "success": True,
         "novel_name": novel_name,
