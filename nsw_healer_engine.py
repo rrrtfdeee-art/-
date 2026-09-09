@@ -2673,14 +2673,16 @@ def detect_timeline_anomalies(novel_name: str = "After Severing Ties") -> Dict[s
     }
 
 
-def detect_and_purge_duplicate_posts(novel_name: str = "After Severing Ties", dry_run: bool = True) -> Dict[str, Any]:
+def detect_and_purge_duplicate_posts(novel_name: str = "After Severing Ties", dry_run: bool = True, notify: bool = True) -> Dict[str, Any]:
     """
     الدالة ❸: صمام كشف الفصول المتكررة وإزالتها وتطهير المدونة والشيت.
     - ترصد الفصول التي تحتوي على أكثر من منشور (PostID) لنفس رقم الفصل.
+    - تدعم رواية محددة أو كافة الروايات (novel_name='all' أو 'الكل').
     - تحتفظ بالنسخة المجدولة الأحدث، وتحذف النسخة القديمة المكررة من بلوجر والشيت.
-    - تمنع تكرار الفصل مرتين للرواية الواحدة.
     """
-    logger.info(f"🧹 [تطهير الفصول المكررة]: فحص الرواية '{novel_name}' (dry_run={dry_run})...")
+    is_all = not novel_name or str(novel_name).strip().lower() in ["all", "الكل", "كافة الروايات", "جميع الروايات", "كافة", "جميع"]
+    novel_display = "كافة الروايات المسجلة" if is_all else str(novel_name).strip()
+    logger.info(f"🧹 [تطهير الفصول المكررة]: فحص النطاق '{novel_display}' (dry_run={dry_run})...")
 
     catalog = get_available_novels_catalog()
     rows = query_gviz_sheet(PUBLIC_PUBLISHED_SPREADSHEET_ID)
@@ -2708,12 +2710,21 @@ def detect_and_purge_duplicate_posts(novel_name: str = "After Severing Ties", dr
             "content": str(c[2].get("v", "") if len(c) > 2 and c[2] else "")
         }
         resolved = resolve_chapter_belonging_novel(row_dict, catalog)
-        if novel_name.lower() in resolved.lower() or novel_name.lower() in novel_col.lower() or novel_name.lower() in title.lower():
+        matches = is_all or (
+            novel_name.lower() in resolved.lower() or 
+            novel_name.lower() in novel_col.lower() or 
+            novel_name.lower() in title.lower()
+        )
+        if matches:
             p_id = str(c[4].get("v", "") if c[4] else "").strip()
             p_date = str(c[3].get("v", "") if c[3] else "").strip()
             p_url = str(c[5].get("v", "") if len(c) > 5 and c[5] else "").strip()
             dt = parse_any_datetime(p_date)
-            chap_posts.setdefault(chap_num, []).append({
+            # مفتاح التجميع: الرواية + رقم الفصل لضمان عدم خلط فصول روايات مختلفة عند المسح الشامل
+            item_novel = resolved if resolved and resolved != "غير محدد" else (novel_col or "عام")
+            group_key = (item_novel, chap_num)
+            chap_posts.setdefault(group_key, []).append({
+                "novel_name": item_novel,
                 "chapter_number": chap_num,
                 "title": title,
                 "post_id": p_id,
@@ -2722,11 +2733,11 @@ def detect_and_purge_duplicate_posts(novel_name: str = "After Severing Ties", dr
                 "dt": dt
             })
 
-    duplicates = {c_n: posts for c_n, posts in chap_posts.items() if len(posts) > 1}
+    duplicates = {key: posts for key, posts in chap_posts.items() if len(posts) > 1}
     to_purge = []
     to_keep = []
 
-    for c_n, posts in duplicates.items():
+    for key, posts in duplicates.items():
         # ترتيب المنشورات حسب التاريخ لاختيار النسخة المعتمدة الأحدث
         sorted_p = sorted(posts, key=lambda x: (x["dt"] or datetime.min), reverse=True)
         keep = sorted_p[0]
@@ -2737,20 +2748,24 @@ def detect_and_purge_duplicate_posts(novel_name: str = "After Severing Ties", dr
 
     report_msg = (
         f"🧹 <b>[تقرير كشف وتطهير الفصول المكررة]:</b>\n"
-        f"📖 الرواية: <b>{novel_name}</b>\n"
+        f"📖 النطاق: <b>{novel_display}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"• فصول تحتوي على تكرار: <b>{len(duplicates)}</b> فصول\n"
         f"• إجمالي التدوينات الزائدة المستهدفة: <b>{len(to_purge)}</b> تدوينة\n"
         f"• وضع التشغيل: <b>{'معاينة فقط (Dry Run)' if dry_run else 'تطبيق فعلي 🚀'}</b>\n"
     )
+    purged_count = 0
     if to_purge:
         report_msg += "📋 <b>تفاصيل التكرار المكتشف:</b>\n"
-        for p in to_purge[:6]:
-            report_msg += f"• الفصل <b>{p['chapter_number']}</b> [PostID: <code>{p['post_id']}</code>] بتاريخ ({p['date_raw'][:10]})\n"
+        for p in to_purge[:8]:
+            nov_tag = f"[{p.get('novel_name', '')}] " if is_all and p.get('novel_name') else ""
+            report_msg += f"• {nov_tag}الفصل <b>{p['chapter_number']}</b> [PostID: <code>{p['post_id']}</code>] بتاريخ ({p['date_raw'][:10]})\n"
+        if len(to_purge) > 8:
+            report_msg += f"<i>... و {len(to_purge) - 8} تدوينات مكررة أخرى.</i>\n"
+
         if dry_run:
-            report_msg += "\n💡 <i>للتنفيذ الفعلي وحذف المنشورات المكررة من بلوجر والشيت، شغّل الدالة بـ dry_run=False.</i>"
+            report_msg += "\n💡 <i>للتنفيذ الفعلي وحذف المنشورات المكررة من بلوجر والشيت، اضغط على زر التأكيد.</i>"
         else:
-            purged_count = 0
             for item in to_purge:
                 try:
                     # تفريغ محتوى التدوينة وتعديل عنوانها لمنع ظهورها كفصل مكرر
@@ -2767,13 +2782,17 @@ def detect_and_purge_duplicate_posts(novel_name: str = "After Severing Ties", dr
     else:
         report_msg += "🛡️ لا توجد أي فصول مكررة، النظام خلوٌ تام من أي تدوينات زائدة."
 
-    notify_admin(report_msg)
+    if notify:
+        notify_admin(report_msg)
+
     return {
         "success": True,
         "dry_run": dry_run,
         "novel_name": novel_name,
+        "novel_display": novel_display,
         "duplicates_count": len(duplicates),
         "to_purge_count": len(to_purge),
+        "purged_count": purged_count,
         "to_purge": to_purge
     }
 
@@ -2822,35 +2841,45 @@ def execute_sync_blogger_to_sheet(novel_name: str = "After Severing Ties", missi
             "publishedDate": it.get("published_date", "")
         })
 
-    payload = {
-        "action": "syncMissingBloggerChaptersToSheets",
-        "novelName": novel_name,
-        "chapters": formatted_chapters
-    }
+    # تقسيم الإرسال إلى دفعات آمنة (Batches of 40) لمنع تجاوز مهلة الخادم السحابي
+    batch_size = 40
+    total_added = 0
+    errors_list = []
 
-    try:
-        res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=60).json()
-        if res.get("status") == "success" or res.get("success"):
-            added_cnt = res.get("addedCount", len(formatted_chapters))
-            success_msg = (
-                f"🎉 <b>[تم بنجاح تحديث وإدراج الفصول في Google Sheet!]</b> 🚀\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📖 <b>الرواية:</b> {novel_name}\n"
-                f"📥 <b>عدد الفصول المدرجة:</b> <b>{added_cnt}</b> فصلاً\n"
-                f"✅ تم تحديث جدول المنشورات العام (1IFT) وقاعدة بيانات المنظومة بتطابق تام."
-            )
-            notify_admin(success_msg)
-            return {"success": True, "added_count": added_cnt, "data": res}
-        else:
-            err = res.get("message", "فشل تسجيل الفصول")
-            logger.warning(f"ملاحظة مزامنة الشيت من Apps Script: {err}")
-            notify_admin(f"⚠️ <b>[تنبيه استجابة الشيت]:</b> {err}\n💡 <i>تأكد من حفظ ونشر التحديث في Google Apps Script.</i>")
-            return {"success": False, "error": err}
-    except Exception as ex:
-        err_str = str(ex)
-        logger.error(f"خطأ أثناء مزامنة الفصول مع الشيت: {err_str}")
-        notify_admin(f"❌ <b>خطأ أثناء مزامنة الشيت:</b> {err_str}")
-        return {"success": False, "error": err_str}
+    for b_idx in range(0, len(formatted_chapters), batch_size):
+        chunk = formatted_chapters[b_idx:b_idx + batch_size]
+        payload = {
+            "action": "syncMissingBloggerChaptersToSheets",
+            "novelName": novel_name,
+            "chapters": chunk
+        }
+        try:
+            res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=60).json()
+            if res.get("status") == "success" or res.get("success"):
+                total_added += res.get("addedCount", len(chunk))
+                logger.info(f"⚡ [مزامنة الشيت] تم إدراج دفعة ({total_added}/{len(formatted_chapters)}) بنجاح.")
+            else:
+                err = res.get("message", "فشل تسجيل دفعة")
+                errors_list.append(err)
+        except Exception as ex:
+            errors_list.append(str(ex))
+            logger.error(f"خطأ أثناء إرسال دفعة مزامنة: {ex}")
+        time.sleep(0.5)
+
+    if total_added > 0:
+        success_msg = (
+            f"🎉 <b>[تم بنجاح تحديث وإدراج الفصول في Google Sheet!]</b> 🚀\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📖 <b>الرواية:</b> {novel_name}\n"
+            f"📥 <b>عدد الفصول المدرجة:</b> <b>{total_added}</b> من أصل <b>{len(formatted_chapters)}</b> فصلاً\n"
+            f"✅ تم تحديث جدول المنشورات العام (1IFT) وقاعدة بيانات المنظومة بدفعات متناسقة وسريعة."
+        )
+        notify_admin(success_msg)
+        return {"success": True, "added_count": total_added}
+    else:
+        err_msg = ", ".join(errors_list) if errors_list else "تعذر إدراج الفصول"
+        notify_admin(f"⚠️ <b>[تنبيه استجابة الشيت]:</b> {err_msg}")
+        return {"success": False, "error": err_msg}
 
 
 # ==============================================================================

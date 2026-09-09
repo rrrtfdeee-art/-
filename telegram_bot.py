@@ -850,6 +850,51 @@ def create_bot_app():
             reply_markup=markup
         )
 
+    def _run_sync_blogger_workflow(chat_id: int, target_novel: str, target_label: str):
+        wait_msg = bot.send_message(chat_id, f"🔄 <b>جاري فحص ومطابقة بيانات الشيت مع مدونة بلوجر لرواية:</b> <code>{target_label}</code>...")
+        def _worker():
+            try:
+                import nsw_healer_engine
+                res = nsw_healer_engine.sync_and_repair_sheet_from_blogger(target_novel)
+                missing_items = res.get("missing_items", [])
+                missing_nums = [it.get("chapter_number") for it in missing_items if it.get("chapter_number")]
+                
+                report = (
+                    f"📊 <b>[تقرير مطابقة الشيت مع مدونة بلوجر]:</b>\n"
+                    f"📖 الرواية: <b>{target_label}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"• فصول بلوجر الإجمالية: <b>{res.get('total_blogger', 0)}</b> فصل\n"
+                    f"• فصول الشيت المسجلة: <b>{res.get('total_sheet', 0)}</b> فصل\n"
+                    f"• فصول على بلوجر غير مسجلة بالشيت: <b>{len(missing_nums)}</b> فصل\n"
+                    f"• تعارض في معرف المنشور (PostID): <b>{len(res.get('id_mismatches', []))}</b> فصل\n"
+                )
+                markup = types.InlineKeyboardMarkup(row_width=1)
+                if missing_nums:
+                    USER_SESSIONS[chat_id] = USER_SESSIONS.get(chat_id, {})
+                    USER_SESSIONS[chat_id]["pending_sync_sheet"] = {
+                        "novel_name": target_novel,
+                        "missing_items": missing_items
+                    }
+                    sample = [str(x) for x in missing_nums[:15]]
+                    report += f"⚠️ <b>أرقام الفصول غير المسجلة بالشيت:</b> {', '.join(sample)}\n\n"
+                    markup.add(
+                        types.InlineKeyboardButton(f"📥 1. تحديث الشيت من بلوجر (إدراج {len(missing_nums)} فصلاً بدفعات)", callback_data=f"cb_exec_sync_sheet:{target_novel}")
+                    )
+                else:
+                    report += "\n✅ كافة فصول بلوجر مسجلة في الشيت بتطابق تام 100%!\n"
+
+                report += "\n👇 <b>اختر الإجراء المطلوب للمطابقة:</b>"
+                markup.add(
+                    types.InlineKeyboardButton("🌐 2. تحديث بلوجر من الشيت (مزامنة المواعيد والتواريخ)", callback_data=f"cb_exec_sync_blogger:{target_novel}"),
+                    types.InlineKeyboardButton("❌ إلغاء", callback_data="CANCEL_ACTION")
+                )
+
+                bot.edit_message_text(report, chat_id, wait_msg.message_id, reply_markup=markup)
+            except Exception as e:
+                bot.edit_message_text(f"❌ خطأ أثناء مطابقة الشيت: {e}", chat_id, wait_msg.message_id)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     @bot.message_handler(commands=['sync_blogger', 'sync_sheet', 'match_blogger'])
     def nsw_sync_blogger_cmd(message):
         """مطابقة وإصلاح بيانات Google Sheets من Blogger مباشرة (أمر ➔ تقرير ➔ اتخاذ قرار)."""
@@ -857,48 +902,18 @@ def create_bot_app():
             bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
             return
         parts = message.text.strip().split(None, 1)
-        novel_name = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
-        chat_id = message.chat.id
-        wait_msg = bot.reply_to(message, f"🔄 <b>جاري فحص ومطابقة بيانات الشيت مع مدونة بلوجر لرواية:</b> <code>{novel_name}</code>...")
-
-        def _worker():
-            try:
-                res = nsw_healer_engine.sync_and_repair_sheet_from_blogger(novel_name)
-                missing_items = res.get("missing_items", [])
-                missing_nums = res.get("missing_in_sheet", [])
-                
-                report = (
-                    f"📊 <b>[تقرير مطابقة الشيت مع مدونة بلوجر]:</b>\n"
-                    f"📖 الرواية: <b>{novel_name}</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"• فصول بلوجر الإجمالية: <b>{res.get('total_blogger', 0)}</b> فصل\n"
-                    f"• فصول الشيت المسجلة: <b>{res.get('total_sheet', 0)}</b> فصل\n"
-                    f"• فصول على بلوجر غير مسجلة بالشيت: <b>{len(missing_nums)}</b> فصل\n"
-                    f"• تعارض في معرف المنشور (PostID): <b>{len(res.get('id_mismatches', []))}</b> فصل\n"
-                )
-                markup = None
-                if missing_nums:
-                    USER_SESSIONS[chat_id] = USER_SESSIONS.get(chat_id, {})
-                    USER_SESSIONS[chat_id]["pending_sync_sheet"] = {
-                        "novel_name": novel_name,
-                        "missing_items": missing_items
-                    }
-                    sample = [str(x) for x in missing_nums[:15]]
-                    report += f"⚠️ <b>أرقام الفصول غير المسجلة بالشيت:</b> {', '.join(sample)}\n\n"
-                    report += "💡 <i>هذه الفصول موجودة على بلوجر ولكن تنقص في الشيت. هل ترغب بإدراجها في جدول الشيت الآن؟</i>"
-                    markup = types.InlineKeyboardMarkup(row_width=1)
-                    markup.add(
-                        types.InlineKeyboardButton(f"📥 تحديث وإدراج الـ {len(missing_nums)} فصلاً في الشيت الآن", callback_data=f"cb_exec_sync_sheet:{novel_name}"),
-                        types.InlineKeyboardButton("❌ إلغاء", callback_data="CANCEL_ACTION")
-                    )
-                else:
-                    report += "\n✅ كافة فصول بلوجر مسجلة في الشيت بتطابق تام 100%!"
-
-                bot.edit_message_text(report, chat_id, wait_msg.message_id, reply_markup=markup)
-            except Exception as e:
-                bot.edit_message_text(f"❌ خطأ أثناء مطابقة الشيت: {e}", chat_id, wait_msg.message_id)
-
-        threading.Thread(target=_worker, daemon=True).start()
+        if len(parts) > 1 and parts[1].strip():
+            novel_name = parts[1].strip()
+            _run_sync_blogger_workflow(message.chat.id, novel_name, novel_name)
+        else:
+            markup = make_novel_selection_markup("cb_nvsync", include_all=True)
+            bot.reply_to(
+                message,
+                "🔄 <b>[مطابقة وإصلاح بيانات الشيت مع مدونة بلوجر]</b>\n\n"
+                "أي رواية ترغب بمطابقة وفحص فصولها بين بلوجر والشيت؟\n"
+                "اختر إحدى الروايات أدناه، أو اختر <b>كافة الروايات المسجلة</b>:",
+                reply_markup=markup
+            )
 
     @bot.message_handler(commands=['check_timeline', 'timeline_anomalies', 'audit_timeline'])
     def nsw_check_timeline_cmd(message):
@@ -1652,7 +1667,28 @@ def create_bot_app():
             if not is_admin(chat_id):
                 bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
                 return
-            nsw_sync_blogger_cmd(call.message)
+            markup = make_novel_selection_markup("cb_nvsync", include_all=True)
+            bot.send_message(
+                chat_id,
+                "🔄 <b>[مطابقة وإصلاح بيانات الشيت مع مدونة بلوجر]</b>\n\n"
+                "أي رواية ترغب بمطابقة وفحص فصولها بين بلوجر والشيت؟\n"
+                "اختر إحدى الروايات أدناه، أو اختر <b>كافة الروايات المسجلة</b>:",
+                reply_markup=markup
+            )
+            return
+
+        elif data.startswith("cb_nvsync_"):
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            idx_str = data.replace("cb_nvsync_", "").strip()
+            if idx_str == "all":
+                target_novel = "all"
+                target_label = "كافة الروايات المسجلة"
+            else:
+                target_novel = get_novel_from_catalog_idx(idx_str) or "After Severing Ties"
+                target_label = target_novel
+            _run_sync_blogger_workflow(chat_id, target_novel, target_label)
             return
 
         elif data == "cb_purge_dups_start":
@@ -1741,6 +1777,22 @@ def create_bot_app():
                     bot.send_message(chat_id, f"❌ خطأ أثناء مزامنة الشيت: {ex}")
             threading.Thread(target=_exec_sync_thread, daemon=True).start()
             USER_SESSIONS.get(chat_id, {}).pop("pending_sync_sheet", None)
+            return
+
+        elif data.startswith("cb_exec_sync_blogger:"):
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            target_nov = data.replace("cb_exec_sync_blogger:", "").strip() or "After Severing Ties"
+            bot.send_message(chat_id, f"🌐 <b>جاري مزامنة وتحديث تواريخ وجدولة تدوينات بلوجر من الشيت لـ '{target_nov}'...</b>\nسيصلك تقرير تفصيلي فور الانتهاء.")
+            def _sync_blogger_thread():
+                try:
+                    import nsw_healer_engine
+                    res = requests.post(nsw_healer_engine.PUBLISH_WEBAPP_URL, json={"action": "syncBloggerDates", "novelName": target_nov}, timeout=90).json()
+                    bot.send_message(chat_id, f"✅ <b>تمت مزامنة وتحديث تواريخ بلوجر من الشيت بنجاح!</b>\n• المنشورات المفحوصة: <b>{res.get('data', {}).get('totalBloggerPosts', res.get('totalBloggerPosts', 0))}</b>\n• التواريخ المحدثة: <b>{res.get('data', {}).get('updatedDatesInSheets', res.get('updatedDatesInSheets', 0))}</b>")
+                except Exception as ex:
+                    bot.send_message(chat_id, f"❌ خطأ أثناء مزامنة بلوجر: {ex}")
+            threading.Thread(target=_sync_blogger_thread, daemon=True).start()
             return
 
         elif data.startswith("cb_exec_purge_dups:"):
