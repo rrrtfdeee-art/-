@@ -295,13 +295,28 @@ def clean_chapter_content(
     if not raw_html:
         return ""
 
-    soup = BeautifulSoup(raw_html, "lxml") if "lxml" in raw_html else BeautifulSoup(raw_html, "html.parser")
+    try:
+        soup = BeautifulSoup(raw_html, "lxml")
+    except Exception:
+        soup = BeautifulSoup(raw_html, "html.parser")
     
     # العثور على حاوية المحتوى الرئيسية
-    container = soup.select_one(content_selector)
+    container = None
+    if content_selector and content_selector.strip():
+        try:
+            container = soup.select_one(content_selector)
+        except Exception:
+            container = None
+
     if not container:
-        # كخيار احتياطي: محاولة البحث في وسوم عامة كـ article أو main
-        container = soup.select_one("article") or soup.select_one(".entry-content") or soup.select_one("#content") or soup.body
+        # كخيار احتياطي: محاولة البحث في وسوم عامة أو الاعتماد على الحاوية الجذرية
+        container = (
+            soup.select_one("article") or 
+            soup.select_one(".entry-content") or 
+            soup.select_one("#content") or 
+            soup.body or 
+            soup
+        )
 
     if not container:
         return ""
@@ -812,12 +827,19 @@ class NovelScrapingSession:
                     try:
                         if "api.mystorywave.com" in ch_url:
                             # ⚡ مسار فائق السرعة عبر API لمنصة botitranslation / mystorywave
-                            headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://botitranslation.com/"}
+                            headers = {
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                                "Referer": "https://www.botitranslation.com/",
+                                "Origin": "https://www.botitranslation.com",
+                                "site-domain": "www.botitranslation.com",
+                                "lang": "en",
+                                "Accept": "application/json, text/plain, */*"
+                            }
                             r_json = requests.get(ch_url, headers=headers, timeout=15).json()
                             c_dict = r_json.get("data", {})
                             ch_title = c_dict.get("title") or f"الفصل {ch_num}"
                             raw_html = c_dict.get("content", "")
-                            clean_content = clean_chapter_content(raw_html, "body", purge_sels)
+                            clean_content = clean_chapter_content(raw_html, "", purge_sels)
                         else:
                             raw_html, _ = browser.get_page_html(ch_url, wait_selector=content_sel)
                             ch_title = extract_chapter_title(raw_html, title_sel, fallback_number=ch_num)

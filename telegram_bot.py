@@ -1920,6 +1920,7 @@ def create_bot_app():
                     from_chapter=from_ch,
                     to_chapter=to_ch,
                     domain_config=cfg,
+                    auto_stream_to_sheet=False,
                     min_delay=0.3,
                     max_delay=0.8,
                     headless=True
