@@ -867,7 +867,51 @@
         }
     }
 
+    async function checkAndAutoStartLocalBridge() {
+        const speedBadge = document.getElementById('localBridgeSpeedBadge');
+        try {
+            const res = await fetch('http://127.0.0.1:58242/api/status', { signal: AbortSignal.timeout(1200) });
+            if (res.ok) {
+                if (speedBadge) {
+                    speedBadge.innerHTML = '⚡ سحب محلي فائق (0.2s) نشط';
+                    speedBadge.style.display = 'inline-block';
+                    speedBadge.style.color = '#34d399';
+                    speedBadge.style.borderColor = '#10b981';
+                }
+                return true;
+            }
+        } catch(e) {
+            // السيرفر غير شغال حالياً، محاولة إطلاقه عبر الرابط البروتوكولي المباشر
+            try {
+                const ifr = document.createElement('iframe');
+                ifr.style.display = 'none';
+                ifr.src = 'nswapi://start';
+                document.body.appendChild(ifr);
+                setTimeout(() => { ifr.remove(); }, 3000);
+            } catch(eProto) {}
+
+            // فحص ثانٍ بعد 1.5 ثانية للتأكد من إقلاعه
+            setTimeout(async () => {
+                try {
+                    const r2 = await fetch('http://127.0.0.1:58242/api/status', { signal: AbortSignal.timeout(1500) });
+                    if (r2.ok && speedBadge) {
+                        speedBadge.innerHTML = '⚡ سحب محلي فائق (0.2s) نشط تلقائياً';
+                        speedBadge.style.display = 'inline-block';
+                        speedBadge.style.color = '#34d399';
+                        speedBadge.style.borderColor = '#10b981';
+                        autoDetectNovelStats();
+                    }
+                } catch(e2) {
+                    if (speedBadge) {
+                        speedBadge.innerHTML = '<a href="nswapi://start" style="color: #fca5a5; text-decoration: underline;" title="اضغط لتشغيل الخادم المحلي بنقرة">⚠️ الخادم المحلي غير متصل (انقر للتشغيل)</a>';
+                    }
+                }
+            }, 1800);
+        }
+    }
+
     window.onload = function() {
+        checkAndAutoStartLocalBridge();
         initNovelHistory();
         loadNovelsFromCentralGlossaryAndIndex();
         calculateTimeEstimate();

@@ -361,10 +361,16 @@ class NSWLocalAPIHandler(BaseHTTPRequestHandler):
             self._send_cors_headers()
             self.end_headers()
 
+from http.server import ThreadingHTTPServer
+
+class ReusableThreadingServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
 def start_server():
     server_address = ("127.0.0.1", PORT)
     try:
-        httpd = HTTPServer(server_address, NSWLocalAPIHandler)
+        httpd = ReusableThreadingServer(server_address, NSWLocalAPIHandler)
         logger.info(f"⚡ [NSW Local API] خادم الربط المحلي يعمل بنشاط على: http://127.0.0.1:{PORT}")
         httpd.serve_forever()
     except Exception as e:
