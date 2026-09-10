@@ -749,23 +749,34 @@ if st.session_state.active_novel:
         if custom_chaps_list:
             st.info(f"🎯 **الفصول المستهدفة للسحب ({len(custom_chaps_list)} فصلاً):** `{custom_chaps_list}`")
     else:
+        # حساب الفصول الناقصة واقتراح استكمالها تلقائياً
+        all_local_chaps = get_chapters(novel["id"])
+        downloaded_nums = {c["chapter_number"] for c in all_local_chaps if c.get("status") == "downloaded"}
+        missing_nums = [c["chapter_number"] for c in all_local_chaps if c["chapter_number"] not in downloaded_nums]
+        
+        suggested_from = missing_nums[0] if missing_nums else 1
+        suggested_to = missing_nums[-1] if missing_nums else max(1, total_ch)
+
+        if downloaded_nums and missing_nums:
+            st.info(f"💡 [استكمال ذكي]: تم العثور على {len(downloaded_nums)} فصلاً منزلاً. الفصول الناقصة المقترحة تلقائياً: من {suggested_from} إلى {suggested_to} ({len(missing_nums)} فصلاً).")
+
+        # تحديد نطاق الفصول المراد سحبها
         col_r1, col_r2 = st.columns(2)
         with col_r1:
             from_chap = st.number_input(
-                "من الفصل رقم (أول فصل غير منزّل):",
+                "من الفصل رقم:",
                 min_value=1,
                 max_value=max_scope,
-                value=default_from,
-                key=f"from_chap_input_{novel['id']}_{default_from}"
+                value=suggested_from,
+                key=f"from_chap_input_{novel['id']}"
             )
         with col_r2:
-            min_to = int(from_chap)
-            max_to = max(min_to, max_scope)
+            default_to_chap = max(from_chap, suggested_to)
             to_chap = st.number_input(
                 "إلى الفصل رقم:",
-                min_value=min_to,
-                max_value=max_to,
-                value=max_to,
+                min_value=from_chap,
+                max_value=max_scope,
+                value=default_to_chap,
                 key=f"to_chap_input_{novel['id']}"
             )
 

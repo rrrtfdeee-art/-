@@ -32,7 +32,7 @@ def send_discord_scraper_alert(message: str, webhook_url: str = DEFAULT_DISCORD_
     except Exception as e:
         print(f"⚠️ خطأ إرسال إشعار ديسكورد: {e}")
 
-def upload_single_chapter_to_sheet(novel_name: str, chapter_number: int, title: str, content: str, webapp_url: str = DEFAULT_GAS_URL) -> bool:
+def upload_single_chapter_to_sheet(novel_name: str, chapter_number: int, title: str, content: str, source_url: str = "", webapp_url: str = DEFAULT_GAS_URL) -> bool:
     """ضخ فصل واحد فورياً في جدول Google Sheet بمجرد سحبه (Streaming 0ms)."""
     payload = {
         "action": "importSingleRawChapter",
@@ -40,7 +40,8 @@ def upload_single_chapter_to_sheet(novel_name: str, chapter_number: int, title: 
         "chapter": {
             "num": chapter_number,
             "title": title or f"الفصل {chapter_number}",
-            "content": content
+            "content": content,
+            "url": source_url
         }
     }
     try:
@@ -900,9 +901,9 @@ class NovelScrapingSession:
                                         expected_idx += 1
                                         while expected_idx < len(sorted_target_nums) and sorted_target_nums[expected_idx] in ordered_buffer:
                                             nxt_num = sorted_target_nums[expected_idx]
-                                            nxt_t, nxt_c = ordered_buffer.pop(nxt_num)
+                                            nxt_t, nxt_c, nxt_u = ordered_buffer.pop(nxt_num)
                                             if self.auto_stream_to_sheet:
-                                                upload_single_chapter_to_sheet(self.novel_name, nxt_num, nxt_t, nxt_c)
+                                                upload_single_chapter_to_sheet(self.novel_name, nxt_num, nxt_t, nxt_c, source_url=nxt_u)
                                             expected_idx += 1
 
                     if fetch_success:
@@ -918,15 +919,16 @@ class NovelScrapingSession:
                         # 2. التدفق المنظم إلى Google Sheet عبر حاجز الترتيب التسلسلي الصارم
                         if self.auto_stream_to_sheet:
                             with buffer_lock:
-                                ordered_buffer[ch_num] = (ch_title, clean_content)
+                                ordered_buffer[ch_num] = (ch_title, clean_content, ch_url)
                                 while expected_idx < len(sorted_target_nums) and sorted_target_nums[expected_idx] in ordered_buffer:
                                     nxt_num = sorted_target_nums[expected_idx]
-                                    nxt_t, nxt_c = ordered_buffer.pop(nxt_num)
+                                    nxt_t, nxt_c, nxt_u = ordered_buffer.pop(nxt_num)
                                     stream_ok = upload_single_chapter_to_sheet(
                                         novel_name=self.novel_name,
                                         chapter_number=nxt_num,
                                         title=nxt_t,
-                                        content=nxt_c
+                                        content=nxt_c,
+                                        source_url=nxt_u
                                     )
                                     if stream_ok:
                                         self.log(f"⚡ [تسلسلي] ✅ تم ضخ الفصل {nxt_num} بالترتيب الصارم في Google Sheet!")
@@ -959,6 +961,27 @@ class NovelScrapingSession:
 
         for th in threads:
             th.join()
+
+        # دورة إعادة المحاولة التلقائية للفصول المتعثرة (Automatic Retry Pass)
+        if not self.is_stopped:
+            failed_chapters = [c for c in get_chapters(self.novel_id, from_chapter=from_chapter, to_chapter=to_chapter) if c.get("status") == "failed"]
+            retry_pass = 0
+            while failed_chapters and retry_pass < 3 and not self.is_stopped:
+                retry_pass += 1
+                self.log(f"🔄 [دورة الاستدراك {retry_pass}]: إعادة محاولة سحب {len(failed_chapters)} فصول متعثرة...")
+                time.sleep(2.0)
+                retry_queue = queue.Queue()
+                for f_ch in failed_chapters:
+                    retry_queue.put(f_ch)
+                task_queue = retry_queue
+                threads = []
+                for w_id in range(1, workers_count + 1):
+                    th = threading.Thread(target=_worker_thread, args=(w_id,), daemon=True)
+                    threads.append(th)
+                    th.start()
+                for th in threads:
+                    th.join()
+                failed_chapters = [c for c in get_chapters(self.novel_id, from_chapter=from_chapter, to_chapter=to_chapter) if c.get("status") == "failed"]
 
         self.log(f"🎉 اكتملت معالجة كافة الفصول عبر الخطوط المتوازية بنجاح!")
 
