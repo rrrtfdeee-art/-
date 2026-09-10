@@ -142,7 +142,8 @@ def cmd_pull(
     limit: int = 20,
     novel_name: str = "After Severing Ties",
     start_chapter: int = 1,
-    include_live: bool = True
+    include_live: bool = True,
+    send_telegram: bool = True
 ) -> int:
     """سحب الفصول بانتظار المراجعة وتجريدها وتفريغها في pending/."""
     logger.info(f"🚀 بدء سحب دفعة حتى {limit} فصلاً لرواية '{novel_name}' (بدءاً من {start_chapter})...")
@@ -222,6 +223,14 @@ def cmd_pull(
 
     # توليد ملف طلب كلاود أوبس الفوري مع القاموس المفلتر
     generate_batch_claude_prompt(novel_name)
+
+    if send_telegram and saved_count > 0:
+        try:
+            from nsw_healer_engine import send_opus_batch_to_telegram
+            send_opus_batch_to_telegram(novel_name, batch)
+        except Exception as e:
+            logger.warning(f"تعذر إرسال الحزمة لتليجرام: {e}")
+
     return saved_count
 
 
@@ -639,6 +648,11 @@ def main():
 
     # أمر push
     push_parser = subparsers.add_parser("push", help="نشر وتحديث الفصول المعتمدة في بلوجر والشيت")
+        # أمر telegram
+    tg_parser = subparsers.add_parser("telegram", help="تجهيز وإرسال الدفعة الحالية لتليجرام لـ Claude فوراً")
+    tg_parser.add_argument("--limit", type=int, default=20, help="عدد الفصول")
+    tg_parser.add_argument("--novel", type=str, default="After Severing Ties", help="اسم الرواية")
+
     # أمر stage-all (النقرة 1)
     stage_parser = subparsers.add_parser("stage-all", help="النقرة 1: سحب وتجهيز الفصول وتوليد القاموس لكلاود")
     stage_parser.add_argument("--limit", type=int, default=20, help="عدد الفصول")
@@ -652,7 +666,8 @@ def main():
 
     if args.command == "status" or not args.command:
         cmd_status()
-    elif args.command in ["pull", "stage-all"]:
+    elif args.command in ["pull", "stage-all", "telegram"]:
+        cmd_pull(limit=args.limit, novel_name=args.novel, send_telegram=True)
         cmd_pull(limit=args.limit, novel_name=args.novel)
     elif args.command == "approve":
         if args.chapter.lower() in ["all", "--all", "*"]:

@@ -1436,6 +1436,31 @@ def create_bot_app():
                 bot.send_message(chat_id, f"⚠️ تعذر جلب التقرير: {e}")
             return
 
+        elif data == "cb_sort_sheets":
+            if not is_admin(chat_id):
+                bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")
+                return
+            status_msg = bot.send_message(chat_id, "⏳ <b>جاري الترتيب التسلسلي الصارم لجميع الجداول (1v1V4, 1IFT, 1HDj)...</b>")
+            def _run_sort():
+                try:
+                    import nsw_healer_engine
+                    res = requests.post(nsw_healer_engine.PUBLISH_WEBAPP_URL, json={"action": "sortSystemSheets"}, timeout=60).json()
+                    details = res.get("results", {})
+                    msg = (
+                        "🔢 <b>[تقرير الترتيب التسلسلي الصارم للجداول]:</b>\n"
+                        "━━━━━━━━━━━━━━━━━━━━\n"
+                        f"• 📊 <b>جدول الأرشيف والترجمة (1v1V4):</b> {details.get('1v1V4', 'تم الترتيب')}\n"
+                        f"• 🌐 <b>جدول المنشورات والموقع (1IFT):</b> {details.get('1IFT', 'تم الترتيب')}\n"
+                        f"• 📑 <b>جدول قاعدة بيانات الطابور (1HDj):</b> {details.get('1HDj', 'تم الترتيب')}\n"
+                        "━━━━━━━━━━━━━━━━━━━━\n"
+                        "✅ تم فرز وتنسيق كافة الفصول تصاعدياً وفق تسلسلها الرياضي السليم."
+                    )
+                    bot.edit_message_text(msg, chat_id, status_msg.message_id)
+                except Exception as ex:
+                    bot.edit_message_text(f"❌ خطأ أثناء ترتيب الجداول: {ex}", chat_id, status_msg.message_id)
+            threading.Thread(target=_run_sort, daemon=True).start()
+            return
+
         elif data == "cb_nsw_gaps":
             if not is_admin(chat_id):
                 bot.send_message(chat_id, "⛔ هذا الأمر للمشرف فقط.")

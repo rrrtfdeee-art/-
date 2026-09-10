@@ -471,9 +471,86 @@ def clear_single_chapter_content(novel_id: int, chapter_number: int, db_path: st
 
 
 # ==============================================================================
-# ⚡ التهيئة التلقائية الفورية للجداول بمجرد استيراد الملف لمنع خطأ no such table
+# ⚡ دوال البحث الذكي وكشف الثغرات (Novel Query & Gap Detection)
 # ==============================================================================
+
+def find_novel_by_query(query_str: str, db_path: str = DB_FILE_PATH) -> Optional[Dict[str, Any]]:
+    """البحث المرن عن الرواية بالاسم العربي أو الإنجليزي أو الصيني أو جزء من الرابط."""
+    if not query_str:
+        return None
+    q = query_str.strip().lower()
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM novels;")
+        rows = [dict(r) for r in cursor.fetchall()]
+        
+        # 1. تطابق مباشر
+        for r in rows:
+            t = (r.get("title") or "").lower()
+            u = (r.get("toc_url") or "").lower()
+            if q == t or q in t or t in q or q in u:
+                return r
+                
+        # 2. تطابق الكلمات المفتاحية الشائعة
+        if "severing" in q or "قطع" in q or "الروابط" in q or "ties" in q or "斷絕" in q:
+            for r in rows:
+                if "斷絕" in (r.get("title") or "") or "severing" in (r.get("toc_url") or "").lower():
+                    return r
+        if "mahayana" in q or "ماهايانا" in q or "reversal" in q or "انعكاس" in q:
+            for r in rows:
+                if "mahayana" in (r.get("title") or "").lower() or "mahayana" in (r.get("toc_url") or "").lower():
+                    return r
+
+        return rows[0] if len(rows) == 1 else None
+
+
+def get_novel_gaps(novel_id: int, db_path: str = DB_FILE_PATH) -> Dict[str, Any]:
+    """فحص واكتشاف ثغرات الفصول المفقودة أو المتعثرة للرواية بدقة."""
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT chapter_number, status, length(content) as content_len 
+            FROM chapters 
+            WHERE novel_id = ? 
+            ORDER BY chapter_number ASC;
+        """, (novel_id,))
+        rows = cursor.fetchall()
+        if not rows:
+            return {"min": 0, "max": 0, "total_manifest": 0, "completed": 0, "failed": [], "gaps": [], "missing_count": 0}
+            
+        chap_nums = [r["chapter_number"] for r in rows]
+        min_c = min(chap_nums)
+        max_c = max(chap_nums)
+        
+        # الفصول التي تم سحبها بنجاح إما downloaded أو streamed
+        completed_set = {
+            r["chapter_number"] for r in rows 
+            if r["status"] in ("downloaded", "streamed")
+        }
+        
+        # الفصول الفاشلة
+        failed_list = [r["chapter_number"] for r in rows if r["status"] == "failed"]
+        
+        # حساب الثغرات من min_c إلى max_c
+        gaps = []
+        for c in range(min_c, max_c + 1):
+            if c not in completed_set:
+                gaps.append(c)
+                
+        return {
+            "min": min_c,
+            "max": max_c,
+            "total_manifest": len(rows),
+            "completed": len(completed_set),
+            "failed": failed_list,
+            "gaps": gaps,
+            "missing_count": len(gaps)
+        }
+
+
+# تهيئة الجداول تلقائياً عند استيراد الوحدة
 try:
     init_db()
 except Exception:
     pass
+

@@ -17,6 +17,14 @@ def run_telegram_bot():
         cwd=os.path.dirname(os.path.abspath(__file__))
     )
 
+def run_local_api():
+    """تشغيل خادم الربط المحلي الفائق على بورت 58242."""
+    print("[Launcher] Starting NSW Local Web Bridge API (Port 58242)...")
+    subprocess.run(
+        [sys.executable, "local_nsw_api.py"],
+        cwd=os.path.dirname(os.path.abspath(__file__))
+    )
+
 def run_streamlit():
     """تشغيل واجهة Streamlit."""
     print("[Launcher] Starting Streamlit App on port 8501...")
@@ -38,6 +46,11 @@ if __name__ == "__main__":
     bot_thread = threading.Thread(target=run_telegram_bot, daemon=True, name="TelegramBot")
     bot_thread.start()
     print("[Launcher] Telegram Bot thread started.")
+
+    # تشغيل خادم الربط المحلي الفائق في خيط خلفي
+    api_thread = threading.Thread(target=run_local_api, daemon=True, name="LocalWebBridge")
+    api_thread.start()
+    print("[Launcher] NSW Local Web Bridge API thread started on port 58242.")
 
     # إشعار الإقلاع التلقائي في الخلفية
     def _startup_notify():

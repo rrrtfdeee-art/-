@@ -807,7 +807,14 @@ class NovelScrapingSession:
         for ch in chapters_to_scrape:
             task_queue.put(ch)
 
+        # مخزن الترتيب التسلسلي الصارم لضمان عدم ضخ أي فصل قبل سابقه في Google Sheet
+        ordered_buffer = {}
+        buffer_lock = threading.Lock()
+        sorted_target_nums = sorted([ch["chapter_number"] for ch in chapters_to_scrape])
+        expected_idx = 0
+
         def _worker_thread(worker_id: int):
+            nonlocal expected_idx
             with PlaywrightStealthBrowser(headless=self.headless) as browser:
                 while not task_queue.empty() and not self.is_stopped:
                     while self.is_paused and not self.is_stopped:
@@ -823,42 +830,83 @@ class NovelScrapingSession:
                     ch_num = ch["chapter_number"]
                     ch_url = ch["url"]
 
-                    # فحص إذا كان الفصل مسحوباً مسبقاً ولديه محتوى مكتمل لتفادي تكرار السحب والتفريغ
+                    # فحص إذا كان الفصل مسحوباً مسبقاً ولديه محتوى مكتمل لتفادي تكرار السحب
                     if ch.get("status") == "downloaded" and ch.get("content") and len(str(ch.get("content")).strip()) > 50:
                         self.log(f"⏩ [خيط {worker_id}] ➔ الفصل {ch_num} مسحوب ومكتمل مسبقاً، تم تخطيه بنجاح.")
                         with self._lock:
                             self.processed_count += 1
                             if self.progress_callback:
                                 self.progress_callback(self.processed_count, total_in_range, f"تم تخطي الفصل {ch_num} (موجود مسبقاً)")
+                        
+                        # تفريغ الطابور التسلسلي للفصل المتخطى إذا لزم الأمر
+                        with buffer_lock:
+                            if expected_idx < len(sorted_target_nums) and sorted_target_nums[expected_idx] == ch_num:
+                                expected_idx += 1
                         continue
 
                     self.log(f"👷 [خيط {worker_id}] ➔ سحب الفصل {ch_num}...")
 
-                    try:
-                        if "api.mystorywave.com" in ch_url:
-                            # ⚡ مسار فائق السرعة عبر API لمنصة botitranslation / mystorywave
-                            headers = {
-                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                                "Referer": "https://www.botitranslation.com/",
-                                "Origin": "https://www.botitranslation.com",
-                                "site-domain": "www.botitranslation.com",
-                                "lang": "en",
-                                "Accept": "application/json, text/plain, */*"
-                            }
-                            r_json = requests.get(ch_url, headers=headers, timeout=15).json()
-                            c_dict = r_json.get("data", {})
-                            ch_title = c_dict.get("title") or f"الفصل {ch_num}"
-                            raw_html = c_dict.get("content", "")
-                            clean_content = clean_chapter_content(raw_html, "", purge_sels)
-                        else:
-                            raw_html, _ = browser.get_page_html(ch_url, wait_selector=content_sel)
-                            ch_title = extract_chapter_title(raw_html, title_sel, fallback_number=ch_num)
-                            clean_content = clean_chapter_content(raw_html, content_sel, purge_sels)
+                    # آلية إعادة المحاولة ثلاثية المراحل (3-Attempt Retry with Exponential Backoff)
+                    max_retries = 3
+                    ch_title = ""
+                    clean_content = ""
+                    fetch_success = False
 
-                        if not clean_content or len(clean_content) < 50:
-                            raise ValueError("المحتوى المستخرج صغير جداً أو محجوب.")
+                    for attempt in range(1, max_retries + 1):
+                        try:
+                            if "api.mystorywave.com" in ch_url:
+                                headers = {
+                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                                    "Referer": "https://www.botitranslation.com/",
+                                    "Origin": "https://www.botitranslation.com",
+                                    "site-domain": "www.botitranslation.com",
+                                    "lang": "en",
+                                    "Accept": "application/json, text/plain, */*"
+                                }
+                                r_json = requests.get(ch_url, headers=headers, timeout=15).json()
+                                c_dict = r_json.get("data", {})
+                                ch_title = c_dict.get("title") or f"الفصل {ch_num}"
+                                raw_html = c_dict.get("content", "")
+                                clean_content = clean_chapter_content(raw_html, "", purge_sels)
+                            else:
+                                raw_html, _ = browser.get_page_html(ch_url, wait_selector=content_sel)
+                                ch_title = extract_chapter_title(raw_html, title_sel, fallback_number=ch_num)
+                                clean_content = clean_chapter_content(raw_html, content_sel, purge_sels)
 
-                        # 1. حفظ أولي في SQLite للتأكيد
+                            if not clean_content or len(clean_content) < 50:
+                                raise ValueError("المحتوى المستخرج صغير جداً أو محجوب.")
+
+                            fetch_success = True
+                            break
+                        except Exception as ex_attempt:
+                            if attempt < max_retries:
+                                wait_time = attempt * 1.5
+                                self.log(f"⚠️ [خيط {worker_id}] تعثر فصل {ch_num} (محاولة {attempt}/{max_retries}): {str(ex_attempt)[:50]}. إعادة المحاولة بعد {wait_time}ث...")
+                                time.sleep(wait_time)
+                            else:
+                                err_msg = str(ex_attempt)
+                                self.log(f"❌ [خيط {worker_id}] فشل نهائي في سحب فصل {ch_num} بعد 3 محاولات: {err_msg[:60]}")
+                                save_chapter_content(
+                                    novel_id=self.novel_id,
+                                    chapter_number=ch_num,
+                                    title=ch.get("title"),
+                                    content=None,
+                                    status="failed",
+                                    error_message=err_msg
+                                )
+                                # تجاوز الفصل المتعثر في حاجز الترتيب لعدم تعطيل باقي الفصول
+                                with buffer_lock:
+                                    if expected_idx < len(sorted_target_nums) and sorted_target_nums[expected_idx] == ch_num:
+                                        expected_idx += 1
+                                        while expected_idx < len(sorted_target_nums) and sorted_target_nums[expected_idx] in ordered_buffer:
+                                            nxt_num = sorted_target_nums[expected_idx]
+                                            nxt_t, nxt_c = ordered_buffer.pop(nxt_num)
+                                            if self.auto_stream_to_sheet:
+                                                upload_single_chapter_to_sheet(self.novel_name, nxt_num, nxt_t, nxt_c)
+                                            expected_idx += 1
+
+                    if fetch_success:
+                        # 1. حفظ المحتوى بالكامل في SQLite (مخزن محلي فوري دائم للترجمة فائقة السرعة)
                         save_chapter_content(
                             novel_id=self.novel_id,
                             chapter_number=ch_num,
@@ -867,22 +915,24 @@ class NovelScrapingSession:
                             status="downloaded"
                         )
 
-                        # 2. ⚡ التدفق الفوري فصلاً بفصل إلى Google Sheet مباشرة (Streaming)
+                        # 2. التدفق المنظم إلى Google Sheet عبر حاجز الترتيب التسلسلي الصارم
                         if self.auto_stream_to_sheet:
-                            stream_ok = upload_single_chapter_to_sheet(
-                                novel_name=self.novel_name,
-                                chapter_number=ch_num,
-                                title=ch_title,
-                                content=clean_content
-                            )
-                            if stream_ok:
-                                try:
-                                    clear_single_chapter_content(self.novel_id, ch_num)
-                                except Exception:
-                                    pass
-                                self.log(f"⚡ [خيط {worker_id}] ✅ تم ضخ الفصل {ch_num} في Google Sheet وتطهير ذاكرته بنجاح!")
-                            else:
-                                self.log(f"ℹ️ [خيط {worker_id}] تم حفظ الفصل {ch_num} محلياً (سيتم رفعه بالدفعة التراكمية).")
+                            with buffer_lock:
+                                ordered_buffer[ch_num] = (ch_title, clean_content)
+                                while expected_idx < len(sorted_target_nums) and sorted_target_nums[expected_idx] in ordered_buffer:
+                                    nxt_num = sorted_target_nums[expected_idx]
+                                    nxt_t, nxt_c = ordered_buffer.pop(nxt_num)
+                                    stream_ok = upload_single_chapter_to_sheet(
+                                        novel_name=self.novel_name,
+                                        chapter_number=nxt_num,
+                                        title=nxt_t,
+                                        content=nxt_c
+                                    )
+                                    if stream_ok:
+                                        self.log(f"⚡ [تسلسلي] ✅ تم ضخ الفصل {nxt_num} بالترتيب الصارم في Google Sheet!")
+                                    else:
+                                        self.log(f"ℹ️ [تسلسلي] تم حفظ الفصل {nxt_num} محلياً بنجاح.")
+                                    expected_idx += 1
 
                         with self._lock:
                             self.processed_count += 1
@@ -894,23 +944,10 @@ class NovelScrapingSession:
                             send_discord_scraper_alert(
                                 f"⚡ **[تقدم سحب الرواية]:**\n"
                                 f"📖 **الرواية:** `{self.novel_name}`\n"
-                                f"📊 **المُنجز:** `{cnt} / {total_in_range}` فصلاً تم بثها في Google Sheet بنجاح."
+                                f"📊 **المُنجز:** `{cnt} / {total_in_range}` فصلاً تم بثها في Google Sheet بتسلسل منظم."
                             )
 
-                    except Exception as ex:
-                        err_msg = str(ex)
-                        self.log(f"❌ [خيط {worker_id}] تعذر سحب فصل {ch_num}: {err_msg[:60]}")
-                        save_chapter_content(
-                            novel_id=self.novel_id,
-                            chapter_number=ch_num,
-                            title=ch.get("title"),
-                            content=None,
-                            status="failed",
-                            error_message=err_msg
-                        )
-                    finally:
-                        task_queue.task_done()
-
+                    task_queue.task_done()
                     delay = random.uniform(self.min_delay, self.max_delay)
                     time.sleep(delay)
 

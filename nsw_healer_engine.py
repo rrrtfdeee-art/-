@@ -46,9 +46,11 @@ logger = logging.getLogger("NSWHealer")
 # الثوابت والمعرفات المركزية
 NOVELS_INDEX_SPREADSHEET_ID = "1s-yf1gRHagPIeikEC9_aVIAst7oDaiwoNzLH-hd0Q24"
 PUBLIC_PUBLISHED_SPREADSHEET_ID = "1IFT9mKRFByiPhph-ZaSdUT7c6IPUWpLg6Gj2xa9g5mY"
-TRANSLATE_SPREADSHEET_ID = "1v1V4_rQukDs3oCe8Z4Izvni3uCx91iKmSVNOm4A3mH0"
+RAW_ARCHIVE_SPREADSHEET_ID = "1v1V4_rQukDs3oCe8Z4Izvni3uCx91iKmSVNOm4A3mH0"
+TRANSLATE_SPREADSHEET_ID = "1FcehVXh-GLlZGePTm2nm13N932qcFeT0uGuOsXRFXpI" # شيت طابور الترجمة والتدقيق المعتمد
 PUBLISH_QUEUE_SPREADSHEET_ID = "1HDjYu6EypdiNfoawJ2s7nQcRJiGsfJ5bNefcEy0QhFE"
 GLOSSARY_SPREADSHEET_ID = "1oqKRLyqWdkdUWW5UtvorEteFk3jJXdeUzQGDv-XJ_aE"
+FORMATTING_RULES_GID = 288436831 # الصفحة الثانية: قواعد التنسيق وأكواد المشاهد
 
 PUBLISH_WEBAPP_URL = os.getenv("NSW_PUBLISH_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbxqLaqJru1ag-am7G9Mrwy5Nb7HliZlK5vbIEQD9MeV3wOOquNUvz4d7vWEwZxkBI6zIw/exec")
 TRANSLATE_WEBAPP_URL = os.getenv("NSW_TRANSLATE_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbwk3rNPfyP6lJw5jkXigqUfTgivsNzgDoyhd61lPiRSFZP49jFShKaz-CfnUqlM9OmH/exec")
@@ -1222,19 +1224,46 @@ def filter_glossary_for_chapter(raw_chinese_text: str, glossary_terms: List[Dict
 
 
 def format_glossary_for_prompt(glossary_terms: List[Dict[str, str]]) -> str:
-    """تنسيق القاموس ككتلة شروط إلزامية للذكاء الاصطناعي."""
+    """تنسيق القاموس ككتلة شروط إلزامية للذكاء الاصطناعي مع التمييز الصارم بين القاموس والوسوم."""
     if not glossary_terms:
         return ""
-    lines = ["\n📌 [قاموس المصطلحات والأسماء المعتمد إلزامياً بنسبة 100% - يمنع استخدام أي ترجمة أخرى لهذه المفردات]:"]
+    lines = [
+        "\n📌 [قاموس المصطلحات وقواعد الشخصيات المعتمدة إلزامياً]:",
+        "⚠️ تنبيه حرج وقاطع: تصنيف 'Character' أو 'Location' أو 'Skill' هو وصف دلالي لبيان طبيعة المصطلح، وليس وسم BBCode! يُحظر منعاً باتاً وضع أسماء الشخصيات أو أفعالها داخل وسوم مثل [character] أو [name] أو [hero]!",
+        "⚠️ قواعد الجنس والضمائر الإلزامية:",
+        "- للشخصية (أنثى): يجب استخدام ضمائر وأفعال التأنيث حصراً (قالت، عيناها، نظرت، هي، لها). يُمنع تذكير المؤنث منعاً باتاً!",
+        "- للشخصية (ذكر): يجب استخدام ضمائر وأفعال التذكير حصراً (قال، عيناه، نظر، هو، له). يُمنع تأنيث المذكر منعاً باتاً!",
+        "المصطلحات المعتمدة في هذا الفصل:"
+    ]
     for t in glossary_terms:
         extra = []
-        if t.get("category"):
-            extra.append(f"التصنيف: {t['category']}")
         if t.get("gender"):
             extra.append(f"الجنس: {t['gender']}")
-        extra_str = f" ({' | '.join(extra)})" if extra else ""
+        if t.get("category"):
+            extra.append(f"النوع: {t['category']}")
+        extra_str = f" [{', '.join(extra)}]" if extra else ""
         lines.append(f"• {t['original']} ➔ {t['arabic']}{extra_str}")
     return "\n".join(lines)
+
+
+
+def clean_and_heal_arabic_text(raw_text: str) -> str:
+    """تنظيف وتصحيح العثرات الإملائية والمطبعية وزلات الكيبورد وفواصل الترجمة الآلية."""
+    if not raw_text:
+        return ""
+    t = raw_text
+    # إزالة أي وسوم شاذة من هلوسات النماذج
+    t = re.sub(r'\[/?(?:character|hero|name|person)\]', '', t, flags=re.I)
+    # استبدال الفواصل الإنجليزية المتبقية
+    t = re.sub(r',(\s*)', r'\u060c \1', t)
+    # إصلاح الأخطاء المطبعية المتكررة من مسح/ترجمة قديمة
+    t = re.sub(r'تعرض(وا)?\s+للعرض', r'تعرض\1 للعض', t)
+    t = t.replace('واصُدوا', 'واصلوا').replace('واصدوا', 'واصلوا')
+    t = t.replace('تحولت أجسادهم أيضاً - نمت لها', 'تحولت أجسادهم وطفرت؛ فنمت لها')
+    t = t.replace('المناطق الكبرى الخيارية', 'المناطق الكبرى الخمس')
+    # ضبط المسافات حول علامات الترقيم العربية
+    t = re.sub(r'\s+([،؛.؟!])', r'\1', t)
+    return t.strip()
 
 
 def stage_1_initial_translate(raw_title: str, raw_content: str, novel_name: str, chapter_number: int) -> Dict[str, Any]:
@@ -1249,6 +1278,9 @@ def stage_1_initial_translate(raw_title: str, raw_content: str, novel_name: str,
         "أنت مترجم روائي محترف ومحرر أدبي خبير متخصص في ترجمة الروايات الصينية والعالمية إلى العربية الفصحى البليغة.\n"
         "القواعد الصارمة والإلزامية:\n"
         "1. ترجمة النص كاملاً بأمانة ودقة بالغة دون أي تلخيص أو حذف لأي جملة أو فقرة.\n"
+        "2. السرد الروائي المترابط وحظر التقطيع السطري: صغ النص في فقرات سردية متدفقة ومترابطة وفق أصول الأدب العربي الرفيع؛ يُحظر تماماً كسر كل جملة بنقطة في سطر مستقل كترجمة حرفية آلية.\n"
+        "3. حظر الجمل الاسمية التلغرافية المبتورة: يُمنع ترجمة التراكيب الإنجليزية ترجمة تلغرافية باردة (مثل Society collapsed ➔ قل: 'فانهار بنيان المجتمع وتداعت أركانه').\n"
+        "4. علامات الترقيم العربية: استخدم علامات الترقيم العربية حصراً (، ؛ ؟ !) ويُحظر استخدام الفاصلة الإنجليزية (,).\n"
         "2. التقيد التام والحرفي بأسماء الشخصيات والأماكن والمصطلحات الواردة في القاموس المرفق.\n"
         "3. قواعد الأسماء والألقاب الصينية الصارمة (حظر تام للترجمة الحرفية والمشوهة):\n"
         "   - الألقاب مثل '老马' (Lao Ma) تُترجم حصراً: 'العجوز ما' أو 'العم ما' (يُحظر منعاً باتاً كتابتها 'ماء'!).\n"
@@ -1319,7 +1351,9 @@ def stage_1_initial_translate(raw_title: str, raw_content: str, novel_name: str,
     if ar_count < min_exp or zh_count > (len(content_ar) * 0.05):
         raise ValueError(f"فشلت المرحلة 1: النص غير مطابق للمعايير (عربي: {ar_count}, صيني: {zh_count})")
 
-    logger.info(f"✅ [المرحلة 1] اكتملت الترجمة الأولية بنجاح ({ar_count} حرف عربي).")
+    parsed["translated_content"] = clean_and_heal_arabic_text(parsed.get("translated_content", ""))
+    parsed["translated_title"] = clean_and_heal_arabic_text(parsed.get("translated_title", ""))
+    logger.info(f"✅ [المرحلة 1] اكتملت الترجمة الأولية بنجاح مع التعقيم اللغوي ({ar_count} حرف عربي).")
     return parsed
 
 
@@ -1332,15 +1366,18 @@ def stage_2_antigravity_refine(draft_title: str, draft_content: str, novel_name:
         "المهمة: خذ النص المترجم التالي وقم بصقله وتنسيقه وفق المعايير الإلزامية التالية:\n"
         "1. علامات التنصيص للحوارات: اجعل كل جملة حوارية بين علامتي تنصيص مزدوجتين \"...\" حصراً وافصل بين الفقرات بسطور مزدوجة.\n"
         "2. الرقابة العقدية: تكييف الآلهة والكائنات الخارقة لمصطلحات محايدة (كيانات عليا / كائنات أسطورية / خبير أسطوري / سيد المعارك) وتحويل العبادة والسجود إلى خضوع وتبجيل وانحناء.\n"
-        "3. حقن وسوم الـ BBCode المناسبة تلقائياً:\n"
+        "3. حقن وسوم الـ BBCode المناسبة تلقائياً (القائمة البيضاء الحصرية):\n"
         "   - [cultivation]...[/cultivation] لتقنيات واختراقات ومراحل المزارعة والطاقة.\n"
-        "   - [system]...[/system] لشاشات وواجهات تنبيهات النظام.\n"
-        "   - [system red]...[/system] لتحذيرات النظام ورسائل الخطر والموت.\n"
-        "   - [doc seal=\"اسم الختم\"]...[/doc] للمراسيم والوثائق الإمبراطورية ورسائل الطوائف.\n"
-        "   - [letter]...[/letter] للرسائل والمذكرات الشخصية المتبادلة.\n"
-        "   - [tip]...[/tip] للنصائح والإرشادات التوضيحية.\n"
+        "   - [system]...[/system] لشاشات وواجهات تنبيهات النظام ولوحات الحالة.\n"
+        "   - [system red]...[/system] لتحذيرات النظام ورسائل الخطر والموت والعقوبات.\n"
+        "   - [system grey]...[/system] للإشعارات والسجلات الثانوية والخاملة.\n"
+        "   - [rift]...[/rift] لمشاهد الذكريات والفلاش باك والرؤى والأحلام.\n"
+        "   - [doc title=\"العنوان\"]...[/doc] للمراسيم والوثائق الإمبراطورية ورسائل الطوائف.\n"
+        "   - [letter type=\"...\"]...[/letter] للرسائل والمذكرات الشخصية.\n"
+        "   - [tip]...[/tip] للنصائح والإرشادات التوضيحية اللغوية والثقافية.\n"
         "   - [note]...[/note] لهوامش وملاحظات المترجم التوضيحية.\n"
         "   - [log]...[/log] لسجلات وإحصائيات النظام السريعة.\n"
+        "   ⚠️ حظر قاطع وصارم: يُحظر تماماً اختراع وسوم أخرى مثل [character] أو [name] أو وضع أسماء الشخصيات داخل وسوم!\n"
         "4. الارتقاء بالصياغة العربية لتكون فصيحة، بليغة، وخالية من الركاكة والترجمة الحرفية.\n"
         "5. معالجة الأمثال والتعبيرات المجازية المترجمة حرفياً (Idioms Correction):\n"
         "   - إذا وردت تشبيهات أو أمثال مترجمة بأسلوب حرفي سطحي مضحك أو غريب (مثل: ضفدع في بئر، رسم أقدام ثعبان، رأس خروف ولحم كلب، بيض يضرب صخرة، ركوب نمر):\n"
@@ -2300,6 +2337,11 @@ def preview_and_repair_novel_dates(
         curr_date_raw = c_info.get("published_date", "")
 
         target_dt = compute_target_datetime_for_chapter(c_num, pattern)
+        # توقيت بغداد هو UTC+3 وبلوجر يتعامل مع توقيت UTC ذي اللاحقة 'Z'
+        # نطرح 3 ساعات من توقيت بغداد للحصول على الـ UTC الفعلي الذي تفهمه مدونة بلوجر
+        target_utc = target_dt - timedelta(hours=3)
+        target_iso = target_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
         curr_dt = parse_any_datetime(curr_date_raw)
 
         is_match = False
@@ -2307,7 +2349,11 @@ def preview_and_repair_novel_dates(
             # توحيد نوع التوقيت لتفادي خطأ offset-naive و offset-aware
             if getattr(curr_dt, 'tzinfo', None) is not None:
                 curr_dt = curr_dt.replace(tzinfo=None)
-            diff_sec = abs((target_dt - curr_dt).total_seconds())
+            # إذا كان التاريخ الحالي بصيغة UTC (مثل 06:00:00)، نحوله لتوقيت بغداد للمقارنة العادلة
+            curr_baghdad = curr_dt
+            if "Z" in str(curr_date_raw).upper():
+                curr_baghdad = curr_dt + timedelta(hours=3)
+            diff_sec = abs((target_dt - curr_baghdad).total_seconds())
             if diff_sec <= 60:
                 is_match = True
 
@@ -2317,7 +2363,7 @@ def preview_and_repair_novel_dates(
             "post_id": post_id,
             "current_date": curr_dt.strftime("%Y-%m-%d %H:%M:%S") if curr_dt else str(curr_date_raw),
             "target_date": target_dt.strftime("%Y-%m-%d %H:%M:%S"),
-            "target_iso": target_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            "target_iso": target_iso
         }
 
         if is_match:
@@ -2345,8 +2391,9 @@ def preview_and_repair_novel_dates(
     updated_success = []
     failed_items = []
 
-    # 1. التحديث الدفعي الذكي المجمع عبر دفعات آمنة (Batches of 35) لتجنب timeout جوجل آب سكريبت
-    batch_size = 35
+    # 1. التحديث الدفعي الذكي المجمع عبر دفعات آمنة (Batches of 12)
+    # كل دفعة تقوم بـ: تحويل التدوينات لمسودات -> تعديل التاريخ -> إعادة النشر مجدولة -> تحديث الجداول دفعة واحدة
+    batch_size = 12
     valid_updates = [item for item in to_update if item.get("post_id")]
     
     for b_idx in range(0, len(valid_updates), batch_size):
@@ -2364,37 +2411,68 @@ def preview_and_repair_novel_dates(
         }
         batch_success = False
         try:
-            resp = requests.post(PUBLISH_WEBAPP_URL, json=bulk_payload, timeout=90)
+            resp = requests.post(PUBLISH_WEBAPP_URL, json=bulk_payload, timeout=60)
             bulk_res = resp.json() if resp.status_code == 200 else {}
             if bulk_res.get("success") or bulk_res.get("status") == "success":
                 updated_success.extend(chunk)
                 batch_success = True
-                logger.info(f"⚡ تم بنجاح تعديل دفعة من {len(chunk)} فصول ({b_idx+1} إلى {min(b_idx+batch_size, len(valid_updates))}) دفعة واحدة!")
+                logger.info(f"⚡ تم بنجاح تعديل دفعة مسودات وجدولة {len(chunk)} فصول ({b_idx+1} إلى {min(b_idx+batch_size, len(valid_updates))}) دفعة واحدة!")
             else:
                 logger.warning(f"تنبيه استجابة الدفعة {b_idx}: {bulk_res.get('message')}")
         except Exception as e_bulk:
-            logger.warning(f"خطأ مهلة في الدفعة {b_idx}: {e_bulk}")
+            logger.warning(f"خطأ في الدفعة {b_idx}: {e_bulk}")
 
-        # إذا تعذرت الدفعة ككتلة، يتم إرسال فصول هذه الدفعة فقط فردياً بهدوء ودون إرسال تنبيهات منفردة
-        if not batch_success:
-            for item in chunk:
-                c_n = item["chapter_number"]
-                p_id = item["post_id"]
-                t_iso = item["target_iso"]
+        # إذا تعذرت الدفعة الكاملة (12 فصلاً)، نجرب تقسيمها إلى نصفين آمنين (6 فصول) دفعة واحدة أيضاً دون أي إرسال فردي
+        if not batch_success and len(chunk) > 1:
+            sub_size = max(1, len(chunk) // 2)
+            for s_idx in range(0, len(chunk), sub_size):
+                sub_chunk = chunk[s_idx:s_idx + sub_size]
+                sub_payload = {
+                    "action": "bulkSyncDatesToBlogger",
+                    "updates": [
+                        {
+                            "postId": str(it["post_id"]),
+                            "publishedDate": it["target_iso"],
+                            "chapterNumber": it["chapter_number"]
+                        }
+                        for it in sub_chunk
+                    ]
+                }
                 try:
-                    payload = {
-                        "action": "syncSheetDateToBlogger",
-                        "postId": str(p_id),
-                        "publishedDate": t_iso,
-                        "chapterNumber": c_n
-                    }
-                    res = requests.post(PUBLISH_WEBAPP_URL, json=payload, timeout=40).json()
-                    if res.get("status") == "success" or res.get("published") or res.get("success"):
-                        updated_success.append(item)
+                    s_resp = requests.post(PUBLISH_WEBAPP_URL, json=sub_payload, timeout=45)
+                    s_res = s_resp.json() if s_resp.status_code == 200 else {}
+                    if s_res.get("success") or s_res.get("status") == "success":
+                        updated_success.extend(sub_chunk)
+                        logger.info(f"⚡ نجحت الدفعة الفرعية ({len(sub_chunk)} فصول) دفعة واحدة!")
                     else:
-                        failed_items.append((c_n, res.get("message", "فشل التعديل")))
-                except Exception as ex:
-                    failed_items.append((c_n, str(ex)))
+                        failed_items.extend([(it["chapter_number"], s_res.get("message", "فشل التعديل")) for it in sub_chunk])
+                except Exception as ex_sub:
+                    failed_items.extend([(it["chapter_number"], str(ex_sub)) for it in sub_chunk])
+        elif not batch_success:
+            failed_items.extend([(it["chapter_number"], "فشل تنفيذ الدفعة") for it in chunk])
+
+    # 2. تحديث الجداول مباشرة ولحظياً (1IFT و 1HDj) بالتواريخ المجدولة الجديدة
+    sheet_updated_count = 0
+    try:
+        sh_payload = {
+            "action": "updateSheetDatesBulk",
+            "novelName": novel_name,
+            "updates": [
+                {
+                    "chapterNumber": it["chapter_number"],
+                    "postId": it["post_id"],
+                    "publishedDate": it["target_iso"]
+                }
+                for it in to_update
+            ]
+        }
+        sh_resp = requests.post(PUBLISH_WEBAPP_URL, json=sh_payload, timeout=60)
+        if sh_resp.status_code == 200:
+            sh_data = sh_resp.json()
+            sheet_updated_count = sh_data.get("updatedCount", 0)
+            logger.info(f"⚡ تم تحديث {sheet_updated_count} فصلاً في جدول المنشورات مباشرة!")
+    except Exception as e_sh_upd:
+        logger.warning(f"ملاحظة تحديث الشيت: {e_sh_upd}")
 
     # فحص ما إذا كان سبب الفشل هو عدم نشر النسخة الجديدة في Apps Script
     is_gas_outdated = any("غير معروف" in str(err) for _, err in failed_items)
@@ -2405,7 +2483,8 @@ def preview_and_repair_novel_dates(
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"• الفصل البدائي: <b>{start_chap}</b>\n"
         f"• إجمالي الفصول المفحوصة: <b>{len(sorted_nums)}</b> فصل\n"
-        f"• ✅ تم تحديث جدولتها بنجاح: <b>{len(updated_success)}</b> فصل\n"
+        f"• ✅ تم تحديث جدولتها في بلوجر: <b>{len(updated_success)}</b> فصل\n"
+        f"• 📊 تم تحديثها في جدول الشيت (1IFT): <b>{sheet_updated_count or len(updated_success)}</b> صفاً\n"
         f"• ⭐ فصول مطابقة مسبقاً (تم استثناؤها): <b>{len(skipped_compliant)}</b> فصل\n"
     )
     if failed_items:
@@ -2478,12 +2557,17 @@ def sync_and_repair_sheet_from_blogger(novel_name: str = "After Severing Ties", 
     for c_str, info in all_ch.items():
         try:
             c_num = int(float(c_str))
+            p_id = str(info.get("postId", "")).strip()
+            p_date = str(info.get("publishedDate", "")).strip()
+            # 🛡️ صمام أمان صارم: تجاهل أي فصل قيد الترجمة أو ليس له PostID على Blogger لمنع تسريبه لجدول المنشورات
+            if not p_id or p_date == "قيد الترجمة":
+                continue
             blogger_chapters[c_num] = {
                 "chapter_number": c_num,
                 "title": info.get("title", f"الفصل {c_num}"),
-                "post_id": str(info.get("postId", "")),
+                "post_id": p_id,
                 "post_url": info.get("postUrl", ""),
-                "published_date": info.get("publishedDate", ""),
+                "published_date": p_date,
                 "status": info.get("statusDisplay", ""),
                 "char_count": info.get("charCount", 0)
             }
@@ -2847,13 +2931,19 @@ def execute_sync_blogger_to_sheet(novel_name: str = "After Severing Ties", missi
 
     formatted_chapters = []
     for it in missing_items:
+        p_id = str(it.get("post_id", "")).strip()
+        p_date = str(it.get("published_date", "")).strip()
+        # 🛡️ صمام أمان: استبعاد أي فصل لا يملك منشوراً حقيقياً على Blogger
+        if not p_id or p_date == "قيد الترجمة":
+            logger.info(f"🛡️ استبعاد الفصل {it.get('chapter_number')} من الإدراج في 1IFT لأنه ليس منشوراً حياً على بلوجر.")
+            continue
         formatted_chapters.append({
             "chapterNumber": it.get("chapter_number"),
             "title": it.get("title"),
             "labels": [novel_name, "آخر الفصول"],
-            "postId": it.get("post_id", ""),
+            "postId": p_id,
             "postUrl": it.get("post_url", ""),
-            "publishedDate": it.get("published_date", "")
+            "publishedDate": p_date
         })
 
     # تقسيم الإرسال إلى دفعات آمنة (Batches of 40) لمنع تجاوز مهلة الخادم السحابي
@@ -2909,9 +2999,14 @@ def parse_chapter_range_string(range_str: str) -> List[int]:
     - '495'
     - '10,20,30'
     - '1-10, 15, 20-25'
+    - 'الكل' أو 'all' لتصدير كافة الفصول المتاحة
     """
     if not range_str:
         return []
+    
+    clean_r = str(range_str).strip().lower()
+    if clean_r in ["all", "الكل", "كامل", "الجميع", "full"]:
+        return list(range(1, 5000))
     chapters = set()
     parts = re.split(r'[,،\s]+', str(range_str).strip())
     for part in parts:
@@ -3038,7 +3133,8 @@ def export_chapters_from_blogger_to_txt(
     safe_novel_slug = re.sub(r'[^a-zA-Z0-9_\u0600-\u06FF]+', '_', novel_name).strip('_')
     first_c = found_nums[0]
     last_c = found_nums[-1]
-    filename = f"{safe_novel_slug}_فصول_{first_c}_إلى_{last_c}.txt"
+    short_slug = safe_novel_slug[:28].rstrip("_")
+    filename = f"{short_slug}_فصول_{first_c}_إلى_{last_c}.txt"
     file_path = os.path.join(output_dir, filename)
 
     from opus_staging_pipeline import strip_html_to_clean_story
@@ -3138,3 +3234,87 @@ def clean_and_unify_chapter_titles(novel_name: str = "", dry_run: bool = False, 
         logger.error(f"Error invoking fixTitles in GAS: {e}")
         return {"success": False, "error": str(e)}
 
+
+def send_opus_batch_to_telegram(novel_name: str, chapters: List[Dict[str, Any]]) -> bool:
+    """
+    تجهيز وإرسال دفعة فصول كاملة إلى تيليجرام المشرف:
+    1. ملف TXT منظم للفصول الصافية.
+    2. رسالة مصطلحات القاموس المستخدمة.
+    3. برومبت كلود الأدبي الجاهز للنسخ.
+    """
+    if not TELEGRAM_BOT_TOKEN or not ADMIN_CHAT_ID:
+        logger.warning("تعذر إرسال دفعة كلود لتليجرام: التوكن أو معرف المشرف غير معرف.")
+        return False
+
+    if not chapters:
+        return False
+
+    chapters.sort(key=lambda c: c.get("chapterNumber", c.get("chapNum", 0)))
+    start_num = chapters[0].get("chapterNumber", chapters[0].get("chapNum", 1))
+    end_num = chapters[-1].get("chapterNumber", chapters[-1].get("chapNum", len(chapters)))
+
+    full_batch_text = ""
+    for ch in chapters:
+        c_num = ch.get("chapterNumber", ch.get("chapNum", 0))
+        c_title = ch.get("title", f"الفصل {c_num}")
+        body = ch.get("content", ch.get("text", ""))
+        clean_body = re.sub(r'<div class="cultivation">([\s\S]*?)</div>', r'[cultivation]\1[/cultivation]', body, flags=re.I)
+        clean_body = re.sub(r'<div class="system">([\s\S]*?)</div>', r'[system]\1[/system]', clean_body, flags=re.I)
+        clean_body = re.sub(r'<[^>]+>', '', clean_body)
+        clean_body = clean_and_heal_arabic_text(clean_body)
+        full_batch_text += f"=== CHAPTER_START: {c_num} ===\nTITLE: {c_title}\nCONTENT:\n{clean_body}\n=== CHAPTER_END ===\n\n"
+
+    file_name = f"Claude_Batch_{novel_name}_Chaps_{start_num}_to_{end_num}.txt"
+
+    try:
+        # 1. إرسال المستند
+        files = {
+            'document': (file_name, full_batch_text.encode('utf-8'), 'text/plain; charset=utf-8')
+        }
+        data = {
+            'chat_id': ADMIN_CHAT_ID,
+            'caption': f"🎭 <b>[دفعة فصول جديدة لصقل Claude]</b>\n📖 <b>الرواية:</b> {novel_name}\n📑 <b>النطاق:</b> من فصل {start_num} إلى {end_num} ({len(chapters)} فصول)\n📊 <b>الأحرف:</b> {len(full_batch_text):,} حرف.",
+            'parse_mode': 'HTML'
+        }
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument", data=data, files=files, timeout=30)
+
+        # 2. إرسال القاموس
+        glossary_terms = get_novel_glossary(novel_name)
+        glossary_text = "📖 <b>[مصطلحات القاموس المعتمدة لهذه الدفعة]:</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+        if glossary_terms:
+            for k, v in list(glossary_terms.items())[:35]:
+                glossary_text += f"• <code>{k}</code> ➔ <b>{v}</b>\n"
+        else:
+            glossary_text += "<i>لا توجد مصطلحات محددة في القاموس لهذه الرواية.</i>"
+
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
+            'chat_id': ADMIN_CHAT_ID,
+            'text': glossary_text,
+            'parse_mode': 'HTML'
+        }, timeout=15)
+
+        # 3. إرسال برومبت كلود الجاهز
+        claude_prompt = (
+            f"أنت كبير المحررين الأدبيين وأديب وناقد ومترجم فوري معتمد لأعلى مستويات الروايات العالمية.\n"
+            f"مهمتك صقل وإعادة سبك هذه الدفعة ({len(chapters)} فصول) من رواية [{novel_name}] لغوياً وبلاغياً إلى أعلى درجات الفخامة والأدب الروائي العربي:\n\n"
+            f"1. [السرد والسبك]: ادمج الجمل المبتورة السقيمة في فقرات سردية متدفقة، وصحح أي زلات طباعية.\n"
+            f"2. [القاموس]: التزم بالأسماء والمصطلحات المعتمدة دون تحريف.\n"
+            f"3. [الوسوم]: حافظ بدقة على وسوم [cultivation]...[/cultivation] و [system]...[/system].\n"
+            f"4. [صيغة الإخراج]:\n"
+            f"=== CHAPTER_START: [رقم الفصل] ===\n"
+            f"TITLE: [العنوان المصقول]\n"
+            f"CONTENT:\n"
+            f"[المتن الروائي المصقول]\n"
+            f"=== CHAPTER_END ==="
+        )
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
+            'chat_id': ADMIN_CHAT_ID,
+            'text': f"📋 <b>[برومبت الصقل الأدبي لـ Claude - انسخه مباشرة]:</b>\n\n<code>{claude_prompt}</code>",
+            'parse_mode': 'HTML'
+        }, timeout=15)
+
+        logger.info(f"🎉 تم إرسال حزمة Claude لتليجرام بنجاح ({len(chapters)} فصول).")
+        return True
+    except Exception as e:
+        logger.error(f"❌ خطأ أثناء إرسال حزمة كلود لتليجرام: {e}")
+        return False

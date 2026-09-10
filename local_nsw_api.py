@@ -15,6 +15,7 @@ NSW Local Web Bridge API Server v1.0
 import os
 import sys
 import json
+import re
 import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -37,6 +38,9 @@ logger = logging.getLogger("NSW_Local_API")
 
 PORT = 58242
 
+from urllib.parse import urlparse, parse_qs, unquote
+from database import find_novel_by_query, get_novel_gaps, get_chapters
+
 class NSWLocalAPIHandler(BaseHTTPRequestHandler):
     def _send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -49,7 +53,11 @@ class NSWLocalAPIHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path == "/api/status" or self.path == "/":
+        parsed = urlparse(self.path)
+        path = parsed.path
+        qs = parse_qs(parsed.query)
+
+        if path == "/api/status" or path == "/":
             p_cnt = len(list(PENDING_DIR.glob("chapter_*.txt")))
             a_cnt = len(list(APPROVED_DIR.glob("chapter_*.txt")))
             pub_cnt = len(list(PUBLISHED_DIR.glob("chapter_*.txt")))
@@ -76,7 +84,8 @@ class NSWLocalAPIHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
-        elif self.path == "/api/opus/prompt":
+
+        elif path == "/api/opus/prompt":
             prompt_file = STAGING_DIR / "CLAUDE_PROMPT_FOR_BATCH.txt"
             content = prompt_file.read_text(encoding="utf-8") if prompt_file.exists() else "لم يتم توليد الأمر بعد."
             self.send_response(200)
@@ -84,6 +93,136 @@ class NSWLocalAPIHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(json.dumps({"prompt": content}, ensure_ascii=False).encode("utf-8"))
+
+        elif path == "/api/novel_stats":
+            novel_q = qs.get("novel", [""])[0] or qs.get("name", [""])[0]
+            nov = find_novel_by_query(novel_q)
+            if not nov:
+                data = {"status": "error", "message": f"لم يتم العثور على رواية تطابق: {novel_q}"}
+            else:
+                stats = get_novel_gaps(nov["id"])
+                data = {
+                    "status": "success",
+                    "novel_id": nov["id"],
+                    "title": nov["title"],
+                    "domain": nov.get("domain", ""),
+                    "min_chapter": stats["min"],
+                    "max_chapter": stats["max"],
+                    "latest_downloaded": stats["max"],
+                    "total_manifest": stats["total_manifest"],
+                    "completed_count": stats["completed"],
+                    "failed_count": len(stats["failed"]),
+                    "failed_chapters": stats["failed"][:50],
+                    "gaps": stats["gaps"][:100],
+                    "missing_count": stats["missing_count"]
+                }
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
+        elif path == "/api/raw_chapters":
+            novel_q = qs.get("novel", [""])[0] or qs.get("name", [""])[0]
+            start_c = int(qs.get("start", [1])[0])
+            end_c = int(qs.get("end", [start_c + 50])[0])
+            
+            nov = find_novel_by_query(novel_q)
+            if not nov:
+                data = {"status": "error", "message": f"الرواية غير موجودة: {novel_q}", "chapters": []}
+            else:
+                raw_rows = get_chapters(nov["id"], from_chapter=start_c, to_chapter=end_c)
+                out_chapters = []
+                for r in raw_rows:
+                    content = r.get("content") or ""
+                    # إذا كان المحتوى مفرغاً محلياً، نفحص مجلد staging
+                    if not content or len(content) < 30:
+                        ch_file = APPROVED_DIR / f"chapter_{r['chapter_number']}.txt"
+                        if not ch_file.exists():
+                            ch_file = PENDING_DIR / f"chapter_{r['chapter_number']}.txt"
+                        if ch_file.exists():
+                            try:
+                                content = ch_file.read_text(encoding="utf-8")
+                            except Exception:
+                                pass
+
+                    out_chapters.append({
+                        "chapNum": r["chapter_number"],
+                        "title": r.get("title") or f"الفصل {r['chapter_number']}",
+                        "authorTitle": r.get("title") or "",
+                        "text": content,
+                        "status": r.get("status", "unknown"),
+                        "hasContent": bool(content and len(content) > 50)
+                    })
+
+                data = {
+                    "status": "success",
+                    "novel": nov["title"],
+                    "novel_id": nov["id"],
+                    "range": [start_c, end_c],
+                    "count": len(out_chapters),
+                    "chapters": out_chapters
+                }
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
+        elif path == "/api/polished_chapters":
+            novel_q = qs.get("novel", [""])[0] or qs.get("name", [""])[0]
+            start_c = int(qs.get("start", [1])[0])
+            end_c = int(qs.get("end", [999999])[0])
+
+            approved_files = sorted(APPROVED_DIR.glob("chapter_*.txt"), key=lambda p: int(re.search(r'\d+', p.name).group()) if re.search(r'\d+', p.name) else 0)
+            polished_list = []
+            for f in approved_files:
+                try:
+                    ch_num = int(re.search(r'\d+', f.name).group())
+                except Exception:
+                    continue
+                if ch_num < start_c or ch_num > end_c:
+                    continue
+
+                try:
+                    content = f.read_text(encoding="utf-8")
+                    # فحص واستخراج العنوان والمحتوى الصافي
+                    header_lines = []
+                    body_text = content
+                    if content.startswith("---"):
+                        parts = content.split("---", 2)
+                        if len(parts) >= 3:
+                            header_part = parts[1]
+                            body_text = parts[2].strip()
+                            # فحص مطابقة الرواية إن كانت محددة
+                            if novel_q:
+                                n_match = re.search(r'novel:\s*(.*)', header_part)
+                                if n_match and novel_q.lower() not in n_match.group(1).lower() and n_match.group(1).lower() not in novel_q.lower():
+                                    continue
+
+                    polished_list.append({
+                        "chapNum": ch_num,
+                        "title": f"الفصل {ch_num}",
+                        "text": body_text,
+                        "source": "local_approved",
+                        "status": "approved"
+                    })
+                except Exception:
+                    pass
+
+            data = {
+                "status": "success",
+                "count": len(polished_list),
+                "novel": novel_q,
+                "range": [start_c, end_c],
+                "chapters": polished_list
+            }
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
         else:
             self.send_response(404)
             self._send_cors_headers()
@@ -168,6 +307,54 @@ class NSWLocalAPIHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({
                 "success": True,
                 "message": "تم إطلاق المزامنة ثنائية الاتجاه لتواريخ النشر بنجاح."
+            }, ensure_ascii=False).encode("utf-8"))
+        elif self.path == "/api/repair_gaps":
+            novel_q = body.get("novel", "")
+            nov = find_novel_by_query(novel_q)
+            if not nov:
+                self.send_response(200)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "message": f"لم يتم العثور على رواية تطابق: {novel_q}"}, ensure_ascii=False).encode("utf-8"))
+                return
+            
+            stats = get_novel_gaps(nov["id"])
+            gaps_to_fix = stats["gaps"]
+            if not gaps_to_fix:
+                self.send_response(200)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": True, "message": "لا توجد أي فصول مفقودة في هذه الرواية!", "gaps_count": 0}, ensure_ascii=False).encode("utf-8"))
+                return
+
+            def _run_gap_fix():
+                try:
+                    import scraper_engine
+                    scraper_engine.start_scraping_job_in_background(
+                        novel_id=nov["id"],
+                        from_chapter=stats["min"],
+                        to_chapter=stats["max"],
+                        chapter_numbers=gaps_to_fix,
+                        novel_name=nov["title"],
+                        thread_count=3,
+                        auto_stream_to_sheet=True
+                    )
+                except Exception as ex_gap:
+                    logger.error(f"خطأ سحب فصول الثغرات: {ex_gap}")
+
+            threading.Thread(target=_run_gap_fix, daemon=True).start()
+
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "success": True,
+                "message": f"تم إطلاق سحب وسد {len(gaps_to_fix)} فصلاً مفقوداً في الخلفية عبر 3 خيوط متوازية!",
+                "gaps_count": len(gaps_to_fix),
+                "gaps": gaps_to_fix[:50]
             }, ensure_ascii=False).encode("utf-8"))
         else:
             self.send_response(404)
