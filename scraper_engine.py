@@ -6,7 +6,9 @@ import re
 import html
 import sys
 import asyncio
-import threading
+import queue
+import requests
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin, urlparse
 from typing import List, Dict, Any, Optional, Tuple, Callable
 from bs4 import BeautifulSoup
@@ -59,6 +61,12 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+# استيراد مجمع وسائط Google Apps Script
+from gemini_analyzer import DEFAULT_GAS_POOL, DEFAULT_GAS_URL
+
+# شيت الأرشيف الخام المركزي لمنظومة NSW (1v1V4 - الورقة1)
+RAW_ARCHIVE_SPREADSHEET_ID = "1v1V4_rQukDs3oCe8Z4Izvni3uCx91iKmSVNOm4A3mH0"
+
 # استيراد طبقة قاعدة البيانات
 from database import (
     get_domain_config,
@@ -66,8 +74,12 @@ from database import (
     get_or_create_novel,
     sync_chapter_manifest,
     save_chapter_content,
-    get_chapters
+    get_chapters,
+    get_novel_by_id,
+    get_novel_by_title,
+    get_novel_stats
 )
+
 
 
 def extract_clean_domain(url: str) -> str:
@@ -83,6 +95,16 @@ def extract_clean_domain(url: str) -> str:
         return parsed.netloc.lower() or "unknown_domain"
 
 
+def check_cdp_available(cdp_url: str = "http://localhost:9222") -> bool:
+    """التحقق السريع مما إذا كان متصفح Chrome يعمل مع منفذ تصحيح الأخطاء CDP."""
+    try:
+        clean_url = cdp_url.rstrip("/")
+        res = requests.get(f"{clean_url}/json/version", timeout=1.5)
+        return res.status_code == 200
+    except Exception:
+        return False
+
+
 class PlaywrightStealthBrowser:
     """إدارة جلسة متصفح Chromium مع إعدادات تخطي الكشف والـ Stealth المتقدمة."""
 
@@ -93,9 +115,10 @@ class PlaywrightStealthBrowser:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
     ]
 
-    def __init__(self, headless: bool = True, timeout: int = 35000):
+    def __init__(self, headless: bool = True, timeout: int = 35000, cdp_url: Optional[str] = None):
         self.headless = headless
         self.timeout = timeout
+        self.cdp_url = cdp_url
         self.playwright = None
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
@@ -107,10 +130,7 @@ class PlaywrightStealthBrowser:
         self.close()
 
     def start(self):
-        """تشغيل المتصفح وتجهيز بيئة الـ Stealth دون تصادم مع أي حلقة asyncio سابقة."""
-        if self.browser:
-            return
-
+        """تشغيل المتصفح وتجهيز بيئة الـ Stealth أو الاتصال بـ CDP."""
         if sys.platform == "win32":
             try:
                 asyncio.set_event_loop(None)
@@ -118,6 +138,12 @@ class PlaywrightStealthBrowser:
                 pass
 
         self.playwright = sync_playwright().start()
+
+        if self.cdp_url:
+            # الاتصال بمتصفح Chrome البشري المفتوح عبر بروتوكول CDP
+            self.browser = self.playwright.chromium.connect_over_cdp(self.cdp_url)
+            self.context = self.browser.contexts[0] if self.browser.contexts else self.browser.new_context()
+            return
         
         # خيارات تشغيل متقدمة لإلغاء بصمة الروبوت
         launch_args = [
@@ -268,12 +294,34 @@ class PlaywrightStealthBrowser:
     def close(self):
         """إغلاق المتصفح وتنظيف الموارد."""
         try:
-            if self.context:
-                self.context.close()
-            if self.browser:
-                self.browser.close()
-            if self.playwright:
-                self.playwright.stop()
+            if self.cdp_url:
+                # عند الاتصال عبر CDP، نفصل الاتصال فقط ولا نغلق متصفح المشرف الحقيقي
+                if self.browser:
+                    try:
+                        self.browser.close()
+                    except Exception:
+                        pass
+                if self.playwright:
+                    try:
+                        self.playwright.stop()
+                    except Exception:
+                        pass
+            else:
+                if self.context:
+                    try:
+                        self.context.close()
+                    except Exception:
+                        pass
+                if self.browser:
+                    try:
+                        self.browser.close()
+                    except Exception:
+                        pass
+                if self.playwright:
+                    try:
+                        self.playwright.stop()
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -428,13 +476,12 @@ def normalize_toc_url(url: str) -> str:
 def crawl_toc_chapters(
     toc_url: str,
     toc_link_selector: str,
-    browser_instance: Optional[PlaywrightStealthBrowser] = None
+    browser_instance: Optional[PlaywrightStealthBrowser] = None,
+    cdp_url: Optional[str] = None
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
-    سحب صفحة الفهرس واستخراج كافة روابط الفصول مع التعرف الذكي على الفصول الرقمية:
-    يدعم المواقع التي تستخدم أرقاماً فقط بدون كلمة 'فصل' أو 'Chapter' وترتيبها تصاعدياً،
-    بالإضافة للدعم المباشر لمنصات SPA الحديثة (مثل botitranslation / mystorywave) عبر واجهات API الصاروخية.
-    ترجع قائمة الفصول وعنوان الرواية.
+    سحب صفحة الفهرس واستخراج كافة روابط الفصول وترتيبها تصاعدياً من الفصل الأول إلى الأخير:
+    ترجع قائمة الفصول وعنوان الرواية. يدعم جسر متصفح المشرف المفتوح (CDP) لتجاوز حماية Cloudflare.
     """
     # 🌟 دعم مباشر لمنصة botitranslation.com عبر واجهة REST API
     if "botitranslation.com" in toc_url or "mystorywave.com" in toc_url:
@@ -492,12 +539,30 @@ def crawl_toc_chapters(
 
     normalized_url = normalize_toc_url(toc_url)
     should_close_browser = False
+    
+    # تحديد المنفذ إن توفر جسر CDP
+    target_cdp = cdp_url
+    if not target_cdp and check_cdp_available("http://localhost:9222"):
+        target_cdp = "http://localhost:9222"
+
     if browser_instance is None:
-        browser_instance = PlaywrightStealthBrowser(headless=True)
+        browser_instance = PlaywrightStealthBrowser(headless=(target_cdp is None), cdp_url=target_cdp)
+        browser_instance.start()
         should_close_browser = True
 
     try:
         html_content, page_title = browser_instance.get_page_html(normalized_url, wait_selector=toc_link_selector)
+        
+        # فحص وجود حماية Cloudflare ومحاولة التحويل التلقائي لجسر CDP إن كان متاحاً
+        if ("Just a moment" in page_title or "challenge-platform" in html_content) and not target_cdp and check_cdp_available("http://localhost:9222"):
+            if should_close_browser:
+                browser_instance.close()
+            target_cdp = "http://localhost:9222"
+            browser_instance = PlaywrightStealthBrowser(headless=False, cdp_url=target_cdp)
+            browser_instance.start()
+            should_close_browser = True
+            html_content, page_title = browser_instance.get_page_html(normalized_url, wait_selector=toc_link_selector)
+
         soup = BeautifulSoup(html_content, "lxml") if "lxml" in html_content else BeautifulSoup(html_content, "html.parser")
 
         links = soup.select(toc_link_selector) if toc_link_selector else []
@@ -582,18 +647,9 @@ def crawl_toc_chapters(
                 if m_word:
                     parsed_num = int(m_word.group(1))
                 else:
-                    # النمط 3: التعرف على الفصول الرقمية البحتة (Pure Numbers)
-                    # العنوان عبارة عن رقم فقط مثل "1" أو "2"
-                    m_pure_digit = re.match(r"^(\d+)$", raw_t)
-                    if m_pure_digit:
-                        parsed_num = int(m_pure_digit.group(1))
-                        clean_title = f"الفصل {parsed_num}"
-                    else:
-                        # العنوان يبدأ برقم يليه فاصلة أو عنوان: "1. البداية" أو "001 البداية"
-                        m_prefix_digit = re.match(r"^(\d+)[\.\s\:\-、](.*)$", raw_t)
-                        if m_prefix_digit:
-                            parsed_num = int(m_prefix_digit.group(1))
-                            clean_title = f"الفصل {parsed_num}: {m_prefix_digit.group(2).strip()}"
+                    m_url = re.search(r"_(\d+)\.html|\b(\d+)\.html|/chapter/(\d+)", item["url"])
+                    if m_url:
+                        parsed_num = int(m_url.group(1) or m_url.group(2) or m_url.group(3))
 
             # النمط 4: فحص نهاية الرابط لاستخراج رقم تسلسلي معقول (< 20000)
             if parsed_num is None:
@@ -616,15 +672,9 @@ def crawl_toc_chapters(
                 "title": clean_title
             })
 
-        # إزالة التكرارات الناتجة عن مربعات 'أحدث الفصول' وفرز الفصول تصاعدياً من الفصل 1
-        if structured_chapters:
-            seen_nums = {}
-            for ch in structured_chapters:
-                num = ch["chapter_number"]
-                if num not in seen_nums:
-                    seen_nums[num] = ch
-
-            structured_chapters = [seen_nums[k] for k in sorted(seen_nums.keys())]
+        # ترتيب الفصول تصاعدياً بشكل دقيق حسب رقم الفصل
+        if len(structured_chapters) > 1:
+            structured_chapters.sort(key=lambda x: x["chapter_number"])
 
         return structured_chapters, novel_title
     finally:
@@ -634,23 +684,41 @@ def crawl_toc_chapters(
 
 def fetch_samples_for_gemini_analysis(
     toc_url: str,
-    browser_instance: Optional[PlaywrightStealthBrowser] = None
+    browser_instance: Optional[PlaywrightStealthBrowser] = None,
+    cdp_url: Optional[str] = None
 ) -> Tuple[str, str, str]:
     """
     جلب عينة HTML لصفحة الفهرس وعينة HTML لأول فصل لاكتشاف الـ Selectors عبر Gemini:
     يدعم المواقع ذات الروابط الرقمية كـ novel543.com.
     ترجع (toc_html, sample_chapter_html, novel_title).
+    تدعم جسر متصفح المشرف المفتوح (CDP) لتجاوز حماية Cloudflare.
     """
+    normalized_url = normalize_toc_url(toc_url)
     should_close_browser = False
+
+    target_cdp = cdp_url
+    if not target_cdp and check_cdp_available("http://localhost:9222"):
+        target_cdp = "http://localhost:9222"
+
     if browser_instance is None:
-        browser_instance = PlaywrightStealthBrowser(headless=True)
+        browser_instance = PlaywrightStealthBrowser(headless=(target_cdp is None), cdp_url=target_cdp)
         browser_instance.start()
         should_close_browser = True
 
     try:
-        normalized_url = normalize_toc_url(toc_url)
         # 1. جلب صفحة الفهرس
         toc_html, page_title = browser_instance.get_page_html(normalized_url)
+
+        # فحص وجود حماية Cloudflare ومحاولة التحويل التلقائي لجسر CDP إن كان متاحاً
+        if ("Just a moment" in page_title or "challenge-platform" in toc_html) and not target_cdp and check_cdp_available("http://localhost:9222"):
+            if should_close_browser:
+                browser_instance.close()
+            target_cdp = "http://localhost:9222"
+            browser_instance = PlaywrightStealthBrowser(headless=False, cdp_url=target_cdp)
+            browser_instance.start()
+            should_close_browser = True
+            toc_html, page_title = browser_instance.get_page_html(normalized_url)
+
         novel_title = re.split(r"[-–|—]", page_title)[0].strip() or "رواية جديدة"
 
         # محاولة ذكية للعثور على أول رابط فصل داخل صفحة الفهرس
@@ -711,25 +779,88 @@ def fetch_samples_for_gemini_analysis(
 
 
 # ==============================================================================
-# محرك السحب التتابعي للفصول (Batch Scraping Controller)
+# تفريغ وضخ الفصول في شيت الأرشيف (Sheet 1v1V4 Streamer)
+# ==============================================================================
+
+def upload_single_chapter_to_sheet(
+    novel_name: str,
+    chapter_number: int,
+    title: str,
+    content: str,
+    source_url: str = ""
+) -> bool:
+    """
+    ضخ الفصل فورياً ومباشرة إلى جدول شيت الأرشيف الخام (1v1V4 - الورقة1).
+    الأعمدة المعتمدة: [ChapterNum, RawContent, NovelName, CreatedAt, SourceUrl]
+    """
+    if not content or len(content.strip()) < 50:
+        return False
+
+    # توثيق التوقيت بتوقيت بغداد الصارم (UTC+3)
+    tz_baghdad = timezone(timedelta(hours=3))
+    created_at = datetime.now(tz_baghdad).strftime("%Y-%m-%d %H:%M:%S")
+
+    payload = {
+        "action": "pushToRawArchive",
+        "spreadsheetId": RAW_ARCHIVE_SPREADSHEET_ID,
+        "sheetName": "الورقة1",
+        "novel_name": novel_name,
+        "novelName": novel_name,
+        "chapter_number": chapter_number,
+        "chapterNumber": chapter_number,
+        "title": title,
+        "content": content,
+        "rawText": content,
+        "source_url": source_url,
+        "sourceUrl": source_url,
+        "createdAt": created_at,
+        "row": [chapter_number, content, novel_name, created_at, source_url]
+    }
+
+    # المحاولة عبر مجمع وسائط Google Apps Script مع تجاوز الأخطاء تلقائياً
+    endpoints = list(DEFAULT_GAS_POOL) if DEFAULT_GAS_POOL else [DEFAULT_GAS_URL]
+    for url in endpoints:
+        try:
+            res = requests.post(url, json=payload, timeout=25)
+            if res.status_code == 200:
+                try:
+                    data = res.json()
+                    if data.get("status") == "success" or data.get("success") is True or data.get("chapter"):
+                        return True
+                except Exception:
+                    if "success" in res.text.lower() or "ok" in res.text.lower():
+                        return True
+        except Exception:
+            continue
+
+    return False
+
+
+# ==============================================================================
+# محرك السحب التتابعي والهجين للفصول (NSW Hybrid Scraper Engine)
 # ==============================================================================
 
 class NovelScrapingSession:
     """
-    متحكم جلسة السحب:
-    يدير حلقة سحب الفصول مع التحديث اللحظي للواجهة، دعم الإيقاف المؤقت، وتخطي الفصول المحفوظة.
+    متحكم جلسة السحب الهجين (NSW Hybrid Scraper Engine):
+    - يدير السحب المتوازي (3 خيوط متزامنة).
+    - يدعم الاتصال المباشر بمتصفح المشرف المفتوح عبر بروتوكول CDP (منفذ 9222) لتخطي Cloudflare / Turnstile.
+    - يدعم دورة الاستدراك التلقائية (Retry Pass) حتى 3 دورات للفصول المتعثرة.
+    - يضخ الفصول فورياً في شيت الأرشيف الخام (1v1V4) مع ترتيب تسلسلي رياضي صارم.
+    - يفرغ الذاكرة فور نجاح الضخ لحماية موارد السيرفر والحاسوب.
     """
 
     def __init__(
         self,
         novel_id: Optional[int] = None,
-        novel_name: str = "رواية عامة",
+        novel_name: Optional[str] = None,
         domain_config: Optional[Dict[str, Any]] = None,
         min_delay: float = 1.0,
-        max_delay: float = 2.0,
+        max_delay: float = 2.5,
         headless: bool = True,
-        thread_count: int = 3,
+        cdp_url: Optional[str] = None,
         auto_stream_to_sheet: bool = True,
+        workers_count: int = 3,
         log_callback: Optional[Callable[[str], None]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None
     ):
@@ -739,7 +870,16 @@ class NovelScrapingSession:
         self.min_delay = min_delay
         self.max_delay = max_delay
         self.headless = headless
-        self.thread_count = thread_count
+        self.cdp_url = cdp_url
+        if not self.cdp_url and check_cdp_available("http://localhost:9222"):
+            self.cdp_url = "http://localhost:9222"
+
+        if self.cdp_url:
+            self.headless = False
+            self.workers_count = min(workers_count, 2)
+        else:
+            self.workers_count = workers_count
+
         self.auto_stream_to_sheet = auto_stream_to_sheet
         self.log_callback = log_callback or (lambda msg: None)
         self.progress_callback = progress_callback or (lambda current, total, status: None)
@@ -749,9 +889,27 @@ class NovelScrapingSession:
         self.processed_count = 0
         self._lock = threading.Lock()
 
+        # مزامنة اسم ومعرف الرواية وإعدادات الدومين تلقائياً
+        if self.novel_id and not self.novel_name:
+            db_nov = get_novel_by_id(self.novel_id)
+            if db_nov:
+                self.novel_name = db_nov.get("title", "")
+                if not self.domain_config:
+                    self.domain_config = get_domain_config(db_nov.get("domain", "")) or {}
+        elif self.novel_name and not self.novel_id:
+            db_nov = get_novel_by_title(self.novel_name)
+            if db_nov:
+                self.novel_id = db_nov["id"]
+                if not self.domain_config:
+                    self.domain_config = get_domain_config(db_nov.get("domain", "")) or {}
+
+        if not self.novel_name:
+            self.novel_name = "رواية عامة"
+
     def log(self, message: str):
-        """تسجيل رسالة في كونسول السجلات."""
-        now = time.strftime("%H:%M:%S")
+        """تسجيل رسالة في كونسول السجلات بتوقيت بغداد."""
+        tz_baghdad = timezone(timedelta(hours=3))
+        now = datetime.now(tz_baghdad).strftime("%H:%M:%S")
         formatted = f"[{now}] {message}"
         self.log_callback(formatted)
 
@@ -765,6 +923,13 @@ class NovelScrapingSession:
         self.is_paused = False
         self.log("▶️ تم استئناف السحب...")
 
+    def toggle_pause(self):
+        """التبديل بين الإيقاف المؤقت والاستئناف."""
+        if self.is_paused:
+            self.resume()
+        else:
+            self.pause()
+
     def stop(self):
         """إلغاء وإيقاف السحب بالكامل."""
         self.is_stopped = True
@@ -772,189 +937,173 @@ class NovelScrapingSession:
 
     def run_range(self, from_chapter: int = 1, to_chapter: int = 1, chapter_numbers: Optional[List[int]] = None):
         """
-        تنفيذ عملية السحب عبر 3 خطوط متوازية (3 Parallel Workers)
-        مع التدفق المباشر فصلاً بفصل إلى Google Sheet وتطهير ذاكرة السيرفر فوراً.
+        تنفيذ عملية سحب الفصول في النطاق المحدد عبر مسار متوازي (3 Workers)،
+        مع دورة استدراك تلقائية للفصول المتعثرة وضخ فوري في شيت 1v1V4 بالترتيب الرياضي الصارم.
         """
-        import queue
-        from database import clear_single_chapter_content
+        if not self.novel_id:
+            self.log("❌ خطأ: لم يتم العثور على معرف الرواية (novel_id).")
+            return
 
-        if chapter_numbers and len(chapter_numbers) > 0:
-            chapters_to_scrape = get_chapters(self.novel_id, chapter_numbers=chapter_numbers)
-        else:
-            chapters_to_scrape = get_chapters(self.novel_id, from_chapter=from_chapter, to_chapter=to_chapter)
-
+        chapters_to_scrape = get_chapters(self.novel_id, from_chapter=from_chapter, to_chapter=to_chapter)
         total_in_range = len(chapters_to_scrape)
 
         if total_in_range == 0:
             self.log("⚠️ لم يتم العثور على أي فصول في هذا النطاق أو الأرقام المحددة.")
             return
 
-        workers_count = max(1, min(self.thread_count, 3))
-        self.log(f"🚀 [انطلاق 3 خطوط متوازية]: بدء سحب {total_in_range} فصلاً عبر {workers_count} عمال متوازيين مع التدفق الفوري للشيت...")
-
-        # إشعار ديسكورد الفوري ببدء المهمة
-        send_discord_scraper_alert(
-            f"🚀 **[انطلاق سحب الرواية]:**\n"
-            f"📖 **الرواية:** `{self.novel_name}`\n"
-            f"🔢 **إجمالي الفصول المستهدفة:** `{total_in_range}` فصلاً\n"
-            f"⚡ **وضع التشغيل:** 3 خطوط متوازية في الخلفية مع البث اللحظي في Google Sheet."
-        )
+        mode_desc = "جسر التصفح المفتوح (CDP Port 9222)" if self.cdp_url else f"السحب السحابي التلقائي ({self.workers_count} خيوط متوازية)"
+        self.log(f"🚀 بدء سحب {total_in_range} فصلاً (من {from_chapter} إلى {to_chapter}) عبر {mode_desc}...")
 
         title_sel = self.domain_config.get("chapter_title_selector", "")
         content_sel = self.domain_config.get("chapter_content_selector", "")
         purge_sels = self.domain_config.get("purge_selectors", [])
 
+        # قفل ومخزن الترتيب الرياضي الصارم للضخ في شيت 1v1V4
+        stream_lock = threading.Lock()
+        buffered_ready: Dict[int, Dict[str, Any]] = {}
+        processed_count = 0
+        next_to_stream = from_chapter
+
+        def _flush_sequenced_buffer():
+            nonlocal next_to_stream
+            with stream_lock:
+                while next_to_stream in buffered_ready:
+                    item = buffered_ready.pop(next_to_stream)
+                    ch_num = item["chapter_number"]
+                    clean_content = item.get("content", "")
+                    ch_title = item.get("title", f"الفصل {ch_num}")
+                    ch_url = item.get("url", "")
+
+                    if self.auto_stream_to_sheet and clean_content and len(clean_content) >= 50:
+                        stream_ok = upload_single_chapter_to_sheet(
+                            novel_name=self.novel_name,
+                            chapter_number=ch_num,
+                            title=ch_title,
+                            content=clean_content,
+                            source_url=ch_url
+                        )
+                        if stream_ok:
+                            self.log(f"☁️ [ضخ سحابي]: تم ضخ الفصل {ch_num} بنجاح لشيت الأرشيف (1v1V4).")
+                        else:
+                            self.log(f"⚠️ تعذر ضخ الفصل {ch_num} لشيت الأرشيف.")
+
+                    # تفريغ الذاكرة فور نجاح الضخ لحماية موارد السيرفر
+                    del item
+                    next_to_stream += 1
+
+        def _worker_thread(worker_id: int):
+            nonlocal processed_count
+            if sys.platform == "win32":
+                try:
+                    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+                except Exception:
+                    pass
+
+            try:
+                with PlaywrightStealthBrowser(headless=self.headless, cdp_url=self.cdp_url) as browser:
+                    while not task_queue.empty() and not self.is_stopped:
+                        while self.is_paused and not self.is_stopped:
+                            time.sleep(0.5)
+
+                        try:
+                            ch = task_queue.get_nowait()
+                        except queue.Empty:
+                            break
+
+                        ch_num = ch["chapter_number"]
+                        ch_url = ch["url"]
+                        cached_status = ch.get("status")
+
+                        # تخطي إذا كان محملاً مسبقاً ولديه محتوى كافٍ
+                        if cached_status == "downloaded" and ch.get("content") and len(ch["content"]) >= 50:
+                            self.log(f"⚡ الفصل {ch_num} مخزن مسبقاً في قاعدة البيانات - تم التخطي.")
+                            with stream_lock:
+                                processed_count += 1
+                                buffered_ready[ch_num] = {
+                                    "chapter_number": ch_num,
+                                    "title": ch.get("title") or f"الفصل {ch_num}",
+                                    "content": ch["content"],
+                                    "url": ch_url
+                                }
+                            self.progress_callback(processed_count, total_in_range, f"تم التخطي (مخزن): فصل {ch_num}")
+                            _flush_sequenced_buffer()
+                            task_queue.task_done()
+                            continue
+
+                        self.log(f"📥 [خيط {worker_id}]: جاري سحب الفصل {ch_num} من: {ch_url}")
+                        self.progress_callback(processed_count, total_in_range, f"جاري سحب فصل {ch_num}...")
+
+                        try:
+                            raw_html, _ = browser.get_page_html(ch_url, wait_selector=content_sel)
+
+                            # رصد حظر Cloudflare
+                            if any(k in raw_html for k in ["Just a moment...", "Attention Required", "Cloudflare to restrict access", "cf-browser-verification"]):
+                                raise RuntimeError("حظر حماية Cloudflare (تحدي كابتشا أو 403)")
+
+                            ch_title = extract_chapter_title(raw_html, title_sel, fallback_number=ch_num)
+                            clean_content = clean_chapter_content(raw_html, content_sel, purge_sels)
+
+                            if not clean_content or len(clean_content) < 50:
+                                raise ValueError("لم يتم استخراج محتوى كافٍ من الصفحة (> 50 حرفاً).")
+
+                            # حفظ الفصل في SQLite
+                            save_chapter_content(
+                                novel_id=self.novel_id,
+                                chapter_number=ch_num,
+                                title=ch_title,
+                                content=clean_content,
+                                status="downloaded"
+                            )
+
+                            words_count = len(clean_content.split())
+                            self.log(f"✅ [خيط {worker_id}]: تم حفظ الفصل {ch_num}: '{ch_title}' بنجاح ({words_count} كلمة).")
+
+                            with stream_lock:
+                                processed_count += 1
+                                buffered_ready[ch_num] = {
+                                    "chapter_number": ch_num,
+                                    "title": ch_title,
+                                    "content": clean_content,
+                                    "url": ch_url
+                                }
+
+                            # تفريغ الـ HTML المحلي فورياً لتوفير الذاكرة
+                            del raw_html
+                            _flush_sequenced_buffer()
+
+                        except Exception as ex:
+                            err_msg = str(ex)
+                            self.log(f"❌ [خيط {worker_id}]: تعثر سحب الفصل {ch_num}: {err_msg}")
+                            save_chapter_content(
+                                novel_id=self.novel_id,
+                                chapter_number=ch_num,
+                                title=ch.get("title") or f"الفصل {ch_num}",
+                                content="",
+                                status="failed",
+                                error_message=err_msg
+                            )
+                            with stream_lock:
+                                processed_count += 1
+
+                        finally:
+                            task_queue.task_done()
+
+                        # تأخير بشري خفيف بين الفصول
+                        if not self.is_stopped:
+                            delay = random.uniform(self.min_delay, self.max_delay)
+                            time.sleep(delay)
+
+            except Exception as b_err:
+                self.log(f"❌ خطأ مشغل المتصفح [خيط {worker_id}]: {b_err}")
+
+        # الدورة الأساسية: تعبئة الطابور وتشغيل الخيوط
         task_queue = queue.Queue()
         for ch in chapters_to_scrape:
             task_queue.put(ch)
 
-        # مخزن الترتيب التسلسلي الصارم لضمان عدم ضخ أي فصل قبل سابقه في Google Sheet
-        ordered_buffer = {}
-        buffer_lock = threading.Lock()
-        sorted_target_nums = sorted([ch["chapter_number"] for ch in chapters_to_scrape])
-        expected_idx = 0
-
-        def _worker_thread(worker_id: int):
-            nonlocal expected_idx
-            with PlaywrightStealthBrowser(headless=self.headless) as browser:
-                while not task_queue.empty() and not self.is_stopped:
-                    while self.is_paused and not self.is_stopped:
-                        time.sleep(0.5)
-                    if self.is_stopped:
-                        break
-
-                    try:
-                        ch = task_queue.get_nowait()
-                    except queue.Empty:
-                        break
-
-                    ch_num = ch["chapter_number"]
-                    ch_url = ch["url"]
-
-                    # فحص إذا كان الفصل مسحوباً مسبقاً ولديه محتوى مكتمل لتفادي تكرار السحب
-                    if ch.get("status") == "downloaded" and ch.get("content") and len(str(ch.get("content")).strip()) > 50:
-                        self.log(f"⏩ [خيط {worker_id}] ➔ الفصل {ch_num} مسحوب ومكتمل مسبقاً، تم تخطيه بنجاح.")
-                        with self._lock:
-                            self.processed_count += 1
-                            if self.progress_callback:
-                                self.progress_callback(self.processed_count, total_in_range, f"تم تخطي الفصل {ch_num} (موجود مسبقاً)")
-                        
-                        # تفريغ الطابور التسلسلي للفصل المتخطى إذا لزم الأمر
-                        with buffer_lock:
-                            if expected_idx < len(sorted_target_nums) and sorted_target_nums[expected_idx] == ch_num:
-                                expected_idx += 1
-                        continue
-
-                    self.log(f"👷 [خيط {worker_id}] ➔ سحب الفصل {ch_num}...")
-
-                    # آلية إعادة المحاولة ثلاثية المراحل (3-Attempt Retry with Exponential Backoff)
-                    max_retries = 3
-                    ch_title = ""
-                    clean_content = ""
-                    fetch_success = False
-
-                    for attempt in range(1, max_retries + 1):
-                        try:
-                            if "api.mystorywave.com" in ch_url:
-                                headers = {
-                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                                    "Referer": "https://www.botitranslation.com/",
-                                    "Origin": "https://www.botitranslation.com",
-                                    "site-domain": "www.botitranslation.com",
-                                    "lang": "en",
-                                    "Accept": "application/json, text/plain, */*"
-                                }
-                                r_json = requests.get(ch_url, headers=headers, timeout=15).json()
-                                c_dict = r_json.get("data", {})
-                                ch_title = c_dict.get("title") or f"الفصل {ch_num}"
-                                raw_html = c_dict.get("content", "")
-                                clean_content = clean_chapter_content(raw_html, "", purge_sels)
-                            else:
-                                raw_html, _ = browser.get_page_html(ch_url, wait_selector=content_sel)
-                                ch_title = extract_chapter_title(raw_html, title_sel, fallback_number=ch_num)
-                                clean_content = clean_chapter_content(raw_html, content_sel, purge_sels)
-
-                            if not clean_content or len(clean_content) < 50:
-                                raise ValueError("المحتوى المستخرج صغير جداً أو محجوب.")
-
-                            fetch_success = True
-                            break
-                        except Exception as ex_attempt:
-                            if attempt < max_retries:
-                                wait_time = attempt * 1.5
-                                self.log(f"⚠️ [خيط {worker_id}] تعثر فصل {ch_num} (محاولة {attempt}/{max_retries}): {str(ex_attempt)[:50]}. إعادة المحاولة بعد {wait_time}ث...")
-                                time.sleep(wait_time)
-                            else:
-                                err_msg = str(ex_attempt)
-                                self.log(f"❌ [خيط {worker_id}] فشل نهائي في سحب فصل {ch_num} بعد 3 محاولات: {err_msg[:60]}")
-                                save_chapter_content(
-                                    novel_id=self.novel_id,
-                                    chapter_number=ch_num,
-                                    title=ch.get("title"),
-                                    content=None,
-                                    status="failed",
-                                    error_message=err_msg
-                                )
-                                # تجاوز الفصل المتعثر في حاجز الترتيب لعدم تعطيل باقي الفصول
-                                with buffer_lock:
-                                    if expected_idx < len(sorted_target_nums) and sorted_target_nums[expected_idx] == ch_num:
-                                        expected_idx += 1
-                                        while expected_idx < len(sorted_target_nums) and sorted_target_nums[expected_idx] in ordered_buffer:
-                                            nxt_num = sorted_target_nums[expected_idx]
-                                            nxt_t, nxt_c, nxt_u = ordered_buffer.pop(nxt_num)
-                                            if self.auto_stream_to_sheet:
-                                                upload_single_chapter_to_sheet(self.novel_name, nxt_num, nxt_t, nxt_c, source_url=nxt_u)
-                                            expected_idx += 1
-
-                    if fetch_success:
-                        # 1. حفظ المحتوى بالكامل في SQLite (مخزن محلي فوري دائم للترجمة فائقة السرعة)
-                        save_chapter_content(
-                            novel_id=self.novel_id,
-                            chapter_number=ch_num,
-                            title=ch_title,
-                            content=clean_content,
-                            status="downloaded"
-                        )
-
-                        # 2. التدفق المنظم إلى Google Sheet عبر حاجز الترتيب التسلسلي الصارم
-                        if self.auto_stream_to_sheet:
-                            with buffer_lock:
-                                ordered_buffer[ch_num] = (ch_title, clean_content, ch_url)
-                                while expected_idx < len(sorted_target_nums) and sorted_target_nums[expected_idx] in ordered_buffer:
-                                    nxt_num = sorted_target_nums[expected_idx]
-                                    nxt_t, nxt_c, nxt_u = ordered_buffer.pop(nxt_num)
-                                    stream_ok = upload_single_chapter_to_sheet(
-                                        novel_name=self.novel_name,
-                                        chapter_number=nxt_num,
-                                        title=nxt_t,
-                                        content=nxt_c,
-                                        source_url=nxt_u
-                                    )
-                                    if stream_ok:
-                                        self.log(f"⚡ [تسلسلي] ✅ تم ضخ الفصل {nxt_num} بالترتيب الصارم في Google Sheet!")
-                                    else:
-                                        self.log(f"ℹ️ [تسلسلي] تم حفظ الفصل {nxt_num} محلياً بنجاح.")
-                                    expected_idx += 1
-
-                        with self._lock:
-                            self.processed_count += 1
-                            cnt = self.processed_count
-                        self.progress_callback(cnt, total_in_range, f"اكتمل فصل {ch_num} ({cnt}/{total_in_range})")
-
-                        # إشعار مرحلي كل 10 فصول في ديسكورد
-                        if cnt % 10 == 0:
-                            send_discord_scraper_alert(
-                                f"⚡ **[تقدم سحب الرواية]:**\n"
-                                f"📖 **الرواية:** `{self.novel_name}`\n"
-                                f"📊 **المُنجز:** `{cnt} / {total_in_range}` فصلاً تم بثها في Google Sheet بتسلسل منظم."
-                            )
-
-                    task_queue.task_done()
-                    delay = random.uniform(self.min_delay, self.max_delay)
-                    time.sleep(delay)
-
         threads = []
-        for w_id in range(1, workers_count + 1):
+        actual_workers = min(self.workers_count, total_in_range) if total_in_range > 0 else 1
+        for w_id in range(1, actual_workers + 1):
             th = threading.Thread(target=_worker_thread, args=(w_id,), daemon=True)
             threads.append(th)
             th.start()
@@ -962,7 +1111,12 @@ class NovelScrapingSession:
         for th in threads:
             th.join()
 
-        # دورة إعادة المحاولة التلقائية للفصول المتعثرة (Automatic Retry Pass)
+        # تفريغ ما تبقى في المخزن التسلسلي
+        _flush_sequenced_buffer()
+
+        # =====================================================================
+        # دورة الاستدراك التلقائية (Retry Pass) - حتى 3 دورات للفصول المتعثرة
+        # =====================================================================
         if not self.is_stopped:
             failed_chapters = [c for c in get_chapters(self.novel_id, from_chapter=from_chapter, to_chapter=to_chapter) if c.get("status") == "failed"]
             retry_pass = 0
@@ -974,49 +1128,54 @@ class NovelScrapingSession:
                 for f_ch in failed_chapters:
                     retry_queue.put(f_ch)
                 task_queue = retry_queue
+
                 threads = []
-                for w_id in range(1, workers_count + 1):
+                retry_workers = min(self.workers_count, len(failed_chapters))
+                for w_id in range(1, retry_workers + 1):
                     th = threading.Thread(target=_worker_thread, args=(w_id,), daemon=True)
                     threads.append(th)
                     th.start()
                 for th in threads:
                     th.join()
+
+                _flush_sequenced_buffer()
                 failed_chapters = [c for c in get_chapters(self.novel_id, from_chapter=from_chapter, to_chapter=to_chapter) if c.get("status") == "failed"]
 
-        self.log(f"🎉 اكتملت معالجة كافة الفصول عبر الخطوط المتوازية بنجاح!")
+        # =====================================================================
+        # رصد التعثر المستمر وتنبيه صمام الأمان على تيليجرام (CDP Alert)
+        # =====================================================================
+        if not self.is_stopped:
+            failed_chapters = [c for c in get_chapters(self.novel_id, from_chapter=from_chapter, to_chapter=to_chapter) if c.get("status") == "failed"]
+            if failed_chapters and not self.cdp_url:
+                sample_url = failed_chapters[0].get("url", "")
+                self.log(f"🚨 تعذر السحب السحابي التلقائي لـ {len(failed_chapters)} فصول بسبب حماية الموقع. جاري تنبيه المشرف عبر تيليجرام لتفعيل جسر CDP...")
+                try:
+                    import telegram_bot
+                    telegram_bot.notify_scraping_blocked(
+                        novel_name=self.novel_name,
+                        failed_count=len(failed_chapters),
+                        source_url=sample_url
+                    )
+                except Exception as alert_err:
+                    self.log(f"⚠️ تعذر إرسال تنبيه تيليجرام: {alert_err}")
 
-        # إشعار ديسكورد النهائي باكتمال العملية
-        send_discord_scraper_alert(
-            f"🎉 **[اكتمل سحب وتفريغ الرواية بالكامل]:**\n"
-            f"📖 **الرواية:** `{self.novel_name}`\n"
-            f"✅ **الفصول المنجزة بنجاح:** `{self.processed_count} / {total_in_range}` فصلاً\n"
-            f"🌐 تم تفريغ كافة الفصول في Google Sheet وتطهير ذاكرة السيرفر بنجاح!"
-        )
+        # تفريغ أخير لأي فصول متأخرة في المخزن بالترتيب
+        with stream_lock:
+            for rem_num in sorted(buffered_ready.keys()):
+                item = buffered_ready[rem_num]
+                clean_content = item.get("content", "")
+                if self.auto_stream_to_sheet and clean_content and len(clean_content) >= 50:
+                    upload_single_chapter_to_sheet(
+                        novel_name=self.novel_name,
+                        chapter_number=rem_num,
+                        title=item.get("title", f"الفصل {rem_num}"),
+                        content=clean_content,
+                        source_url=item.get("url", "")
+                    )
+            buffered_ready.clear()
 
-def parse_custom_chapter_numbers(raw_input: str) -> List[int]:
-    """تحليل سلسلة أرقام الفصول المفردة والمخصصة مثل '5, 9, 10, 78' أو '1, 3-6, 12'."""
-    nums = set()
-    if not raw_input:
-        return []
-    raw = str(raw_input).replace("،", ",").replace(" ", "")
-    parts = raw.split(",")
-    for p in parts:
-        p = p.strip()
-        if not p:
-            continue
-        if "-" in p:
-            try:
-                start, end = p.split("-", 1)
-                for i in range(int(start), int(end) + 1):
-                    nums.add(i)
-            except Exception:
-                pass
-        else:
-            try:
-                nums.add(int(p))
-            except Exception:
-                pass
-    return sorted(list(nums))
+        stats = get_novel_stats(self.novel_id)
+        self.log(f"🎉 اكتملت معالجة النطاق المطلوب! الفصول المنزلة: {stats.get('downloaded', 0)} | المتعثرة: {stats.get('failed', 0)}.")
 
 
 # سجل مركزي للمهام الخلفية لتمكين استمرار السحب حتى عند مغادرة المستخدم للصفحة
@@ -1025,19 +1184,19 @@ ACTIVE_BACKGROUND_TASKS: Dict[int, NovelScrapingSession] = {}
 
 def start_background_scraping(
     novel_id: int,
-    from_chapter: int = 1,
-    to_chapter: int = 1,
-    domain_config: Dict[str, Any] = None,
-    novel_name: str = "رواية عامة",
-    thread_count: int = 3,
-    auto_stream_to_sheet: bool = True,
-    min_delay: float = 1.0,
-    max_delay: float = 2.0,
+    from_chapter: int,
+    to_chapter: int,
+    domain_config: Dict[str, Any],
+    min_delay: float = 0.5,
+    max_delay: float = 1.0,
     headless: bool = True,
-    chapter_numbers: Optional[List[int]] = None
+    cdp_url: Optional[str] = None,
+    auto_stream_to_sheet: bool = True,
+    workers_count: int = 3
 ) -> NovelScrapingSession:
     """
-    تشغيل سحب الفصول عبر 3 خطوط متوازية في الخلفية مع التدفق اللحظي فصلاً بفصل إلى Google Sheet.
+    تشغيل سحب الفصول في خيط مستقل بالخلفية (Background Daemon Thread).
+    يستمر هذا الخيط في العمل وتخزين الفصول في SQLite وضخها في شيت 1v1V4 حتى لو أغلقت صفحة الويب تماماً.
     """
     session = NovelScrapingSession(
         novel_id=novel_id,
@@ -1046,8 +1205,9 @@ def start_background_scraping(
         min_delay=min_delay,
         max_delay=max_delay,
         headless=headless,
-        thread_count=thread_count,
-        auto_stream_to_sheet=auto_stream_to_sheet
+        cdp_url=cdp_url,
+        auto_stream_to_sheet=auto_stream_to_sheet,
+        workers_count=workers_count
     )
 
     ACTIVE_BACKGROUND_TASKS[novel_id] = session
@@ -1066,4 +1226,5 @@ def start_background_scraping(
     th = threading.Thread(target=_worker, daemon=True)
     th.start()
     return session
+
 

@@ -82,21 +82,38 @@ def init_db(db_path: str = DB_FILE_PATH):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_chapters_novel_num ON chapters(novel_id, chapter_number);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_novels_toc_url ON novels(toc_url);")
 
-        # إدراج محددات الدومينات المعتمدة افتراضياً لضمان استمراريتها
-        default_domains = [
-            ("69shuba.com", ".catalog ul li a", "h1.hide720", ".txtnav", '["script", "style", ".ad", ".bottom-link"]', "دومين معتمد افتراضياً 69shuba"),
-            ("novel543.com", ".chaplist a", "h1", ".content", '["script", "style", ".ad", ".ads", "button"]', "دومين معتمد افتراضياً novel543")
+        # إدراج إعدادات مسبقة ومعتمدة لأشهر النطاقات (Preset Domains)
+        presets = [
+            (
+                "botitranslation.com",
+                "a[href*='/chapter/']",
+                ".chapter-title, .title, title",
+                ".chapter-content",
+                json.dumps(["script", "style", "noscript", "button", ".ad", ".ads", "nav", "header", "footer", ".comments"], ensure_ascii=False),
+                "موقع بوتي للترجمة (Cloudflare / SPA) - متوافق مع جسر CDP"
+            ),
+            (
+                "69shuba.com",
+                "div.catalog ul li a, .mybox ul li a, div.txtnav ul li a",
+                "h1.hide720, h1",
+                "div.txtnav, div.content",
+                json.dumps(["script", "style", "noscript", ".ad", "div.bottom-ad"], ensure_ascii=False),
+                "موقع 69شوبا الصيني الشهير"
+            ),
+            (
+                "69shu.me",
+                "div.catalog ul li a, .mybox ul li a, div.txtnav ul li a",
+                "h1.hide720, h1",
+                "div.txtnav, div.content",
+                json.dumps(["script", "style", "noscript", ".ad", "div.bottom-ad"], ensure_ascii=False),
+                "مرآة بديلة لموقع 69شوبا"
+            )
         ]
-        for d_name, d_toc, d_title, d_content, d_purge, d_notes in default_domains:
+        for p_dom, p_toc, p_title, p_cont, p_purge, p_notes in presets:
             cursor.execute("""
-                INSERT INTO domains_config (domain, toc_link_selector, chapter_title_selector, chapter_content_selector, purge_selectors, notes)
+                INSERT OR IGNORE INTO domains_config (domain, toc_link_selector, chapter_title_selector, chapter_content_selector, purge_selectors, notes)
                 VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(domain) DO UPDATE SET
-                    toc_link_selector = excluded.toc_link_selector,
-                    chapter_title_selector = excluded.chapter_title_selector,
-                    chapter_content_selector = excluded.chapter_content_selector,
-                    purge_selectors = excluded.purge_selectors;
-            """, (d_name, d_toc, d_title, d_content, d_purge, d_notes))
+            """, (p_dom, p_toc, p_title, p_cont, p_purge, p_notes))
 
         conn.commit()
 
@@ -215,14 +232,35 @@ def get_or_create_novel(
         return dict(cursor.fetchone())
 
 
-def update_novel_title(novel_id: int, new_title: str, db_path: str = DB_FILE_PATH) -> bool:
-    """تحديث وتثبيت اسم الرواية المعتمد في قاعدة البيانات."""
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def get_novel_by_id(novel_id: int, db_path: str = DB_FILE_PATH) -> Optional[Dict[str, Any]]:
+    """جلب بيانات الرواية بواسطة المعرف ID."""
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE novels SET title = ?, updated_at = ? WHERE id = ?", (new_title.strip(), now, novel_id))
-        conn.commit()
-    return True
+        cursor.execute("SELECT * FROM novels WHERE id = ?", (novel_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_novel_by_title(title: str, db_path: str = DB_FILE_PATH) -> Optional[Dict[str, Any]]:
+    """جلب بيانات الرواية بالبحث في العنوان (مطابقة دقيقة أو تقريبية)."""
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        # محاولة مطابقة دقيقة أولاً
+        cursor.execute("SELECT * FROM novels WHERE LOWER(TRIM(title)) = LOWER(TRIM(?)) ORDER BY id DESC LIMIT 1;", (title,))
+        row = cursor.fetchone()
+        if not row:
+            # مطابقة جزئية
+            cursor.execute("SELECT * FROM novels WHERE LOWER(title) LIKE LOWER(?) ORDER BY id DESC LIMIT 1;", (f"%{title.strip()}%",))
+            row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_all_novels(db_path: str = DB_FILE_PATH) -> List[Dict[str, Any]]:
+    """جلب كافة الروايات المسجلة في النظام."""
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM novels ORDER BY updated_at DESC;")
+        return [dict(r) for r in cursor.fetchall()]
 
 
 def sync_chapter_manifest(

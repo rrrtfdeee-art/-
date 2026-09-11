@@ -54,7 +54,7 @@ from scraper_engine import (
     clean_chapter_content,
     start_background_scraping,
     ACTIVE_BACKGROUND_TASKS,
-    parse_custom_chapter_numbers
+    check_cdp_available
 )
 from media_engine import (
     get_video_info,
@@ -490,6 +490,14 @@ with st.sidebar:
 st.markdown('<div class="scraper-header">📚 Smart Novel Scraper AI</div>', unsafe_allow_html=True)
 st.caption("نظام هجين ذكي لسحب فصول الروايات تلقائياً مع محرك استكشاف فوري وتحليل احتياطي بالذكاء الاصطناعي.")
 
+is_cdp_connected = check_cdp_available("http://localhost:9222")
+cdp_param = "http://localhost:9222" if is_cdp_connected else None
+
+if is_cdp_connected:
+    st.markdown('<div style="background-color:#064e3b; border:1px solid #059669; border-radius:10px; padding:9px 16px; margin-bottom:16px; color:#6ee7b7; font-size:0.92rem; font-weight:bold;">🟢 <b>جسر متصفح المشرف (CDP Port 9222) متصل:</b> صمام تجاوز Cloudflare والتحميل الديناميكي نشط ويعمل تلقائياً.</div>', unsafe_allow_html=True)
+else:
+    st.markdown('<div style="background-color:#1e293b; border:1px solid #334155; border-radius:10px; padding:9px 16px; margin-bottom:16px; color:#94a3b8; font-size:0.90rem;">☁️ <b>النمط السحابي:</b> للمواقع المحمية بـ Cloudflare (مثل botitranslation)، شغّل ملف <code>تشغيل_المتصفح_المفتوح.bat</code> واستخدم التطبيق محلياً.</div>', unsafe_allow_html=True)
+
 # ------------------------------------------------------------------------------
 # القسم 1: فحص الرواية وجلب الفهرس (نظام هجين من خطوتين)
 # ------------------------------------------------------------------------------
@@ -541,7 +549,7 @@ if fast_load_clicked and toc_url_input:
             
             if not current_config:
                 add_log(f"🔍 دومين جديد [{domain_name}].. جاري الفحص والاستكشاف الهجين السريع...")
-                toc_html, ch_html, detected_title = fetch_samples_for_gemini_analysis(toc_url_input)
+                toc_html, ch_html, detected_title = fetch_samples_for_gemini_analysis(toc_url_input, cdp_url=cdp_param)
                 
                 # تطبيق خوارزمية الاستكشاف الهجين المحلي السريع
                 h_res = auto_detect_selectors_heuristically(toc_html, ch_html)
@@ -558,7 +566,7 @@ if fast_load_clicked and toc_url_input:
 
             toc_sel = current_config["toc_link_selector"]
             add_log(f"جاري سحب قائمة الفصول باستخدام المحدد: {toc_sel}")
-            chapters_list, novel_title = crawl_toc_chapters(toc_url_input, toc_sel)
+            chapters_list, novel_title = crawl_toc_chapters(toc_url_input, toc_sel, cdp_url=cdp_param)
 
             # إذا نجح السحب ووجد الفصول
             if chapters_list and len(chapters_list) > 0:
@@ -591,8 +599,8 @@ if (force_ai_clicked or deep_ai_clicked or st.session_state.show_ai_fallback) an
         model_label = "Gemini 3.6 Flash / Pro (تحليل معماري فائق)" if deep_ai_clicked else ai_model
         with st.spinner(f"جاري استخراج كود DOM وتحليله عبر {model_label} لاستخراج أدق المحددات..."):
             try:
-                add_log(f"🤖 جاري تشغيل تحليل الذكاء الاصطناعي ({target_model}) لموقع {toc_url_input}...")
-                toc_html, ch_html, detected_title = fetch_samples_for_gemini_analysis(toc_url_input)
+                add_log(f"🤖 جاري تشغيل تحليل الذكاء الاصطناعي ({ai_model}) لموقع {toc_url_input}...")
+                toc_html, ch_html, detected_title = fetch_samples_for_gemini_analysis(toc_url_input, cdp_url=cdp_param)
                 
                 # استخدام رابط الوسيط النشط إذا وُجد
                 active_gas = gas_url_input if 'gas_url_input' in locals() and gas_url_input else None
@@ -619,7 +627,7 @@ if (force_ai_clicked or deep_ai_clicked or st.session_state.show_ai_fallback) an
                 
                 # جلب الفصول بالمحددات الجديدة
                 toc_sel = analysis_result["toc_link_selector"]
-                chapters_list, novel_title = crawl_toc_chapters(toc_url_input, toc_sel)
+                chapters_list, novel_title = crawl_toc_chapters(toc_url_input, toc_sel, cdp_url=cdp_param)
                 if chapters_list:
                     final_title = custom_novel_title_input.strip() if (custom_novel_title_input and custom_novel_title_input.strip()) else novel_title
                     novel = get_or_create_novel(toc_url=toc_url_input, title=final_title, domain=domain_name)
@@ -711,74 +719,24 @@ if st.session_state.active_novel:
 
     st.markdown("---")
 
-    # تحديد نطاق الفصول أو الأرقام المفردة المراد سحبها
-    scrape_mode = st.radio(
-        "🎯 نمط تحديد الفصول المراد سحبها:",
-        options=["نطاق متسلسل (من ... إلى)", "فصول مخصصة/مفردة (مثال: 5, 9, 10, 78)"],
-        horizontal=True,
-        key=f"scrape_mode_{novel['id']}"
-    )
+    # 1. فحص الفصول المسجلة مسبقاً في قاعدة البيانات وشيت الأرشيف
+    all_local_chaps = get_chapters(novel["id"])
+    downloaded_nums = {c["chapter_number"] for c in all_local_chaps if c.get("status") == "downloaded"}
+    missing_nums = [c["chapter_number"] for c in all_local_chaps if c["chapter_number"] not in downloaded_nums]
+    
+    suggested_from = missing_nums[0] if missing_nums else 1
+    suggested_to = missing_nums[-1] if missing_nums else max(1, total_ch)
 
-    # حساب أول فصل غير منزل تلقائياً ليكون الخيار الافتراضي
-    first_undownloaded = 1
-    if chapters:
-        for c in chapters:
-            c_num = c.get("chapter_number", 1)
-            c_status = c.get("status", "pending")
-            has_content = bool(c.get("content") and len(str(c.get("content")).strip()) > 50)
-            if c_status != "downloaded" and not has_content:
-                first_undownloaded = c_num
-                break
-        else:
-            first_undownloaded = max(1, total_ch)
+    if downloaded_nums and missing_nums:
+        st.info(f"💡 [استكمال ذكي]: تم العثور على {len(downloaded_nums)} فصلاً منزلاً. الفصول الناقصة المقترحة تلقائياً: من {suggested_from} إلى {suggested_to} ({len(missing_nums)} فصلاً).")
 
-    max_scope = max(1, total_ch)
-    default_from = min(max_scope, max(1, first_undownloaded))
-
-    from_chap = default_from
-    to_chap = max_scope
-    custom_chaps_list = None
-
-    if "مخصصة" in scrape_mode:
-        custom_input_str = st.text_input(
-            "📝 أدخل أرقام الفصول المفردة تفصل بينها فاصلة (مثال: 5, 9, 10, 78 أو 1-5, 12, 89):",
-            placeholder="5, 9, 10, 78",
-            key=f"custom_input_{novel['id']}"
-        )
-        custom_chaps_list = scraper_engine.parse_custom_chapter_numbers(custom_input_str)
-        if custom_chaps_list:
-            st.info(f"🎯 **الفصول المستهدفة للسحب ({len(custom_chaps_list)} فصلاً):** `{custom_chaps_list}`")
-    else:
-        # حساب الفصول الناقصة واقتراح استكمالها تلقائياً
-        all_local_chaps = get_chapters(novel["id"])
-        downloaded_nums = {c["chapter_number"] for c in all_local_chaps if c.get("status") == "downloaded"}
-        missing_nums = [c["chapter_number"] for c in all_local_chaps if c["chapter_number"] not in downloaded_nums]
-        
-        suggested_from = missing_nums[0] if missing_nums else 1
-        suggested_to = missing_nums[-1] if missing_nums else max(1, total_ch)
-
-        if downloaded_nums and missing_nums:
-            st.info(f"💡 [استكمال ذكي]: تم العثور على {len(downloaded_nums)} فصلاً منزلاً. الفصول الناقصة المقترحة تلقائياً: من {suggested_from} إلى {suggested_to} ({len(missing_nums)} فصلاً).")
-
-        # تحديد نطاق الفصول المراد سحبها
-        col_r1, col_r2 = st.columns(2)
-        with col_r1:
-            from_chap = st.number_input(
-                "من الفصل رقم:",
-                min_value=1,
-                max_value=max_scope,
-                value=suggested_from,
-                key=f"from_chap_input_{novel['id']}"
-            )
-        with col_r2:
-            default_to_chap = max(from_chap, suggested_to)
-            to_chap = st.number_input(
-                "إلى الفصل رقم:",
-                min_value=from_chap,
-                max_value=max_scope,
-                value=default_to_chap,
-                key=f"to_chap_input_{novel['id']}"
-            )
+    # 2. تعيين النطاق الافتراضي تلقائياً ليكون الفصول الناقصة فقط
+    col_r1, col_r2 = st.columns(2)
+    with col_r1:
+        from_chap = st.number_input("من الفصل رقم:", min_value=1, max_value=max(1, total_ch), value=suggested_from, key="from_chap_input")
+    with col_r2:
+        default_to_chap = max(from_chap, suggested_to)
+        to_chap = st.number_input("إلى الفصل رقم:", min_value=from_chap, max_value=max(1, total_ch), value=default_to_chap, key="to_chap_input")
 
     # أزرار التحكم في السحب
     col_ctrl1, col_ctrl2, col_ctrl3, col_ctrl4 = st.columns(4)
@@ -856,7 +814,9 @@ if st.session_state.active_novel:
                 chapter_numbers=custom_chaps_list,
                 min_delay=min_delay,
                 max_delay=max_delay,
-                headless=headless_mode
+                headless=headless_mode,
+                cdp_url=cdp_param,
+                auto_stream_to_sheet=True
             )
             st.session_state.session_controller = bg_sess
             st.session_state.is_scraping = True

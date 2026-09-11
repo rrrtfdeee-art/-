@@ -10,6 +10,7 @@ import sys
 import time
 import socket
 import threading
+import requests
 from typing import Dict, Any, Optional
 
 # ضبط ترميز الإخراج ليتوافق مع الرموز التعبيرية واللغة العربية في ويندوز
@@ -34,8 +35,8 @@ from gemini_analyzer import DEFAULT_GAS_URL
 
 # اسم مستخدم البوت الافتراضي وتوكن التحكم
 DEFAULT_BOT_USERNAME = "@SmartNovelMediaBot"
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", database.get_setting("telegram_bot_token", "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4"))
-ADMIN_CHAT_ID = os.getenv("TELEGRAM_ALLOWED_USER", database.get_setting("telegram_allowed_user", "8883556949"))
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or database.get_setting("telegram_bot_token") or os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8527477822:AAG2dkvwdkkhHR_NyzAsfIWwlLBIdPk2Woc")
+ADMIN_CHAT_ID = os.getenv("TELEGRAM_ALLOWED_USER") or database.get_setting("telegram_allowed_user") or os.getenv("NSW_TELEGRAM_CHAT_ID", "1974483260")
 
 # جلسات المستخدمين المؤقتة لاختيار الخيارات
 USER_SESSIONS: Dict[int, Dict[str, Any]] = {}
@@ -104,6 +105,38 @@ def get_novel_from_catalog_idx(idx_str: str) -> Optional[str]:
     except Exception:
         pass
     return "After Severing Ties"
+
+
+def notify_admin(message: str, parse_mode: str = "HTML"):
+    """إرسال إشعار تليجرام فوري للمشرف الأساسي."""
+    admin_id = ADMIN_CHAT_ID or os.getenv("NSW_TELEGRAM_CHAT_ID", "1974483260")
+    token = BOT_TOKEN or os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8527477822:AAG2dkvwdkkhHR_NyzAsfIWwlLBIdPk2Woc")
+    if not token or not admin_id:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        requests.post(url, json={"chat_id": str(admin_id), "text": message, "parse_mode": parse_mode}, timeout=15)
+    except Exception as e:
+        print(f"[Telegram Alert Error] {e}")
+
+
+def notify_scraping_blocked(novel_name: str, failed_count: int, source_url: str):
+    """
+    إرسال تنبيه تعثر السحب السحابي التلقائي للمشرف مع خيار تفعيل صمام الأمان (CDP Bridge).
+    """
+    msg = (
+        f"🚨 <b>[تنبيه حماية الموقع المصدر]:</b>\n"
+        f"📖 <b>الرواية:</b> {novel_name}\n"
+        f"⚠️ <b>الحالة:</b> تعذر السحب السحابي التلقائي لـ {failed_count} فصول بسبب حماية الموقع (Cloudflare/تشفير).\n"
+        f"🔗 <b>رابط المصدر:</b> {source_url}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🛠️ <b>طريقة الحل الفوري:</b>\n"
+        f"1. افتح متصفح Chrome على حاسوبك عبر ملف 'تشغيل_المتصفح_المفتوح.bat'.\n"
+        f"2. افتح الرابط أعلاه لتخطي الحماية.\n"
+        f"3. أرسل الأمر التالي هنا في المحادثة:\n"
+        f"<code>/nsw_cdp_scrape {novel_name}</code>"
+    )
+    notify_admin(msg)
 
 
 def create_bot_app():
@@ -223,8 +256,81 @@ def create_bot_app():
         database.save_setting("telegram_public_mode", "false")
         bot.reply_to(message, "🔒 <b>تم تفعيل الوضع الخاص!</b> البوت مقفل الآن ومتاح لك وللمستخدمين المصرح لهم فقط.")
 
-    @bot.message_handler(commands=['start', 'help', 'menu'])
-    @bot.message_handler(func=lambda msg: msg.text and msg.text.strip().lower() in ['ابدأ', 'ابدا', 'مرحبا', 'start', 'help', 'menu', 'قائمة', 'القائمة', 'الاوامر', 'الأوامر', 'القائمة الرئيسية', 'اوامر'])
+    @bot.message_handler(commands=['nsw_cdp_scrape'])
+    def handle_cdp_scrape_command(message):
+        if not is_user_authorized(message):
+            bot.reply_to(message, "⛔ <b>غير مصرح لك بالاستخدام.</b>")
+            return
+
+        parts = message.text.split(maxsplit=1)
+        novel_name = parts[1].strip() if len(parts) > 1 else "After Severing Ties"
+        chat_id = message.chat.id
+        status_msg = bot.reply_to(message, f"⏳ جاري فحص الاتصال بمتصفح Chrome المفتوح على المنفذ 9222 وسحب رواية [{novel_name}]...")
+
+        def _cdp_worker():
+            try:
+                db_novel = database.get_novel_by_title(novel_name)
+                if not db_novel:
+                    bot.edit_message_text(f"⚠️ لم يتم العثور على سجل مسبق لرواية [{novel_name}]. يرجى التأكد من كتابة الاسم بدقة أو إرسال رابط الفهرس أولاً.", chat_id, status_msg.message_id)
+                    return
+
+                novel_id = db_novel["id"]
+                domain_cfg = database.get_domain_config(db_novel.get("domain", "")) or {}
+
+                all_chaps = database.get_chapters(novel_id)
+                downloaded_nums = {c["chapter_number"] for c in all_chaps if c.get("status") == "downloaded"}
+                missing_chaps = [c for c in all_chaps if c["chapter_number"] not in downloaded_nums]
+
+                if not missing_chaps:
+                    bot.edit_message_text(f"✅ جميع فصول رواية [{novel_name}] مكتملة بالفعل في النظام ولا توجد أي فصول ناقصة!", chat_id, status_msg.message_id)
+                    return
+
+                from_ch = missing_chaps[0]["chapter_number"]
+                to_ch = missing_chaps[-1]["chapter_number"]
+
+                bot.edit_message_text(
+                    f"🚀 <b>تم الاتصال بجسر متصفح المشرف (CDP Bridge)!</b>\n"
+                    f"📖 <b>الرواية:</b> {novel_name}\n"
+                    f"🔢 <b>الفصول المستهدفة:</b> من {from_ch} إلى {to_ch} ({len(missing_chaps)} فصلاً)\n"
+                    f"☁️ <b>الضخ المباشر:</b> نشط إلى جدول شيت الأرشيف (1v1V4)...",
+                    chat_id,
+                    status_msg.message_id
+                )
+
+                session = scraper_engine.NovelScrapingSession(
+                    novel_id=novel_id,
+                    novel_name=novel_name,
+                    domain_config=domain_cfg,
+                    cdp_url="http://localhost:9222",
+                    auto_stream_to_sheet=True,
+                    workers_count=2
+                )
+                session.run_range(from_ch, to_ch)
+
+                stats = database.get_novel_stats(novel_id)
+                bot.edit_message_text(
+                    f"🎉 <b>اكتملت مهمة السحب عبر جسر CDP بنجاح!</b>\n"
+                    f"📖 <b>الرواية:</b> {novel_name}\n"
+                    f"✅ <b>إجمالي الفصول المنجزة:</b> {stats.get('downloaded', 0)}\n"
+                    f"☁️ تم ضخها جميعاً في شيت الأرشيف الخام (1v1V4).",
+                    chat_id,
+                    status_msg.message_id
+                )
+
+            except Exception as e:
+                bot.edit_message_text(
+                    f"❌ <b>تعذر استكمال السحب عبر CDP:</b>\n{str(e)}\n\n"
+                    f"💡 <b>يرجى التأكد من:</b>\n"
+                    f"1. تشغيل ملف <code>تشغيل_المتصفح_المفتوح.bat</code> على حاسوبك.\n"
+                    f"2. فتح صفحة الرواية في نافذة المتصفح والتأكد من تجاوز الكابتشا.",
+                    chat_id,
+                    status_msg.message_id
+                )
+
+        threading.Thread(target=_cdp_worker, daemon=True).start()
+
+    @bot.message_handler(commands=['start', 'help'])
+    @bot.message_handler(func=lambda msg: msg.text and msg.text.strip() in ['ابدأ', 'ابدا', 'مرحبا', 'start', 'help'])
     def send_welcome(message):
         if not is_user_authorized(message):
             bot.reply_to(message, "⛔ <b>عذراً، هذا البوت خاص وغير متاح للعامة.</b>\nتواصل مع مالك البوت للحصول على إذن الاستخدام.")
