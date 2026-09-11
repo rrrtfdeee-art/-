@@ -1992,7 +1992,10 @@ def export_novel_to_google_sheet_and_purge(novel_id: int, novel_name: str, targe
         batch = downloaded_chaps[i:i + batch_size]
         payload = {
             "action": "importRawChaptersBulk",
+            "spreadsheetId": RAW_ARCHIVE_SPREADSHEET_ID,
+            "sheetName": "الورقة1",
             "novelName": novel_name,
+            "novel_name": novel_name,
             "chapters": [
                 {
                     "num": c.get("chapter_number"),

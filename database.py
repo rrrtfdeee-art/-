@@ -596,6 +596,170 @@ def get_novel_gaps(novel_id: int, db_path: str = DB_FILE_PATH) -> Dict[str, Any]
         }
 
 
+# ==============================================================================
+# 🔍 دوال مقارنة واستبدال الفصول المقتطعة (Truncation Comparison & Replacement)
+# ==============================================================================
+
+def compare_chapter_contents(
+    original_content: str,
+    downloaded_content: str,
+    min_improvement_ratio: float = 1.15,
+    min_valid_length: int = 3000
+) -> Dict[str, Any]:
+    """
+    مقارنة دقيقة لمحتوى الفصلين بين الأصلي (المسحوب حديثاً) والمنزل (المخزن في قاعدة البيانات أو الشيت):
+    - فحص نسبة الاختلاف وطول النصوص.
+    - كشف الاقتطاع والتجزئة (Truncation Detection).
+    - تقرير ما إذا كان يجب استبدال المحتوى المجتزئ بالنص الأكمل والأطول.
+    """
+    orig = (original_content or "").strip()
+    down = (downloaded_content or "").strip()
+
+    orig_len = len(orig)
+    down_len = len(down)
+    diff_len = orig_len - down_len
+    ratio = (orig_len / down_len) if down_len > 0 else 999.0
+
+    orig_words = len(orig.split())
+    down_words = len(down.split())
+
+    # حالة 1: المحتوى المنزّل فارغ أو شبه فارغ
+    if down_len < 50:
+        should_replace = orig_len >= 50
+        reason = "المحتوى المنزّل فارغ أو غير صالح والأصلي يحتوي على نص"
+        is_truncated = True
+
+    # حالة 2: المحتوى المنزّل قصير ومقتطع بوضوح (أقل من الحد الآمن) بينما الأصلي سليم وكامل
+    elif down_len < min_valid_length and orig_len >= min_valid_length:
+        should_replace = True
+        reason = f"المحتوى المنزّل مقتطع ومجتزأ ({down_len} حرفاً / {down_words} كلمة) بينما الأصلي كامل ({orig_len} حرفاً / {orig_words} كلمة)"
+        is_truncated = True
+
+    # حالة 3: المحتوى الأصلي أطول بشكل ملحوظ بنسبة تفوق معامل التحسين (مثلاً زيادة 15% أو أكثر)
+    elif orig_len >= down_len * min_improvement_ratio and diff_len >= 300:
+        should_replace = True
+        percentage = round(((orig_len - down_len) / down_len) * 100, 1)
+        reason = f"المحتوى الأصلي أطول بنسبة {percentage}% (زيادة {diff_len} حرفاً / {orig_words - down_words} كلمة)"
+        is_truncated = True
+
+    # حالة 4: المحتوى المنزّل أطول أو مساوٍ للأصلي
+    else:
+        should_replace = False
+        reason = f"المحتوى المنزّل كافٍ ومتكامل ({down_len} حرفاً مقابل {orig_len} حرفاً للأصلي) - لا يتطلب استبدالاً"
+        is_truncated = False
+
+    return {
+        "should_replace": should_replace,
+        "is_truncated": is_truncated,
+        "original_len": orig_len,
+        "downloaded_len": down_len,
+        "diff_len": diff_len,
+        "ratio": round(ratio, 2),
+        "original_words": orig_words,
+        "downloaded_words": down_words,
+        "reason": reason
+    }
+
+
+def compare_and_replace_chapter_content(
+    novel_id: int,
+    chapter_number: int,
+    original_content: str,
+    original_title: Optional[str] = None,
+    original_url: Optional[str] = None,
+    min_improvement_ratio: float = 1.15,
+    min_valid_length: int = 3000,
+    db_path: str = DB_FILE_PATH
+) -> Dict[str, Any]:
+    """
+    مقارنة محتوى الفصل الأصلي مع الفصل المخزن في SQLite، واستبدال المحتوى القديم فوراً إذا كان مجتزأً أو إذا كان الجديد أكمل وأطول.
+    """
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, novel_id, chapter_number, title, content, status, url
+            FROM chapters
+            WHERE novel_id = ? AND chapter_number = ?;
+        """, (novel_id, chapter_number))
+        row = cursor.fetchone()
+
+        if not row:
+            # إذا لم يكن الفصل موجوداً، إنشاؤه وحفظه كفصل جديد
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            title = original_title or f"الفصل {chapter_number}"
+            cursor.execute("""
+                INSERT INTO chapters (novel_id, chapter_number, title, content, url, status, downloaded_at)
+                VALUES (?, ?, ?, ?, ?, 'downloaded', ?);
+            """, (novel_id, chapter_number, title, original_content, original_url or "", now))
+            conn.commit()
+            return {
+                "replaced": True,
+                "action": "inserted_new",
+                "should_replace": True,
+                "is_truncated": False,
+                "original_len": len(original_content or ""),
+                "downloaded_len": 0,
+                "diff_len": len(original_content or ""),
+                "ratio": 999.0,
+                "reason": "تم إدراج الفصل لأول مرة في قاعدة البيانات"
+            }
+
+        existing_content = row["content"] or ""
+        existing_title = row["title"] or f"الفصل {chapter_number}"
+
+        comp = compare_chapter_contents(
+            original_content=original_content,
+            downloaded_content=existing_content,
+            min_improvement_ratio=min_improvement_ratio,
+            min_valid_length=min_valid_length
+        )
+
+        if comp["should_replace"]:
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            new_title = original_title.strip() if original_title and original_title.strip() else existing_title
+            new_url = original_url if original_url else row["url"]
+
+            cursor.execute("""
+                UPDATE chapters
+                SET title = ?,
+                    content = ?,
+                    url = COALESCE(?, url),
+                    status = 'downloaded',
+                    error_message = NULL,
+                    downloaded_at = ?
+                WHERE novel_id = ? AND chapter_number = ?;
+            """, (new_title, original_content, new_url, now, novel_id, chapter_number))
+            conn.commit()
+            comp["replaced"] = True
+            comp["action"] = "updated_replaced"
+        else:
+            comp["replaced"] = False
+            comp["action"] = "kept_existing"
+
+        return comp
+
+
+def get_truncated_chapters(
+    novel_id: int,
+    threshold_length: int = 3000,
+    db_path: str = DB_FILE_PATH
+) -> List[Dict[str, Any]]:
+    """
+    استخراج كافة الفصول المشتبه باقتطاعها أو صغر حجمها غير المعتاد لرواية معينة.
+    """
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, novel_id, chapter_number, title, url, status, length(content) as content_len, downloaded_at
+            FROM chapters
+            WHERE novel_id = ? 
+              AND status IN ('downloaded', 'streamed')
+              AND (content IS NULL OR length(content) < ?)
+            ORDER BY chapter_number ASC;
+        """, (novel_id, threshold_length))
+        return [dict(r) for r in cursor.fetchall()]
+
+
 # تهيئة الجداول تلقائياً عند استيراد الوحدة
 try:
     init_db()

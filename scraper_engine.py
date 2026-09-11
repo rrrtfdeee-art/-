@@ -34,26 +34,6 @@ def send_discord_scraper_alert(message: str, webhook_url: str = DEFAULT_DISCORD_
     except Exception as e:
         print(f"⚠️ خطأ إرسال إشعار ديسكورد: {e}")
 
-def upload_single_chapter_to_sheet(novel_name: str, chapter_number: int, title: str, content: str, source_url: str = "", webapp_url: str = DEFAULT_GAS_URL) -> bool:
-    """ضخ فصل واحد فورياً في جدول Google Sheet بمجرد سحبه (Streaming 0ms)."""
-    payload = {
-        "action": "importSingleRawChapter",
-        "novelName": novel_name,
-        "chapter": {
-            "num": chapter_number,
-            "title": title or f"الفصل {chapter_number}",
-            "content": content,
-            "url": source_url
-        }
-    }
-    try:
-        res = requests.post(webapp_url, json=payload, timeout=25).json()
-        return res.get("status") == "success"
-    except Exception as ex:
-        print(f"⚠️ خطأ أثناء تدفق الفصل {chapter_number} للشيت: {ex}")
-        return False
-
-
 # حل مشكلة NotImplementedError على ويندوز في بيئات Streamlit
 if sys.platform == "win32":
     try:
@@ -77,7 +57,10 @@ from database import (
     get_chapters,
     get_novel_by_id,
     get_novel_by_title,
-    get_novel_stats
+    get_novel_stats,
+    compare_chapter_contents,
+    compare_and_replace_chapter_content,
+    get_truncated_chapters
 )
 
 
@@ -1089,22 +1072,26 @@ class NovelScrapingSession:
                         ch_num = ch["chapter_number"]
                         ch_url = ch["url"]
                         cached_status = ch.get("status")
+                        cached_content = (ch.get("content") or "").strip()
+                        is_suspiciously_short = (len(cached_content) < 3000)
 
-                        # تخطي إذا كان محملاً مسبقاً ولديه محتوى كافٍ
-                        if cached_status == "downloaded" and ch.get("content") and len(ch["content"]) >= 50:
-                            self.log(f"⚡ الفصل {ch_num} مخزن مسبقاً في قاعدة البيانات - تم التخطي.")
+                        # تخطي إذا كان محملاً مسبقاً ولديه محتوى كافٍ وغير مجتزأ
+                        if cached_status == "downloaded" and cached_content and len(cached_content) >= 50 and not is_suspiciously_short:
+                            self.log(f"⚡ الفصل {ch_num} مخزن مسبقاً وبحجم كامل ({len(cached_content)} حرف) - تم التخطي.")
                             with stream_lock:
                                 processed_count += 1
                                 buffered_ready[ch_num] = {
                                     "chapter_number": ch_num,
                                     "title": ch.get("title") or f"الفصل {ch_num}",
-                                    "content": ch["content"],
+                                    "content": cached_content,
                                     "url": ch_url
                                 }
-                            self.progress_callback(processed_count, total_in_range, f"تم التخطي (مخزن): فصل {ch_num}")
+                            self.progress_callback(processed_count, total_in_range, f"تم التخطي (مخزن كامل): فصل {ch_num}")
                             _flush_sequenced_buffer()
                             task_queue.task_done()
                             continue
+                        elif cached_status == "downloaded" and is_suspiciously_short:
+                            self.log(f"🔍 الفصل {ch_num} مخزن ولكن يبدو مقتطعاً ({len(cached_content)} حرف) - جاري إعادة سحبه ومقارنة المحتوى...")
 
                         self.log(f"📥 [خيط {worker_id}]: جاري سحب الفصل {ch_num} من: {ch_url}")
                         self.progress_callback(processed_count, total_in_range, f"جاري سحب فصل {ch_num}...")
@@ -1122,17 +1109,20 @@ class NovelScrapingSession:
                             if not clean_content or len(clean_content) < 50:
                                 raise ValueError("لم يتم استخراج محتوى كافٍ من الصفحة (> 50 حرفاً).")
 
-                            # حفظ الفصل في SQLite
-                            save_chapter_content(
+                            # مقارنة المحتوى مع المخزن مسبقاً واستبدال المجتزأ فوراً في SQLite
+                            comp = compare_and_replace_chapter_content(
                                 novel_id=self.novel_id,
                                 chapter_number=ch_num,
-                                title=ch_title,
-                                content=clean_content,
-                                status="downloaded"
+                                original_content=clean_content,
+                                original_title=ch_title,
+                                original_url=ch_url
                             )
 
                             words_count = len(clean_content.split())
-                            self.log(f"✅ [خيط {worker_id}]: تم حفظ الفصل {ch_num}: '{ch_title}' بنجاح ({words_count} كلمة).")
+                            if comp.get("replaced") and comp.get("action") == "updated_replaced":
+                                self.log(f"🔄 [استبدال المحتوى المجتزئ]: تم استبدال وتحديث الفصل {ch_num} بنجاح! ({comp.get('reason')})")
+                            else:
+                                self.log(f"✅ [خيط {worker_id}]: تم حفظ الفصل {ch_num}: '{ch_title}' بنجاح ({words_count} كلمة).")
 
                             with stream_lock:
                                 processed_count += 1
@@ -1263,6 +1253,8 @@ def start_background_scraping(
     from_chapter: int,
     to_chapter: int,
     domain_config: Dict[str, Any],
+    novel_name: Optional[str] = None,
+    chapter_numbers: Optional[List[int]] = None,
     min_delay: float = 0.5,
     max_delay: float = 1.0,
     headless: bool = True,
@@ -1274,6 +1266,10 @@ def start_background_scraping(
     تشغيل سحب الفصول في خيط مستقل بالخلفية (Background Daemon Thread).
     يستمر هذا الخيط في العمل وتخزين الفصول في SQLite وضخها في شيت 1v1V4 حتى لو أغلقت صفحة الويب تماماً.
     """
+    if not novel_name:
+        nov = get_novel_by_id(novel_id)
+        novel_name = nov.get("title", f"رواية #{novel_id}") if nov else f"رواية #{novel_id}"
+
     session = NovelScrapingSession(
         novel_id=novel_id,
         novel_name=novel_name,
@@ -1302,5 +1298,58 @@ def start_background_scraping(
     th = threading.Thread(target=_worker, daemon=True)
     th.start()
     return session
+
+
+def scan_and_repair_truncated_chapters(
+    novel_id: int,
+    from_chapter: Optional[int] = None,
+    to_chapter: Optional[int] = None,
+    threshold_length: int = 3000,
+    cdp_url: Optional[str] = "http://127.0.0.1:9222",
+    headless: bool = True,
+    auto_stream_to_sheet: bool = True
+) -> Dict[str, Any]:
+    """
+    فحص فصول الرواية واكتشاف أي فصول مجتزأة أو مبتورة وسحبها من المصدر ومقارنتها واستبدالها آلياً، ثم ضخها لشيت الأرشيف (1v1V4).
+    """
+    novel = get_novel_by_id(novel_id)
+    if not novel:
+        return {"success": False, "message": "الرواية غير موجودة"}
+
+    cfg = get_domain_config(novel.get("domain", ""))
+    novel_name = novel.get("title", f"رواية #{novel_id}")
+
+    truncated_list = get_truncated_chapters(novel_id, threshold_length=threshold_length)
+    if from_chapter is not None:
+        truncated_list = [c for c in truncated_list if c["chapter_number"] >= from_chapter]
+    if to_chapter is not None:
+        truncated_list = [c for c in truncated_list if c["chapter_number"] <= to_chapter]
+
+    if not truncated_list:
+        return {
+            "success": True,
+            "repaired_count": 0,
+            "message": "لا توجد فصول مقتطعة ضمن النطاق المحدد."
+        }
+
+    target_numbers = [c["chapter_number"] for c in truncated_list]
+    session = NovelScrapingSession(
+        novel_id=novel_id,
+        novel_name=novel_name,
+        domain_config=cfg,
+        headless=headless,
+        cdp_url=cdp_url,
+        auto_stream_to_sheet=auto_stream_to_sheet,
+        workers_count=1
+    )
+    session.run_range(min(target_numbers), max(target_numbers), chapter_numbers=target_numbers)
+
+    return {
+        "success": True,
+        "scanned_count": len(target_numbers),
+        "repaired_chapters": target_numbers,
+        "message": f"تمت معالجة ومقارنة {len(target_numbers)} فصلاً مجتزأً بنجاح."
+    }
+
 
 
