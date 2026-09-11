@@ -912,6 +912,92 @@ if st.session_state.active_novel:
         time.sleep(2.0)
         st.rerun()
 
+    # --------------------------------------------------------------------------
+    # أداة المقارنة الفورية مع المصدر الأصلي واستبدال المحتوى المجتزأ (مباشرة في لوحة التحكم)
+    # --------------------------------------------------------------------------
+    st.markdown("---")
+    with st.expander("⚖️ أداة فحص ومقارنة أي فصل مع المصدر الأصلي واستبداله فورياً (Live Chapter Comparator)", expanded=True):
+        st.caption("قارن أي فصل محلياً أو في شيت الأرشيف مباشرة مع المصدر الأصلي الحي، وافحص هل هو مبتور أو ناقص، مع إمكانية الاستبدال الفوري بنقرة واحدة.")
+        
+        col_cmp_num, col_cmp_btn, col_cmp_scan = st.columns([1.5, 1.5, 1.5])
+        with col_cmp_num:
+            sec2_target_num = st.number_input("رقم الفصل للمقارنة المباشرة:", min_value=1, max_value=max(1, total_ch), value=102, step=1, key="sec2_compare_num")
+        with col_cmp_btn:
+            st.write("")
+            st.write("")
+            sec2_compare_clicked = st.button("🔍 مقارنة فورية مع الأصل", use_container_width=True, type="primary", key="sec2_cmp_btn")
+        with col_cmp_scan:
+            st.write("")
+            st.write("")
+            sec2_scan_range_clicked = st.button("🩺 فحص مقارنة (100-130)", use_container_width=True, help="فحص مقارنة سريع للفصول من 100 إلى 130 لكشف أي فصل مبتور", key="sec2_scan_rng_btn")
+
+        if sec2_compare_clicked:
+            with st.spinner(f"جاري جلب ومقارنة الفصل {sec2_target_num} مع المصدر الأصلي..."):
+                c_res = compare_and_heal_chapter(
+                    novel_id=novel["id"],
+                    chapter_number=sec2_target_num,
+                    cdp_url=cdp_param,
+                    auto_replace=False,
+                    auto_stream_to_sheet=True
+                )
+                st.session_state[f"sec2_comp_{sec2_target_num}"] = c_res
+
+        active_c_res = st.session_state.get(f"sec2_comp_{sec2_target_num}")
+        if active_c_res and active_c_res.get("success"):
+            o_len = active_c_res["original_length"]
+            d_len = active_c_res["downloaded_length"]
+            d_diff = o_len - d_len
+            
+            c_m1, c_m2, c_m3 = st.columns(3)
+            c_m1.metric("حجم النسخة المحلية/الشيت", f"{d_len:,} حرفاً")
+            c_m2.metric("حجم المصدر الأصلي الحي", f"{o_len:,} حرفاً")
+            c_m3.metric("الفارق", f"{d_diff:+,} حرفاً", delta_color="inverse" if d_diff > 400 else "normal")
+            
+            if active_c_res.get("is_truncated"):
+                st.warning(f"⚠️ **تنبيه:** تم اكتشاف أن الفصل مجتزأ أو ناقص مقارنة بالأصل (فارق {d_diff:,} حرفاً)!")
+            elif d_diff == 0:
+                st.success("✅ النسخة المخزنة مطابقة تماماً للمصدر الأصلي 100%!")
+            else:
+                st.info("ℹ️ الفارق طفيف أو ضمن الحدود الطبيعية.")
+
+            cp_col1, cp_col2 = st.columns(2)
+            with cp_col1:
+                st.markdown("**📄 محتوى النسخة المحلية / الشيت:**")
+                st.text_area("المحلي:", value=active_c_res.get("downloaded_content", ""), height=220, key=f"sec2_txt_loc_{sec2_target_num}")
+            with cp_col2:
+                st.markdown("**🌐 محتوى المصدر الأصلي الحي:**")
+                st.text_area("الأصلي:", value=active_c_res.get("original_content", ""), height=220, key=f"sec2_txt_orig_{sec2_target_num}")
+
+            if st.button(f"⚡ استبدال النسخة المحلية بالأصل وتحديث شيت 1v1V4 فورياً", type="primary", key=f"sec2_btn_rep_{sec2_target_num}"):
+                with st.spinner("جاري استبدال المحتوى في قاعدة البيانات والضخ لشيت الأرشيف..."):
+                    r_res = compare_and_heal_chapter(
+                        novel_id=novel["id"],
+                        chapter_number=sec2_target_num,
+                        cdp_url=cdp_param,
+                        auto_replace=True,
+                        auto_stream_to_sheet=True
+                    )
+                    if r_res.get("replaced"):
+                        st.success(f"🎉 تم بنجاح استبدال الفصل {sec2_target_num} بالنسخة الكاملة ({o_len:,} حرفاً) وضخه لشيت 1v1V4!")
+                        st.session_state.chapters_cache = get_chapters(novel["id"])
+                        st.rerun()
+
+        if sec2_scan_range_clicked:
+            with st.spinner("جاري فحص مقارنة الفصول من 100 إلى 130..."):
+                scan_results = []
+                for sc_num in range(100, 131):
+                    sc_res = compare_and_heal_chapter(novel["id"], sc_num, cdp_url=cdp_param, auto_replace=False)
+                    if sc_res.get("success"):
+                        scan_results.append({
+                            "رقم الفصل": sc_num,
+                            "الحجم المحلي": sc_res["downloaded_length"],
+                            "حجم الأصل": sc_res["original_length"],
+                            "الفارق": sc_res["diff_chars"],
+                            "الحالة": "⚠️ مبتور / ناقص" if sc_res["is_truncated"] else "✅ كامل ومطابق"
+                        })
+                st.markdown("##### 📋 تقرير فحص المقارنة لنطاق الفصول (100 - 130):")
+                st.dataframe(scan_results, use_container_width=True)
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -921,7 +1007,7 @@ if st.session_state.active_novel:
 st.markdown('<div class="scraper-card">', unsafe_allow_html=True)
 st.subheader("3️⃣ سجل الأحداث المباشر & التصدير النهائي")
 
-tab_logs, tab_export, tab_preview, tab_media, tab_nsw = st.tabs(["📟 Live Console Log", "📥 تصدير الرواية .TXT", "📖 معاينة الفصول", "🎬 محمل وتجزئة الوسائط", "🩹 استصلاح فصول المدونة"])
+tab_logs, tab_export, tab_preview, tab_media, tab_nsw = st.tabs(["📟 Live Console Log", "📥 تصدير الرواية .TXT", "⚖️ مقارنة الفصول واستبدال المجتزأ", "🎬 محمل وتجزئة الوسائط", "🩹 استصلاح فصول المدونة"])
 
 with tab_logs:
     logs_text = "\n".join(st.session_state.logs[-18:])

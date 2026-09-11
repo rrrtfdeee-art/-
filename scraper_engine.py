@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.INFO)
 import os
 import requests
 
-DEFAULT_GAS_URL = os.getenv("NSW_PUBLISH_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbxqLaqJru1ag-am7G9Mrwy5Nb7HliZlK5vbIEQD9MeV3wOOquNUvz4d7vWEwZxkBI6zIw/exec")
+DEFAULT_GAS_URL = os.getenv("NSW_TRANSLATE_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbwk3rNPfyP6lJw5jkXigqUfTgivsNzgDoyhd61lPiRSFZP49jFShKaz-CfnUqlM9OmH/exec")
 DEFAULT_DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1546569711381254265/ZPrKjMA3tVj6kjWZzZeEOePb1I0PfopeYcpdYo7r8rFIXvlHk8m2HM1tIwM_HRRoTXv8")
 
 def send_discord_scraper_alert(message: str, webhook_url: str = DEFAULT_DISCORD_WEBHOOK):
@@ -801,19 +801,18 @@ def upload_single_chapter_to_sheet(
         "row": [chapter_number, content, novel_name, created_at, source_url]
     }
 
-    # المحاولة عبر مجمع وسائط Google Apps Script مع تجاوز الأخطاء تلقائياً
-    endpoints = list(DEFAULT_GAS_POOL) if DEFAULT_GAS_POOL else [DEFAULT_GAS_URL]
+    # المحاولة عبر وسيط Google Apps Script المعتمد مع تجاوز الأخطاء تلقائياً
+    endpoints = [DEFAULT_GAS_URL] + [u for u in DEFAULT_GAS_POOL if u != DEFAULT_GAS_URL]
     for url in endpoints:
         try:
-            res = requests.post(url, json=payload, timeout=25)
+            res = requests.post(url, json=payload, timeout=30)
             if res.status_code == 200:
                 try:
                     data = res.json()
-                    if data.get("status") == "success" or data.get("success") is True or data.get("chapter"):
+                    if data.get("status") == "success" or data.get("success") is True or data.get("chapter") is not None:
                         return True
                 except Exception:
-                    if "success" in res.text.lower() or "ok" in res.text.lower():
-                        return True
+                    pass
         except Exception:
             continue
 
