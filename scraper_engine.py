@@ -7,6 +7,7 @@ import html
 import sys
 import asyncio
 import queue
+import threading
 import requests
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin, urlparse
@@ -1097,14 +1098,23 @@ class NovelScrapingSession:
                         self.progress_callback(processed_count, total_in_range, f"جاري سحب فصل {ch_num}...")
 
                         try:
-                            raw_html, _ = browser.get_page_html(ch_url, wait_selector=content_sel)
+                            if "api.mystorywave.com" in ch_url:
+                                api_resp = requests.get(ch_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20).json()
+                                api_data = api_resp.get("data", {})
+                                ch_title = api_data.get("title") or f"الفصل {ch_num}"
+                                html_body = api_data.get("content", "")
+                                soup = BeautifulSoup(html_body, "html.parser")
+                                paras = [p.get_text().strip() for p in soup.find_all("p") if p.get_text().strip()]
+                                clean_content = "\n\n".join(paras) if paras else soup.get_text().strip()
+                            else:
+                                raw_html, _ = browser.get_page_html(ch_url, wait_selector=content_sel)
 
-                            # رصد حظر Cloudflare
-                            if any(k in raw_html for k in ["Just a moment...", "Attention Required", "Cloudflare to restrict access", "cf-browser-verification"]):
-                                raise RuntimeError("حظر حماية Cloudflare (تحدي كابتشا أو 403)")
+                                # رصد حظر Cloudflare
+                                if any(k in raw_html for k in ["Just a moment...", "Attention Required", "Cloudflare to restrict access", "cf-browser-verification"]):
+                                    raise RuntimeError("حظر حماية Cloudflare (تحدي كابتشا أو 403)")
 
-                            ch_title = extract_chapter_title(raw_html, title_sel, fallback_number=ch_num)
-                            clean_content = clean_chapter_content(raw_html, content_sel, purge_sels)
+                                ch_title = extract_chapter_title(raw_html, title_sel, fallback_number=ch_num)
+                                clean_content = clean_chapter_content(raw_html, content_sel, purge_sels)
 
                             if not clean_content or len(clean_content) < 50:
                                 raise ValueError("لم يتم استخراج محتوى كافٍ من الصفحة (> 50 حرفاً).")
@@ -1134,7 +1144,8 @@ class NovelScrapingSession:
                                 }
 
                             # تفريغ الـ HTML المحلي فورياً لتوفير الذاكرة
-                            del raw_html
+                            if "raw_html" in locals():
+                                del raw_html
                             _flush_sequenced_buffer()
 
                         except Exception as ex:
