@@ -263,6 +263,16 @@ def get_all_novels(db_path: str = DB_FILE_PATH) -> List[Dict[str, Any]]:
         return [dict(r) for r in cursor.fetchall()]
 
 
+def update_novel_title(novel_id: int, new_title: str, db_path: str = DB_FILE_PATH) -> bool:
+    """تحديث عنوان الرواية في قاعدة البيانات."""
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE novels SET title = ?, updated_at = ? WHERE id = ?", (new_title.strip(), now, novel_id))
+        conn.commit()
+    return True
+
+
 def sync_chapter_manifest(
     novel_id: int,
     chapter_list: List[Dict[str, Any]],
