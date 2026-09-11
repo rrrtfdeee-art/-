@@ -832,6 +832,7 @@ if st.session_state.active_novel:
 
     # بدء عملية السحب السحابية في الخلفية
     if start_scrape:
+        custom_chaps_list = st.session_state.get("custom_chaps_list", None)
         if custom_chaps_list and len(custom_chaps_list) > 0:
             target_chapters = get_chapters(novel["id"], chapter_numbers=custom_chaps_list)
         else:
