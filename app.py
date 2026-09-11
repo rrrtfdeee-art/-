@@ -30,7 +30,8 @@ from database import (
     export_novel_to_text,
     get_setting,
     save_setting,
-    update_novel_title
+    update_novel_title,
+    get_all_novels
 )
 from gemini_analyzer import (
     analyze_site_dom_with_gemini,
@@ -56,7 +57,8 @@ from scraper_engine import (
     ACTIVE_BACKGROUND_TASKS,
     check_cdp_available,
     calculate_missing_gaps,
-    trigger_cloud_sheet_sorting
+    trigger_cloud_sheet_sorting,
+    compare_and_heal_chapter
 )
 from media_engine import (
     get_video_info,
@@ -301,14 +303,19 @@ st.markdown("""
 if "logs" not in st.session_state:
     st.session_state.logs = ["[النظام] مرحباً بك في Smart Novel Scraper. أدخل رابط الفهرس للبدء."]
 
-if "active_novel" not in st.session_state:
+if "active_novel" not in st.session_state or st.session_state.active_novel is None:
     st.session_state.active_novel = None
-
-if "domain_config" not in st.session_state:
-    st.session_state.domain_config = None
-
-if "chapters_cache" not in st.session_state:
-    st.session_state.chapters_cache = []
+    try:
+        all_n = get_all_novels()
+        for nov in all_n:
+            st_info = get_novel_stats(nov["id"])
+            if st_info.get("downloaded", 0) > 0:
+                st.session_state.active_novel = nov
+                st.session_state.chapters_cache = get_chapters(nov["id"])
+                st.session_state.domain_config = get_domain_config(nov["domain"])
+                break
+    except Exception:
+        pass
 
 if "is_scraping" not in st.session_state:
     st.session_state.is_scraping = False
@@ -506,16 +513,46 @@ else:
 st.markdown('<div class="scraper-card">', unsafe_allow_html=True)
 st.subheader("1️⃣ فحص الرواية وجلب الفهرس")
 
+# اختيار رواية سابقة للبدء فوراً دون إعادة إدخال الرابط
+saved_novels = get_all_novels()
+if saved_novels:
+    novel_options = {}
+    default_select_idx = 0
+    for idx, n in enumerate(saved_novels):
+        st_info = get_novel_stats(n["id"])
+        label = f"📖 {n['title']} (معرف #{n['id']} | {st_info.get('downloaded', 0)}/{n.get('total_chapters', 0)} فصلاً)"
+        novel_options[label] = n
+        if st.session_state.active_novel and st.session_state.active_novel["id"] == n["id"]:
+            default_select_idx = idx
+
+    selected_label = st.selectbox(
+        "📚 اختيار رواية سابقة للمتابعة فوراً دون إعادة إدخال الرابط:",
+        options=list(novel_options.keys()),
+        index=default_select_idx,
+        key="novel_picker_select"
+    )
+    chosen_novel = novel_options[selected_label]
+    if not st.session_state.active_novel or st.session_state.active_novel["id"] != chosen_novel["id"]:
+        st.session_state.active_novel = chosen_novel
+        st.session_state.chapters_cache = get_chapters(chosen_novel["id"])
+        st.session_state.domain_config = get_domain_config(chosen_novel["domain"])
+        st.rerun()
+
+initial_toc_url = st.session_state.active_novel["toc_url"] if st.session_state.active_novel else ""
+initial_novel_title = st.session_state.active_novel["title"] if st.session_state.active_novel else ""
+
 col_url, col_novel_name = st.columns([2, 1.5])
 with col_url:
     toc_url_input = st.text_input(
         "🔗 رابط صفحة الفهرس (Table of Contents URL):",
+        value=initial_toc_url,
         placeholder="https://www.69shuba.com/book/54809.htm",
         key="toc_url"
     )
 with col_novel_name:
     custom_novel_title_input = st.text_input(
         "🏷️ اسم الرواية (الذي سيوضع في العمود C بالشيت):",
+        value=initial_novel_title,
         placeholder="مثال: After Severing Ties",
         key="custom_novel_title",
         help="اكتب اسم الرواية هنا ليتم اعتماده وتفريغ الفصول في Google Sheet بهذا الاسم بدلاً من العنوان التلقائي للموقع."
@@ -929,20 +966,99 @@ with tab_export:
         st.info("قم باختيار رواية وسحب فصولها لتتمكن من تصدير الملف النهائي.")
 
 with tab_preview:
-    if st.session_state.last_preview_content:
-        st.markdown("#### 📄 عينة من آخر فصل تم سحبه:")
-        st.text_area("محتوى الفصل المنظف:", value=st.session_state.last_preview_content, height=280)
-    elif st.session_state.active_novel:
-        chapters = get_chapters(st.session_state.active_novel["id"])
-        downloaded_chaps = [c for c in chapters if c["status"] == "downloaded" and c["content"]]
-        if downloaded_chaps:
-            sample_ch = downloaded_chaps[-1]
-            st.markdown(f"#### 📄 الفصل رقم {sample_ch['chapter_number']}: {sample_ch['title']}")
-            st.text_area("محتوى الفصل المنظف:", value=sample_ch["content"], height=280)
+    st.markdown("#### 📖 قارئ ومقارن الفصول الحية (Chapter Inspector & Comparator)")
+    st.caption("تصفح أي فصل من فصول الرواية، افحص حجم النص وسلامته، وقارنه مباشرة مع المصدر الأصلي مع خيار الاستبدال الفوري للمحتوى المجتزأ.")
+    
+    if st.session_state.active_novel:
+        act_id = st.session_state.active_novel["id"]
+        all_ch = get_chapters(act_id)
+        if all_ch:
+            tot_count = len(all_ch)
+            col_sel_ch, col_btn_comp = st.columns([2, 1.5])
+            with col_sel_ch:
+                target_ch_num = st.number_input("اختر رقم الفصل للاستعراض والمقارنة:", min_value=1, max_value=tot_count, value=1, step=1, key="preview_ch_num_inp")
+            
+            # جلب الفصل المحدد
+            curr_ch = next((c for c in all_ch if c["chapter_number"] == target_ch_num), None)
+            
+            if curr_ch:
+                ch_status = curr_ch.get("status", "pending")
+                ch_text = curr_ch.get("content") or ""
+                ch_len = len(ch_text)
+                
+                status_color = "green" if ch_status == "downloaded" else "orange" if ch_status == "pending" else "red"
+                st.markdown(f"**عنوان الفصل:** `{curr_ch.get('title', 'غير معروف')}` | **الحالة:** :{status_color}[{ch_status}] | **الحجم المخزن:** `{ch_len:,}` حرفاً | **رابط المصدر:** [زيارة الرابط]({curr_ch.get('url', '#')})")
+                
+                with col_btn_comp:
+                    st.write("")
+                    st.write("")
+                    compare_clicked = st.button("🔍 مقارنة حية مع المصدر الأصلي", use_container_width=True, type="primary")
+
+                if compare_clicked:
+                    with st.spinner(f"جاري جلب الفصل {target_ch_num} من المصدر ومقارنة المحتوى..."):
+                        comp_res = compare_and_heal_chapter(
+                            novel_id=act_id,
+                            chapter_number=target_ch_num,
+                            cdp_url=cdp_param,
+                            auto_replace=False,
+                            auto_stream_to_sheet=True
+                        )
+                        st.session_state[f"comp_res_{target_ch_num}"] = comp_res
+
+                # عرض تقرير المقارنة إذا توفر
+                active_comp = st.session_state.get(f"comp_res_{target_ch_num}")
+                if active_comp and active_comp.get("success"):
+                    orig_len = active_comp["original_length"]
+                    down_len = active_comp["downloaded_length"]
+                    diff = orig_len - down_len
+                    
+                    st.markdown("---")
+                    st.markdown(f"##### 📊 نتيجة المقارنة الحية للفصل {target_ch_num}:")
+                    col_m1, col_m2, col_m3 = st.columns(3)
+                    col_m1.metric("حجم النسخة المنزلة", f"{down_len:,} حرفاً")
+                    col_m2.metric("حجم المصدر الأصلي", f"{orig_len:,} حرفاً")
+                    col_m3.metric("الفارق", f"{diff:+,} حرفاً", delta_color="inverse" if diff > 500 else "normal")
+                    
+                    if active_comp.get("is_truncated"):
+                        st.warning(f"⚠️ **تنبيه:** تم رصد نقص أو بتر في النسخة المخزنة مقارنة بالأصل (فارق {diff:,} حرفاً)!")
+                    elif diff == 0:
+                        st.success("✅ النسخة المخزنة مطابقة تماماً للمصدر الأصلي 100%!")
+                    else:
+                        st.info("ℹ️ الفارق طفيف أو ضمن الحدود الطبيعية للتنسيق.")
+
+                    col_prev_local, col_prev_orig = st.columns(2)
+                    with col_prev_local:
+                        st.markdown("**📄 محتوى النسخة المخزنة محلياً:**")
+                        st.text_area("المحلي:", value=active_comp.get("downloaded_content", ""), height=240, key=f"txt_local_{target_ch_num}")
+                    with col_prev_orig:
+                        st.markdown("**🌐 محتوى المصدر الأصلي الحي:**")
+                        st.text_area("الأصلي:", value=active_comp.get("original_content", ""), height=240, key=f"txt_orig_{target_ch_num}")
+
+                    col_act_rep, _ = st.columns([2, 2])
+                    with col_act_rep:
+                        if st.button(f"⚡ استبدال النسخة المحلية بالأصل وتحديث شيت الأرشيف (1v1V4)", type="primary", key=f"btn_replace_{target_ch_num}"):
+                            with st.spinner("جاري استبدال المحتوى في قاعدة البيانات والضخ لشيت الأرشيف..."):
+                                rep_res = compare_and_heal_chapter(
+                                    novel_id=act_id,
+                                    chapter_number=target_ch_num,
+                                    cdp_url=cdp_param,
+                                    auto_replace=True,
+                                    auto_stream_to_sheet=True
+                                )
+                                if rep_res.get("replaced"):
+                                    st.success(f"🎉 تم استبدال وتحديث الفصل {target_ch_num} بنجاح بالأصل ({orig_len:,} حرفاً) وضخه لشيت 1v1V4!")
+                                    st.session_state.chapters_cache = get_chapters(act_id)
+                                    st.rerun()
+                                else:
+                                    st.info("المحتوى الحالي مساوٍ أو أكبر من المصدر الأصلي بالفعل.")
+                else:
+                    st.text_area("📄 نص الفصل المخزن:", value=ch_text, height=300, key=f"ch_view_{target_ch_num}")
+            else:
+                st.warning(f"الفصل رقم {target_ch_num} غير مسجل في فهرس هذه الرواية.")
         else:
-            st.info("لم يتم تنزيل أي فصل بعد للمعاينة.")
+            st.info("لا توجد فصول مسجلة في فهرس هذه الرواية.")
     else:
-        st.info("ابدأ بسحب الرواية لمشاهدة المعاينة الحية هنا.")
+        st.info("قم باختيار رواية لعرض ومقارنة فصولها.")
 
 with tab_media:
     st.markdown("### 🎬 محمل الوسائط وتجزئة الفيديوهات الذكي")

@@ -205,14 +205,25 @@ def get_or_create_novel(
     domain: str = "",
     db_path: str = DB_FILE_PATH
 ) -> Dict[str, Any]:
-    """إنشاء أو جلب سجل الرواية بناءً على رابط الفهرس TOC URL."""
+    """إنشاء أو جلب سجل الرواية بناءً على رابط الفهرس TOC URL مع تطبيع الروابط ودعم www."""
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    clean_url = toc_url.strip().rstrip('/')
+    alt_url = clean_url.replace("://www.", "://") if "://www." in clean_url else clean_url.replace("://", "://www.")
+    
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM novels WHERE toc_url = ?", (toc_url,))
+        cursor.execute(
+            "SELECT * FROM novels WHERE toc_url IN (?, ?, ?, ?) ORDER BY id ASC LIMIT 1",
+            (toc_url, clean_url, alt_url, clean_url + "/")
+        )
         row = cursor.fetchone()
+        
+        # إذا لم يُعثر على الرابط، ابحث بالعنوان الدقيق لتجنب تكرار الرواية
+        if not row and title and title != "رواية جديدة":
+            cursor.execute("SELECT * FROM novels WHERE LOWER(TRIM(title)) = LOWER(TRIM(?)) ORDER BY id ASC LIMIT 1", (title,))
+            row = cursor.fetchone()
+
         if row:
-            # إذا كان هناك تحديث للعنوان إذا لم يكن افتراضياً
             if title and title != "رواية جديدة" and row["title"] != title:
                 cursor.execute("UPDATE novels SET title = ?, updated_at = ? WHERE id = ?", (title, now, row["id"]))
                 conn.commit()

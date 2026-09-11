@@ -1363,4 +1363,102 @@ def scan_and_repair_truncated_chapters(
     }
 
 
+def compare_and_heal_chapter(
+    novel_id: int,
+    chapter_number: int,
+    cdp_url: Optional[str] = None,
+    auto_replace: bool = False,
+    auto_stream_to_sheet: bool = True
+) -> Dict[str, Any]:
+    """
+    مقارنة محتوى فصل معين بين المصدر الأصلي والنسخة المخزنة محلياً،
+    مع إمكانية استبدال المحتوى المجتزأ فورياً وضخه إلى Google Sheet 1v1V4.
+    """
+    novel = get_novel_by_id(novel_id)
+    if not novel:
+        return {"success": False, "error": f"الرواية برقم {novel_id} غير موجودة"}
+
+    novel_name = novel.get("title", f"رواية #{novel_id}")
+    chapters = get_chapters(novel_id)
+    matched = [c for c in chapters if c["chapter_number"] == chapter_number]
+    if not matched:
+        return {"success": False, "error": f"الفصل {chapter_number} غير مسجل في فهرس الرواية"}
+
+    ch_row = matched[0]
+    ch_url = ch_row.get("url", "")
+    downloaded_content = ch_row.get("content") or ""
+    downloaded_title = ch_row.get("title") or f"الفصل {chapter_number}"
+    downloaded_len = len(downloaded_content)
+
+    if not ch_url:
+        return {"success": False, "error": f"رابط الفصل {chapter_number} غير متوفر"}
+
+    try:
+        if "api.mystorywave.com" in ch_url:
+            resp = requests.get(ch_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20).json()
+            data = resp.get("data", {})
+            orig_title = data.get("title") or downloaded_title
+            html_body = data.get("content", "")
+            soup = BeautifulSoup(html_body, "html.parser")
+            paras = [p.get_text().strip() for p in soup.find_all("p") if p.get_text().strip()]
+            original_content = "\n\n".join(paras) if paras else soup.get_text().strip()
+        else:
+            cfg = get_domain_config(novel.get("domain", "")) or {}
+            c_sel = cfg.get("chapter_content_selector", ".chapter-content, div.content")
+            t_sel = cfg.get("chapter_title_selector", "h1, .title")
+            p_sels = cfg.get("purge_selectors", [])
+
+            browser = PlaywrightStealthBrowser(headless=True, cdp_url=cdp_url)
+            browser.start()
+            try:
+                raw_html, _ = browser.get_page_html(ch_url, wait_selector=c_sel)
+                orig_title = extract_chapter_title(raw_html, t_sel, fallback_number=chapter_number)
+                original_content = clean_chapter_content(raw_html, c_sel, p_sels)
+            finally:
+                browser.stop()
+    except Exception as fetch_err:
+        return {
+            "success": False,
+            "error": f"فشل جلب المحتوى الأصلي من المصدر: {fetch_err}",
+            "chapter_number": chapter_number,
+            "downloaded_length": downloaded_len,
+            "downloaded_content": downloaded_content
+        }
+
+    original_len = len(original_content)
+    diff_chars = original_len - downloaded_len
+    is_truncated = (downloaded_len < 3000 and original_len >= 3000) or (diff_chars > 400)
+
+    was_replaced = False
+    if auto_replace or is_truncated:
+        if original_len > downloaded_len:
+            save_chapter_content(novel_id, chapter_number, orig_title, original_content, status="downloaded")
+            was_replaced = True
+            if auto_stream_to_sheet:
+                upload_single_chapter_to_sheet(
+                    novel_name=novel_name,
+                    chapter_number=chapter_number,
+                    title=orig_title,
+                    content=original_content,
+                    source_url=ch_url
+                )
+
+    return {
+        "success": True,
+        "chapter_number": chapter_number,
+        "title": orig_title,
+        "url": ch_url,
+        "downloaded_length": downloaded_len,
+        "original_length": original_len,
+        "diff_chars": diff_chars,
+        "is_truncated": is_truncated,
+        "replaced": was_replaced,
+        "downloaded_content_sample": downloaded_content[:500] if downloaded_content else "",
+        "original_content_sample": original_content[:500] if original_content else "",
+        "downloaded_content": downloaded_content,
+        "original_content": original_content
+    }
+
+
+
 
