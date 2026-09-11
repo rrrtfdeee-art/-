@@ -836,6 +836,82 @@ def upload_single_chapter_to_sheet(
     return False
 
 
+def calculate_missing_gaps(existing_nums: List[Any], total_chapters: Optional[int] = None) -> Tuple[List[Dict[str, Any]], List[int]]:
+    """
+    اكتشاف الفجوات الترقيمية والفصول غير المنزلة واقتراح تنزيلها:
+    مثال: إذا كانت الفصول الموجودة 4 و6 و8 و12 بإجمالي 20:
+    تكتشف أن الفجوات هي: 1-3، 5، 7، 9-11، 13-20.
+    """
+    if not existing_nums:
+        if total_chapters and total_chapters > 0:
+            return [{"from": 1, "to": total_chapters, "label": f"1-{total_chapters}"}], list(range(1, total_chapters + 1))
+        return [], []
+
+    clean_nums = set()
+    for n in existing_nums:
+        try:
+            m = re.search(r"(\d+(?:\.\d+)?)", str(n))
+            if m:
+                clean_nums.add(int(float(m.group(1))))
+        except Exception:
+            continue
+
+    if not clean_nums:
+        if total_chapters and total_chapters > 0:
+            return [{"from": 1, "to": total_chapters, "label": f"1-{total_chapters}"}], list(range(1, total_chapters + 1))
+        return [], []
+
+    sorted_existing = sorted(list(clean_nums))
+    max_ch = sorted_existing[-1]
+    end_limit = max(max_ch, total_chapters or max_ch)
+
+    all_possible = set(range(1, end_limit + 1))
+    missing_set = sorted(list(all_possible - clean_nums))
+
+    if not missing_set:
+        return [], []
+
+    ranges = []
+    range_start = missing_set[0]
+    prev = missing_set[0]
+
+    for curr in missing_set[1:]:
+        if curr == prev + 1:
+            prev = curr
+        else:
+            label = f"{range_start}" if range_start == prev else f"{range_start}-{prev}"
+            ranges.append({"from": range_start, "to": prev, "label": label})
+            range_start = curr
+            prev = curr
+
+    label = f"{range_start}" if range_start == prev else f"{range_start}-{prev}"
+    ranges.append({"from": range_start, "to": prev, "label": label})
+
+    return ranges, missing_set
+
+
+def trigger_cloud_sheet_sorting() -> Dict[str, Any]:
+    """
+    إرسال طلب فوري إلى وسيط Google Apps Script لتشغيل فرز وتنظيف وتصفية الجداول الثلاثة:
+    (1v1V4 للأرشيف، 1Fceh للترجمة، 1HDj للنشر).
+    """
+    payload = {
+        "action": "sortAndDeduplicateAllSheets"
+    }
+    endpoints = list(DEFAULT_GAS_POOL) if DEFAULT_GAS_POOL else [DEFAULT_GAS_URL]
+    for url in endpoints:
+        try:
+            res = requests.post(url, json=payload, timeout=45)
+            if res.status_code == 200:
+                try:
+                    return res.json()
+                except Exception:
+                    return {"status": "success", "raw_response": res.text[:200]}
+        except Exception:
+            continue
+    return {"status": "failed", "error": "تعذر الاتصال بجميع روابط مجمع Google Apps Script"}
+
+
 # ==============================================================================
 # محرك السحب التتابعي والهجين للفصول (NSW Hybrid Scraper Engine)
 # ==============================================================================

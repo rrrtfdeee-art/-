@@ -54,7 +54,9 @@ from scraper_engine import (
     clean_chapter_content,
     start_background_scraping,
     ACTIVE_BACKGROUND_TASKS,
-    check_cdp_available
+    check_cdp_available,
+    calculate_missing_gaps,
+    trigger_cloud_sheet_sorting
 )
 from media_engine import (
     get_video_info,
@@ -719,16 +721,38 @@ if st.session_state.active_novel:
 
     st.markdown("---")
 
-    # 1. فحص الفصول المسجلة مسبقاً في قاعدة البيانات وشيت الأرشيف
+    # 1. كشف الفجوات الترقيمية والفصول غير المنزلة واقتراحها
     all_local_chaps = get_chapters(novel["id"])
-    downloaded_nums = {c["chapter_number"] for c in all_local_chaps if c.get("status") == "downloaded"}
-    missing_nums = [c["chapter_number"] for c in all_local_chaps if c["chapter_number"] not in downloaded_nums]
+    downloaded_nums = [c["chapter_number"] for c in all_local_chaps if c.get("status") == "downloaded"]
     
-    suggested_from = missing_nums[0] if missing_nums else 1
-    suggested_to = missing_nums[-1] if missing_nums else max(1, total_ch)
+    gap_ranges, all_missing = calculate_missing_gaps(downloaded_nums, total_chapters=total_ch)
+    
+    suggested_from = all_missing[0] if all_missing else 1
+    suggested_to = all_missing[-1] if all_missing else max(1, total_ch)
 
-    if downloaded_nums and missing_nums:
-        st.info(f"💡 [استكمال ذكي]: تم العثور على {len(downloaded_nums)} فصلاً منزلاً. الفصول الناقصة المقترحة تلقائياً: من {suggested_from} إلى {suggested_to} ({len(missing_nums)} فصلاً).")
+    if gap_ranges and len(all_missing) > 0:
+        gap_badges = " ".join([f'<span class="badge badge-warning">فجوة: {g["label"]}</span>' for g in gap_ranges[:8]])
+        if len(gap_ranges) > 8:
+            gap_badges += f' <span class="badge badge-info">+{len(gap_ranges)-8} فجوات أخرى</span>'
+        
+        st.markdown(f'''
+        <div style="background-color: #1e1e2e; border: 1px solid #fab387; border-radius: 12px; padding: 14px 18px; margin-bottom: 16px;">
+            <div style="color: #fab387; font-weight: bold; font-size: 1.05rem; margin-bottom: 6px;">
+                🧩 <b>كاشف الفجوات والفصول غير المنزلة:</b> تم رصد {len(all_missing)} فصلاً ناقصاً عبر {len(gap_ranges)} فجوات ترقيمية.
+            </div>
+            <div style="margin-bottom: 8px;">{gap_badges}</div>
+            <div style="color: #a6adc8; font-size: 0.88rem;">اختر إحدى الفجوات المقترحة أدناه لضبط نطاق السحب فورياً عليها:</div>
+        </div>
+        ''', unsafe_allow_html=True)
+
+        # أزرار سريعة لاختيار أي فجوة فورياً
+        cols_gap = st.columns(min(len(gap_ranges), 5))
+        for idx, g in enumerate(gap_ranges[:5]):
+            with cols_gap[idx]:
+                if st.button(f"⚡ سحب فجوة ({g['label']})", key=f"gap_btn_{g['label']}_{idx}", use_container_width=True):
+                    st.session_state.from_chap_input = g["from"]
+                    st.session_state.to_chap_input = g["to"]
+                    st.rerun()
 
     # 2. تعيين النطاق الافتراضي تلقائياً ليكون الفصول الناقصة فقط
     col_r1, col_r2 = st.columns(2)
@@ -756,8 +780,13 @@ if st.session_state.active_novel:
         st.success("تم تصفير بيانات الفصول بنجاح!")
         st.rerun()
 
-    # زر التفريغ السحابي الفوري في Google Sheet وتطهير الذاكرة
-    export_sheet_btn = st.button("📤 تفريغ الفصول في Google Sheet وتطهير ذاكرة السيرفر", key=f"export_sheet_{novel['id']}", use_container_width=True)
+    # أزرار التفريغ السحابي والفرز ومنع التكرار
+    col_exp_sheet, col_sort_sheet = st.columns([1, 1])
+    with col_exp_sheet:
+        export_sheet_btn = st.button("📤 تفريغ الفصول في Google Sheet وتطهير ذاكرة السيرفر", key=f"export_sheet_{novel['id']}", use_container_width=True)
+    with col_sort_sheet:
+        sort_sheets_btn = st.button("🔄 فرز ومنع تكرار الجداول الثلاثة (1v1V4, 1Fceh, 1HDj)", key=f"sort_sheets_{novel['id']}", use_container_width=True)
+
     if export_sheet_btn:
         with st.spinner("⏳ جاري تفريغ الفصول في Google Sheet وحذفها من السيرفر..."):
             res = nsw_healer_engine.export_novel_to_google_sheet_and_purge(novel["id"], novel_display_name)
@@ -767,6 +796,15 @@ if st.session_state.active_novel:
                 st.rerun()
             else:
                 st.error(f"❌ تعذر التفريغ: {res.get('message') or res.get('error')}")
+
+    if sort_sheets_btn:
+        with st.spinner("⏳ جاري الفرز الشامل، ترتيب الفصول 1..N، وحذف المكررات من جميع الجداول..."):
+            sort_res = trigger_cloud_sheet_sorting()
+            if sort_res.get("status") == "success":
+                st.success("🎉 اكتمل فرز وترتيب وتطهير الجداول الثلاثة من التكرار بنجاح تام!")
+                st.json(sort_res.get("results", sort_res))
+            else:
+                st.error(f"تعذر تنفيذ الفرز السحابي: {sort_res.get('error', 'خطأ غير معروف')}")
 
     # التحقق من وجود عملية سحب نشطة بالخلفية لهذه الرواية
     is_bg_running = novel["id"] in ACTIVE_BACKGROUND_TASKS
