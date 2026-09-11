@@ -303,8 +303,17 @@ st.markdown("""
 if "logs" not in st.session_state:
     st.session_state.logs = ["[النظام] مرحباً بك في Smart Novel Scraper. أدخل رابط الفهرس للبدء."]
 
-if "active_novel" not in st.session_state or st.session_state.active_novel is None:
+if "active_novel" not in st.session_state:
     st.session_state.active_novel = None
+
+if "domain_config" not in st.session_state:
+    st.session_state.domain_config = None
+
+if "chapters_cache" not in st.session_state:
+    st.session_state.chapters_cache = []
+
+# محاولة تحميل الرواية النشطة تلقائياً إذا وجدت في قاعدة البيانات
+if st.session_state.active_novel is None:
     try:
         all_n = get_all_novels()
         for nov in all_n:
@@ -685,7 +694,7 @@ if (force_ai_clicked or deep_ai_clicked or st.session_state.show_ai_fallback) an
                 add_log(f"❌ خطأ AI: {err_ai}")
 
 # عرض وتعديل محددات الـ CSS المستخرجة
-if st.session_state.domain_config:
+if st.session_state.get("domain_config"):
     with st.expander("🛠️ مراجعة وتعديل محددات CSS يدوياً (DOM Selectors Config)"):
         c_sel = st.session_state.domain_config
         col_s1, col_s2 = st.columns(2)
