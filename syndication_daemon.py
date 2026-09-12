@@ -56,7 +56,11 @@ def run_syndication_cycle():
             )
 
             if not extracted.get("success"):
-                continue  # الفصل غير متوفر بعد في شيت الترجمة
+                # تأجيل الفحص 30 دقيقة بدلاً من إرهاق السيرفر والشيت كل 60 ثانية إذا لم يتوفر الفصل بعد
+                logger.info(f"Chapter {target_ch} for {nov['novel_name']} not available yet in sheet. Retrying in 30 min.")
+                nov["next_run_timestamp"] = time.time() + 1800
+                syndication_db.save_or_update_syndicated_novel(nov)
+                continue
 
             success_rc = False
             success_wp = False
@@ -129,8 +133,44 @@ def run_syndication_cycle():
                 syndication_db.save_or_update_syndicated_novel(nov)
                 logger.info(f"Published Ch.{target_ch} for {nov['novel_name']}. Next in {nov['interval_hours']}h")
 
+                # إرسال إشعار تليجرام فوري للمشرف
+                try:
+                    from nsw_healer_engine import notify_admin
+                    import datetime
+                    next_dt = datetime.datetime.fromtimestamp(nov["next_run_timestamp"]).strftime('%I:%M %p')
+                    pub_links = []
+                    if success_rc:
+                        pub_links.append(f"• نادي الروايات: {rc_res.get('post_url', 'تم')}")
+                    if success_wp:
+                        pub_links.append(f"• واتباد: {wp_res.get('post_url', 'تم')}")
+                    links_txt = "\n".join(pub_links)
+                    msg = (
+                        f"🚀 <b>[نشر تلقائي مجدول — ناجح]</b>\n\n"
+                        f"📖 <b>الرواية:</b> {nov['novel_name']}\n"
+                        f"📑 <b>الفصل:</b> {target_ch}\n"
+                        f"🏷️ <b>العنوان:</b> {extracted.get('title', '')}\n"
+                        f"{links_txt}\n\n"
+                        f"⏱️ <b>موعد الفصل القادم ({target_ch + 1}):</b> الساعة {next_dt} (بعد {nov['interval_hours']} ساعة)"
+                    )
+                    notify_admin(msg)
+                except Exception as ex_notif:
+                    logger.warning(f"Could not send telegram notification: {ex_notif}")
+            else:
+                # في حال فشل النشر تأجيل المحاولة 15 دقيقة مع إشعار تحذيري
+                nov["next_run_timestamp"] = time.time() + 900
+                syndication_db.save_or_update_syndicated_novel(nov)
+                try:
+                    from nsw_healer_engine import notify_admin
+                    err_msg = ""
+                    if "rc_res" in locals() and rc_res.get("error"):
+                        err_msg += f"نادي الروايات: {rc_res.get('error')} "
+                    if "wp_res" in locals() and wp_res.get("error"):
+                        err_msg += f"واتباد: {wp_res.get('error')}"
+                    notify_admin(f"⚠️ <b>[تنبيه النشر المجدول]:</b>\nتعذر نشر الفصل {target_ch} لرواية '{nov['novel_name']}'.\nالسبب: {err_msg or 'خطأ اتصال'}\n⏳ سيتم إعادة المحاولة تلقائياً بعد 15 دقيقة.")
+                except Exception:
+                    pass
         except Exception as e_nov:
-            logger.error(f"Error in syndication daemon for novel {nov.get('novel_name')}: {e_nov}")
+            logger.error(f"Error in syndication cycle for {nov.get('novel_name', '?')}: {e_nov}")
 
 def daemon_worker_loop():
     """حلقة السيرفر الدائرية التي تعمل 24/7 في الخلفية."""
