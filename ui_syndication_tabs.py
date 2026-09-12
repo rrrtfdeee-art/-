@@ -411,29 +411,47 @@ def render_wattpad_tab():
                 st.error(f"خطأ: {ex_trig}")
     
     # 1. إعدادات حساب واتباد
-    with st.expander("🔐 بيانات حساب واتباد (Wattpad Credentials)", expanded=False):
-        col_u, col_p = st.columns(2)
+    with st.expander("🔐 بيانات حساب واتباد والدخول التلقائي (Wattpad Auto-Login)", expanded=False):
+        col_u, col_pwd, col_p = st.columns(3)
         stored_w_user = syndication_db.get_synd_setting("wattpad_username", "")
+        stored_w_pass = syndication_db.get_synd_setting("wattpad_password", "")
         stored_w_token = syndication_db.get_synd_setting("wattpad_token", "")
         
         with col_u:
-            wattpad_user = st.text_input("اسم المستخدم / الإيميل (Wattpad):", value=stored_w_user, key="wp_user")
+            wattpad_user = st.text_input("اسم المستخدم / الإيميل:", value=stored_w_user, key="wp_user")
+        with col_pwd:
+            wattpad_pass = st.text_input("كلمة المرور (للتسجيل الذاتي):", value=stored_w_pass, type="password", key="wp_pwd")
         with col_p:
-            wattpad_token = st.text_input("رمز التوكن (Session Token / Cookie):", value=stored_w_token, type="password", key="wp_token")
-        st.caption("💡 **كيف تحصل على التوكن (Token)؟** افتح موقع wattpad.com في المتصفح وأنت مسجل دخولك ➔ اضغط F12 ➔ اذهب إلى Application ➔ Cookies ➔ https://www.wattpad.com ➔ انسخ قيمة الكوكي المسماة `token` والصقها هنا.")
+            wattpad_token = st.text_input("رمز التوكن (يُجلب تلقائياً):", value=stored_w_token, type="password", key="wp_token")
+        st.caption("💡 **الدخول التلقائي الذاتي:** عند إدخال اسم المستخدم وكلمة المرور، يقوم النظام بالدخول التلقائي وتجديد التوكن ذاتياً دون الحاجة لنسخه يدوياً في كل جلسة.")
             
-        col_w1, col_w2 = st.columns(2)
+        col_w1, col_w2, col_w3 = st.columns(3)
         with col_w1:
-            if st.button("💾 حفظ بيانات حساب واتباد", key="save_wp_creds", use_container_width=True):
+            if st.button("💾 حفظ البيانات", key="save_wp_creds", use_container_width=True):
                 syndication_db.save_synd_setting("wattpad_username", wattpad_user.strip())
+                syndication_db.save_synd_setting("wattpad_password", wattpad_pass.strip())
                 syndication_db.save_synd_setting("wattpad_token", wattpad_token.strip())
                 st.success("تم حفظ بيانات الدخول لواتباد بنجاح.")
         with col_w2:
-            if st.button("🔍 فحص الاتصال بحساب واتباد", key="test_wp_conn", use_container_width=True):
+            if st.button("🔄 تسجيل دخول وتجديد التوكن", key="wp_auto_login_btn", use_container_width=True):
+                import wattpad_poster
+                w_client = wattpad_poster.WattpadClient(
+                    username=wattpad_user.strip() or stored_w_user,
+                    password=wattpad_pass.strip() or stored_w_pass
+                )
+                login_res = w_client.auto_login()
+                if login_res.get("success"):
+                    st.success(f"✅ {login_res.get('message')}")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {login_res.get('message')}")
+        with col_w3:
+            if st.button("🔍 فحص الاتصال والحساب", key="test_wp_conn", use_container_width=True):
                 import wattpad_poster
                 w_client = wattpad_poster.WattpadClient(
                     token=wattpad_token.strip() or stored_w_token,
-                    username=wattpad_user.strip() or stored_w_user
+                    username=wattpad_user.strip() or stored_w_user,
+                    password=wattpad_pass.strip() or stored_w_pass
                 )
                 w_chk = w_client.test_connection()
                 if w_chk.get("success"):

@@ -32,6 +32,8 @@ def run_syndication_cycle():
     # جلب التوكنات العامة
     rc_token = syndication_db.get_synd_setting("rewayat_token", "")
     wp_token = syndication_db.get_synd_setting("wattpad_token", "")
+    wp_user = syndication_db.get_synd_setting("wattpad_username", "")
+    wp_pass = syndication_db.get_synd_setting("wattpad_password", "")
 
     for nov in novels:
         try:
@@ -110,8 +112,8 @@ def run_syndication_cycle():
 
             # 4. النشر في واتباد (إذا كان مفعلاً)
             if nov.get("wattpad_enabled") and nov.get("wattpad_story_id"):
-                if not wp_token:
-                    wp_res = {"success": False, "error": "لم يتم حفظ توكن حساب واتباد (Wattpad Token) في إعدادات المنظومة"}
+                if not wp_token and not (wp_user and wp_pass):
+                    wp_res = {"success": False, "error": "لم يتم حفظ توكن أو بيانات حساب واتباد في إعدادات المنظومة"}
                     syndication_db.log_syndication_event(
                         novel_id=nov["id"],
                         chapter_num=target_ch,
@@ -121,7 +123,7 @@ def run_syndication_cycle():
                     )
                 else:
                     try:
-                        wp_client = wattpad_poster.WattpadClient(token=wp_token)
+                        wp_client = wattpad_poster.WattpadClient(token=wp_token, username=wp_user, password=wp_pass)
                         wp_res = wp_client.publish_chapter_to_story(
                             story_id=nov["wattpad_story_id"],
                             chapter_num=target_ch,
