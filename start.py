@@ -52,12 +52,19 @@ if __name__ == "__main__":
     api_thread.start()
     print("[Launcher] NSW Local Web Bridge API thread started on port 58242.")
 
+    # تشغيل محرك النشر التلقائي الذاتي 24/7 (نادي الروايات + واتباد)
+    try:
+        import syndication_daemon
+        syndication_daemon.start_syndication_daemon()
+    except Exception as e_daemon:
+        print(f"[Launcher] ⚠️ Could not start syndication daemon: {e_daemon}")
+
     # إشعار الإقلاع التلقائي في الخلفية
     def _startup_notify():
         try:
             time.sleep(5)
             from nsw_healer_engine import notify_admin
-            notify_admin("🖥️ <b>[إقلاع خط الإنتاج]:</b>\nتم تشغيل المنظومة بنجاح.\n• المزامنة المزدوجة للشيتين: <b>مفعلة</b>.\n• ربط أزرار التنقل التلقائي: <b>مفعل</b>.\n• كشف الفجوات المفردة: <b>مفعل</b>.\n• جاهز لاستقبال وصقل فصول <b>Claude Opus</b> (أمر: <code>/nsw_stage</code>).")
+            notify_admin("🖥️ <b>[إقلاع خط الإنتاج]:</b>\nتم تشغيل المنظومة بنجاح.\n• المزامنة المزدوجة للشيتين: <b>مفعلة</b>.\n• ربط أزرار التنقل التلقائي: <b>مفعل</b>.\n• كشف الفجوات المفردة: <b>مفعل</b>.\n• خادم النشر التلقائي (نادي الروايات + واتباد 24/7): <b>نشط</b>.")
         except Exception:
             pass
     threading.Thread(target=_startup_notify, daemon=True).start()

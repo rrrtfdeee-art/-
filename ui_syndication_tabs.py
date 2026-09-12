@@ -229,10 +229,24 @@ def render_wattpad_tab():
         with col_p:
             wattpad_token = st.text_input("كلمة المرور أو الـ Session Token:", value=stored_w_token, type="password", key="wp_token")
             
-        if st.button("💾 حفظ بيانات حساب واتباد", key="save_wp_creds"):
-            syndication_db.save_synd_setting("wattpad_username", wattpad_user.strip())
-            syndication_db.save_synd_setting("wattpad_token", wattpad_token.strip())
-            st.success("تم حفظ بيانات الدخول لواتباد بنجاح.")
+        col_w1, col_w2 = st.columns(2)
+        with col_w1:
+            if st.button("💾 حفظ بيانات حساب واتباد", key="save_wp_creds", use_container_width=True):
+                syndication_db.save_synd_setting("wattpad_username", wattpad_user.strip())
+                syndication_db.save_synd_setting("wattpad_token", wattpad_token.strip())
+                st.success("تم حفظ بيانات الدخول لواتباد بنجاح.")
+        with col_w2:
+            if st.button("🔍 فحص الاتصال بحساب واتباد", key="test_wp_conn", use_container_width=True):
+                import wattpad_poster
+                w_client = wattpad_poster.WattpadClient(
+                    token=wattpad_token.strip() or stored_w_token,
+                    username=wattpad_user.strip() or stored_w_user
+                )
+                w_chk = w_client.test_connection()
+                if w_chk.get("success"):
+                    st.success(f"✅ {w_chk.get('message')}")
+                else:
+                    st.warning(f"⚠️ {w_chk.get('message')}")
 
     # 2. إضافة رواية لواتباد
     with st.expander("➕ إضافة رواية جديدة لواتباد", expanded=True):
@@ -338,6 +352,48 @@ def render_wattpad_tab():
                     available = syndication_extractor.get_available_chapters_for_novel(wp_preview_novel)
                     if available:
                         st.info(f"📚 فصول متاحة: **{len(available)}** (من {min(available)} إلى {max(available)})")
+
+                    st.markdown("---")
+                    st.markdown("##### 🚀 النشر التجريبي الفعلي (Live Publishing to Wattpad)")
+                    if st.button("📤 نشر هذا الفصل الآن إلى قصة واتباد", key="wp_live_publish_btn", type="primary"):
+                        import wattpad_poster
+                        w_user_token = syndication_db.get_synd_setting("wattpad_token", "")
+                        if not w_user_token:
+                            st.error("❌ يرجى إدخال وحفظ التوكن لحساب واتباد أولاً.")
+                        elif not nov_cfg.get("wattpad_story_id"):
+                            st.error("❌ الرواية لا تحتوي على معرف قصة (Story ID) في واتباد.")
+                        else:
+                            with st.spinner("⏳ جاري إرسال الفصل كجزء جديد إلى قصة واتباد..."):
+                                w_client = wattpad_poster.WattpadClient(token=w_user_token)
+                                w_pub_res = w_client.publish_chapter_to_story(
+                                    story_id=nov_cfg["wattpad_story_id"],
+                                    chapter_num=int(wp_preview_chapter),
+                                    title=result["title"],
+                                    content=result["content_for_publish"]
+                                )
+                                if w_pub_res.get("success"):
+                                    st.balloons()
+                                    st.success(f"🎉 {w_pub_res.get('message')}")
+                                    syndication_db.log_syndication_event(
+                                        novel_id=nov_cfg["id"],
+                                        chapter_num=int(wp_preview_chapter),
+                                        platform="wattpad",
+                                        status="SUCCESS",
+                                        post_url=w_pub_res.get("post_url", "")
+                                    )
+                                    if int(wp_preview_chapter) > nov_cfg.get("last_synced_chapter", 0):
+                                        nov_cfg["last_synced_chapter"] = int(wp_preview_chapter)
+                                        syndication_db.save_or_update_syndicated_novel(nov_cfg)
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ {w_pub_res.get('error')}")
+                                    syndication_db.log_syndication_event(
+                                        novel_id=nov_cfg["id"],
+                                        chapter_num=int(wp_preview_chapter),
+                                        platform="wattpad",
+                                        status="FAILED",
+                                        error_msg=w_pub_res.get("error", "")
+                                    )
                 else:
                     st.error(f"❌ {result['error']}")
 
