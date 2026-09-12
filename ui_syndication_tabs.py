@@ -419,7 +419,8 @@ def render_wattpad_tab():
         with col_u:
             wattpad_user = st.text_input("اسم المستخدم / الإيميل (Wattpad):", value=stored_w_user, key="wp_user")
         with col_p:
-            wattpad_token = st.text_input("كلمة المرور أو الـ Session Token:", value=stored_w_token, type="password", key="wp_token")
+            wattpad_token = st.text_input("رمز التوكن (Session Token / Cookie):", value=stored_w_token, type="password", key="wp_token")
+        st.caption("💡 **كيف تحصل على التوكن (Token)؟** افتح موقع wattpad.com في المتصفح وأنت مسجل دخولك ➔ اضغط F12 ➔ اذهب إلى Application ➔ Cookies ➔ https://www.wattpad.com ➔ انسخ قيمة الكوكي المسماة `token` والصقها هنا.")
             
         col_w1, col_w2 = st.columns(2)
         with col_w1:

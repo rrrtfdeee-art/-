@@ -109,34 +109,45 @@ def run_syndication_cycle():
                     logger.error(f"Error publishing RC for {nov['novel_name']}: {e}")
 
             # 4. النشر في واتباد (إذا كان مفعلاً)
-            if nov.get("wattpad_enabled") and nov.get("wattpad_story_id") and wp_token:
-                try:
-                    wp_client = wattpad_poster.WattpadClient(token=wp_token)
-                    wp_res = wp_client.publish_chapter_to_story(
-                        story_id=nov["wattpad_story_id"],
+            if nov.get("wattpad_enabled") and nov.get("wattpad_story_id"):
+                if not wp_token:
+                    wp_res = {"success": False, "error": "لم يتم حفظ توكن حساب واتباد (Wattpad Token) في إعدادات المنظومة"}
+                    syndication_db.log_syndication_event(
+                        novel_id=nov["id"],
                         chapter_num=target_ch,
-                        title=extracted["title"],
-                        content=extracted["content_for_publish"]
+                        platform="wattpad",
+                        status="FAILED",
+                        error_msg=wp_res["error"]
                     )
-                    if wp_res.get("success"):
-                        success_wp = True
-                        syndication_db.log_syndication_event(
-                            novel_id=nov["id"],
+                else:
+                    try:
+                        wp_client = wattpad_poster.WattpadClient(token=wp_token)
+                        wp_res = wp_client.publish_chapter_to_story(
+                            story_id=nov["wattpad_story_id"],
                             chapter_num=target_ch,
-                            platform="wattpad",
-                            status="SUCCESS",
-                            post_url=wp_res.get("post_url", "")
+                            title=extracted["title"],
+                            content=extracted["content_for_publish"]
                         )
-                    else:
-                        syndication_db.log_syndication_event(
-                            novel_id=nov["id"],
-                            chapter_num=target_ch,
-                            platform="wattpad",
-                            status="FAILED",
-                            error_msg=wp_res.get("error", "")
-                        )
-                except Exception as e:
-                    logger.error(f"Error publishing WP for {nov['novel_name']}: {e}")
+                        if wp_res.get("success"):
+                            success_wp = True
+                            syndication_db.log_syndication_event(
+                                novel_id=nov["id"],
+                                chapter_num=target_ch,
+                                platform="wattpad",
+                                status="SUCCESS",
+                                post_url=wp_res.get("post_url", "")
+                            )
+                        else:
+                            syndication_db.log_syndication_event(
+                                novel_id=nov["id"],
+                                chapter_num=target_ch,
+                                platform="wattpad",
+                                status="FAILED",
+                                error_msg=wp_res.get("error", "")
+                            )
+                    except Exception as e:
+                        logger.error(f"Error publishing WP for {nov['novel_name']}: {e}")
+                        wp_res = {"success": False, "error": str(e)}
 
             # 5. إذا تم النشر بنجاح على منصة واحدة على الأقل
             if success_rc or success_wp:
@@ -171,19 +182,35 @@ def run_syndication_cycle():
                     except Exception as ex_notif:
                         logger.warning(f"Could not send telegram notification: {ex_notif}")
             else:
-                # في حال فشل النشر تأجيل المحاولة 15 دقيقة مع إشعار تحذيري
-                nov["next_run_timestamp"] = time.time() + 900
-                syndication_db.save_or_update_syndicated_novel(nov)
-                try:
-                    from nsw_healer_engine import notify_admin
-                    err_msg = ""
-                    if "rc_res" in locals() and rc_res.get("error"):
-                        err_msg += f"نادي الروايات: {rc_res.get('error')} "
-                    if "wp_res" in locals() and wp_res.get("error"):
-                        err_msg += f"واتباد: {wp_res.get('error')}"
-                    notify_admin(f"⚠️ <b>[تنبيه النشر المجدول]:</b>\nتعذر نشر الفصل {target_ch} لرواية '{nov['novel_name']}'.\nالسبب: {err_msg or 'خطأ اتصال'}\n⏳ سيتم إعادة المحاولة تلقائياً بعد 15 دقيقة.")
-                except Exception:
-                    pass
+                # إذا كان سبب التعذر هو نقص التوكن، نوقف الرواية وننبه المشرف دون تكرار الإزعاج كل 15 دقيقة
+                if "wp_res" in locals() and "توكن" in str(wp_res.get("error", "")):
+                    nov["is_active"] = 0
+                    nov["next_run_timestamp"] = 0.0
+                    syndication_db.save_or_update_syndicated_novel(nov)
+                    try:
+                        from nsw_healer_engine import notify_admin
+                        notify_admin(
+                            f"⚠️ <b>[تنبيه منصة واتباد]:</b>\n"
+                            f"تم إيقاف النشر التلقائي لرواية '{nov['novel_name']}' مؤقتاً.\n"
+                            f"<b>السبب:</b> لم يتم إدخال رمز التوكن (Token) لحساب واتباد بعد.\n\n"
+                            f"💡 <i>يرجى فتح صفحة السيرفر والدخول لتبويب واتباد وحفظ التوكن ثم استئناف الجدولة.</i>"
+                        )
+                    except Exception:
+                        pass
+                else:
+                    # في حال فشل النشر الفعلي تأجيل المحاولة 15 دقيقة مع إشعار تحذيري
+                    nov["next_run_timestamp"] = time.time() + 900
+                    syndication_db.save_or_update_syndicated_novel(nov)
+                    try:
+                        from nsw_healer_engine import notify_admin
+                        err_msg = ""
+                        if "rc_res" in locals() and rc_res.get("error"):
+                            err_msg += f"نادي الروايات: {rc_res.get('error')} "
+                        if "wp_res" in locals() and wp_res.get("error"):
+                            err_msg += f"واتباد: {wp_res.get('error')}"
+                        notify_admin(f"⚠️ <b>[تنبيه النشر المجدول]:</b>\nتعذر نشر الفصل {target_ch} لرواية '{nov['novel_name']}'.\nالسبب: {err_msg or 'خطأ اتصال'}\n⏳ سيتم إعادة المحاولة تلقائياً بعد 15 دقيقة.")
+                    except Exception:
+                        pass
         except Exception as e_nov:
             logger.error(f"Error in syndication cycle for {nov.get('novel_name', '?')}: {e_nov}")
 
