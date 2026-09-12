@@ -183,15 +183,36 @@ def fetch_chapter_from_published_sheet(
 
 
 def _fetch_post_content_via_gas(post_id: str, post_url: str) -> Optional[str]:
-    """يجلب محتوى المنشور من بلوجر عبر Apps Script WebApp ويجرّد HTML منه."""
+    """يجلب محتوى المنشور من بلوجر عبر Apps Script WebApp أو مباشرة من رابط التدوينة."""
+    # 1. محاولة عبر رابط المدونة مباشرة (أسرع وأدق كـ Fallback)
+    if post_url:
+        try:
+            resp = requests.get(post_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=REQUEST_TIMEOUT)
+            if resp.status_code == 200:
+                html = resp.text
+                # استخراج محتوى التدوينة من الوسم الرئيسي للبلوجر
+                m = re.search(r"<div[^>]*class=['\"][^'\"]*post-body[^'\"]*['\"][^>]*>(.*?)</div>\s*<div[^>]*class=['\"][^'\"]*post-footer", html, re.DOTALL | re.IGNORECASE)
+                if not m:
+                    m = re.search(r"<div[^>]*class=['\"][^'\"]*post-body[^'\"]*['\"][^>]*>(.*)", html, re.DOTALL | re.IGNORECASE)
+                if m:
+                    clean = _strip_blogger_html(m.group(1))
+                    if len(clean) > 200:
+                        return clean
+        except Exception as e_direct:
+            logger.warning(f"[extractor] تعذر الجلب المباشر من الرابط: {e_direct}")
+
+    # 2. محاولة عبر Apps Script WebApp
     try:
         params = {"action": "getPostContent", "postId": post_id, "postUrl": post_url}
         resp = requests.get(GAS_WEBAPP_URL, params=params, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        raw_html = data.get("content") or data.get("body") or ""
-        if raw_html:
-            return _strip_blogger_html(raw_html)
+        if resp.status_code == 200 and resp.text.strip():
+            try:
+                data = resp.json()
+                raw_html = data.get("content") or data.get("body") or ""
+                if raw_html:
+                    return _strip_blogger_html(raw_html)
+            except Exception:
+                pass
     except Exception as e:
         logger.warning(f"[extractor] خطأ GAS لجلب postId={post_id}: {e}")
     return None

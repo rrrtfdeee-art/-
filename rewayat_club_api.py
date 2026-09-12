@@ -1,34 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-rewayat_club_api.py — وسيط النشر والتفاعل مع منصة نادي الروايات (Rewayat Club)
-المرحلة الثالثة: يدعم:
-1. المصادقة عبر التوكن المباشر (Bearer Token / Cookie Session) أو تسجيل الدخول
-2. نشر فصل جديد مع المتن والخاتمة التحفيزية
-3. فحص صلاحية الاتصال بالحساب
+rewayat_club_api.py — وسيط النشر والتفاعل الرسمي مع منصة نادي الروايات (Rewayat Club)
+مبني بدقة بناءً على الكود المصدري الأصلي لواجهة نادي الروايات:
+- POST https://api.rewayat.club/api/chapters/{novel_slug}/create/
+- Content-Type: multipart/form-data (FormData)
+- Fields: number, title, content (و date إذا مجدول)
+- Header: Authorization: Token {token_hex}
 """
 
 import requests
-import json
 import logging
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-BASE_API_URL = "https://api.rewayat.club"
+BASE_API_URL = "https://api.rewayat.club/api"
 BASE_WEB_URL = "https://rewayat.club"
 
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
     "Origin": BASE_WEB_URL,
-    "Referer": f"{BASE_WEB_URL}/",
+    "Referer": f"{BASE_WEB_URL}/create/chapter",
 }
 
 class RewayatClubClient:
     def __init__(self, token: str = "", username: str = "", password: str = ""):
         self.token = token.strip()
         self.username = username.strip()
-        self.password = password.strip()
         self.session = requests.Session()
         self.session.headers.update(DEFAULT_HEADERS)
         if self.token:
@@ -36,89 +34,83 @@ class RewayatClubClient:
 
     def _apply_token(self, token: str):
         self.token = token
-        # إذا كان التوكن بتنسيق Bearer أو JWT
-        if not token.lower().startswith("bearer "):
-            self.session.headers["Authorization"] = f"Bearer {token}"
+        # توكن نادي الروايات الأصلي هو Django REST Framework Token: "Token 4e3379..."
+        if not token.lower().startswith("token ") and not token.lower().startswith("bearer "):
+            self.session.headers["Authorization"] = f"Token {token}"
         else:
             self.session.headers["Authorization"] = token
 
     def test_connection(self) -> Dict[str, Any]:
-        """فحص حالة الاتصال وصلاحية التوكن/الجلسة."""
-        if not self.token and not (self.username and self.password):
-            return {"success": False, "message": "لم يتم إدخال التوكن أو بيانات الحساب بعد."}
+        """فحص حالة الاتصال وصلاحية التوكن بالحساب."""
+        if not self.token:
+            return {"success": False, "message": "لم يتم إدخال التوكن الخاص بحسابك بعد."}
         
-        # محاولة طلب معلومات الحساب أو فحص حالة الـ Auth
-        endpoints_to_try = [
-            f"{BASE_API_URL}/api/user",
-            f"{BASE_API_URL}/api/auth/user",
-            f"{BASE_API_URL}/api/me",
-            f"{BASE_API_URL}/user",
-        ]
-        
-        for ep in endpoints_to_try:
-            try:
-                res = self.session.get(ep, timeout=8)
-                if res.status_code in [200, 201]:
-                    data = res.json()
-                    user_name = data.get("name") or data.get("username") or data.get("email") or "مستخدم معتمد"
-                    return {"success": True, "message": f"تم التحقق بنجاح! مرحباً {user_name}", "user": data}
-            except Exception:
-                continue
+        try:
+            url = f"{BASE_API_URL}/user/"
+            res = self.session.get(url, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                u_name = data.get("username") or "مستخدم معتمد"
+                return {
+                    "success": True,
+                    "message": f"تم التحقق بنجاح من حسابك في نادي الروايات! مرحباً @{u_name}",
+                    "user": data
+                }
+            elif res.status_code in [401, 403]:
+                return {"success": False, "message": "رمز التوكن غير صالح أو انتهت صلاحيته."}
+            else:
+                return {"success": False, "message": f"استجابة غير متوقعة: {res.status_code}"}
+        except Exception as e:
+            return {"success": False, "message": f"خطأ اتصال: {str(e)}"}
 
-        # إذا التوكن موجود وتم حفظه مسبقاً
-        if self.token:
-            return {"success": True, "message": "التوكن مسجل وجاهز للنشر المباشر."}
-            
-        return {"success": False, "message": "تعذر التحقق من الحساب، يرجى التأكد من التوكن أو كلمة المرور."}
-
-    def publish_chapter(self, novel_id: str, chapter_num: int, title: str, content: str) -> Dict[str, Any]:
+    def publish_chapter(self, novel_id: str, chapter_num: int, title: str, content: str, schedule_date: Optional[str] = None) -> Dict[str, Any]:
         """
-        إرسال ونشر الفصل إلى الرواية المحددة في نادي الروايات.
+        نشر الفصل عبر الـ API الرسمي المطابق 100% لواجهة نادي الروايات:
+        POST /api/chapters/{slug}/create/
         """
         if not self.token:
-            return {"success": False, "error": "يرجى إدخال وحفظ التوكن (Bearer Token) الخاص بحسابك في نادي الروايات أولاً."}
+            return {"success": False, "error": "يرجى إدخال وحفظ التوكن (Token) أولاً."}
 
-        # تنظيف معرف الرواية إن تم إدخاله كرابط
-        clean_novel_id = novel_id.strip()
-        if "rewayat.club/novel/" in clean_novel_id:
-            clean_novel_id = clean_novel_id.split("rewayat.club/novel/")[-1].split("/")[0].split("?")[0]
+        # استخراج الـ slug النظيف للرواية
+        clean_slug = novel_id.strip()
+        if "rewayat.club/novel/" in clean_slug:
+            clean_slug = clean_slug.split("rewayat.club/novel/")[-1].split("/")[0].split("?")[0]
+        clean_slug = clean_slug.rstrip("/")
 
-        payload = {
-            "novel_id": clean_novel_id,
-            "number": chapter_num,
-            "title": title.strip(),
-            "content": content.strip()
+        endpoint = f"{BASE_API_URL}/chapters/{clean_slug}/create/"
+
+        # تجهيز FormData مطابق للـ Nuxt implementation
+        form_data = {
+            "number": str(chapter_num),
+            "title": str(title).strip(),
+            "content": str(content).strip(),
         }
+        if schedule_date:
+            form_data["date"] = schedule_date
 
-        # نقاط نهاية محتملة للإضافة بحسب معمارية الـ API
-        post_endpoints = [
-            f"{BASE_API_URL}/api/chapter",
-            f"{BASE_API_URL}/api/chapters",
-            f"{BASE_API_URL}/api/novel/{clean_novel_id}/chapter",
-            f"{BASE_API_URL}/api/novel/{clean_novel_id}/chapters",
-            f"{BASE_API_URL}/api/dashboard/chapters"
-        ]
+        try:
+            # نمرر data=form_data بدون تحديد يدوي للـ boundary ليتولى requests تجهيز multipart/form-data
+            res = self.session.post(endpoint, data=form_data, timeout=25)
+            
+            if res.status_code in [200, 201]:
+                resp_json = res.json() if res.headers.get("content-type", "").startswith("application/json") else {}
+                actual_num = resp_json.get("number", chapter_num)
+                live_url = f"{BASE_WEB_URL}/novel/{clean_slug}/{actual_num}"
+                return {
+                    "success": True,
+                    "chapter_num": actual_num,
+                    "post_url": live_url,
+                    "message": f"تم نشر الفصل {actual_num} بنجاح على نادي الروايات!"
+                }
+            elif res.status_code == 400:
+                err_text = res.text
+                return {"success": False, "error": f"خطأ في بيانات النشر (400): {err_text[:250]}"}
+            elif res.status_code in [401, 403]:
+                return {"success": False, "error": f"غير مصرح بالنشر لهذه الرواية أو التوكن غير صالح ({res.status_code})."}
+            elif res.status_code == 429:
+                return {"success": False, "error": "لقد تخطيت العدد المسموح للطلبات (429 Rate Limit)."}
+            else:
+                return {"success": False, "error": f"خطأ غير متوقع من الموقع ({res.status_code}): {res.text[:200]}"}
 
-        last_error = ""
-        for ep in post_endpoints:
-            try:
-                res = self.session.post(ep, json=payload, timeout=15)
-                if res.status_code in [200, 201]:
-                    resp_data = res.json() if res.headers.get("content-type", "").startswith("application/json") else {}
-                    chapter_url = resp_data.get("url") or f"{BASE_WEB_URL}/novel/{clean_novel_id}/{chapter_num}"
-                    return {
-                        "success": True,
-                        "chapter_num": chapter_num,
-                        "post_url": chapter_url,
-                        "message": f"تم نشر الفصل {chapter_num} بنجاح!"
-                    }
-                elif res.status_code in [400, 401, 403]:
-                    last_error = f"خطأ ({res.status_code}): {res.text[:200]}"
-            except Exception as ex:
-                last_error = str(ex)
-                continue
-
-        return {
-            "success": False,
-            "error": last_error or "تعذر العثور على نقطة النشر أو الرد برمز غير متوقع. تأكد من صحة التوكن ومعرف الرواية."
-        }
+        except Exception as e:
+            return {"success": False, "error": f"استثناء أثناء محاولة النشر: {str(e)}"}
