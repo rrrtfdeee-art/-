@@ -263,6 +263,21 @@ def _strip_blogger_html(html: str) -> str:
     # حذف أكواد الـ CSS الهاربة أو الشاذة إن وجدت مثل { color: ... }
     text = re.sub(r'\{[^{}]*(?:color|font|margin|padding|background|border)[^{}]*\}', '', text, flags=re.IGNORECASE)
 
+    # 🧹 تطهير وسوم المنظومة والـ BBCode الخاصة بـ (System, Cultivation, Doc, Letter, Note, Tip, Log)
+    # نحتفظ بالنص الداخلي ونحذف أقواس الوسوم المشوهة مثل:
+    # [system]...[/system] أو [cultivation]...[/cultivation] أو [doc seal="..."]...[/doc]
+    system_tags = [
+        "system", "cultivation", "doc", "letter", "note", "tip", "log", "rift", "status", "panel"
+    ]
+    for tag in system_tags:
+        # حذف وسم الفتح حتى لو احتوى على معلمات مثل [doc seal="..."] أو [system red]
+        text = re.sub(rf'\[{tag}[^\]]*\]', '\n【 ', text, flags=re.IGNORECASE)
+        # حذف وسم الإغلاق [/system]
+        text = re.sub(rf'\[/{tag}\]', ' 】\n', text, flags=re.IGNORECASE)
+
+    # تنظيف أي وسوم مربعة غير مغلقة شاذة مثل [color] أو [b] أو [/b]
+    text = re.sub(r'\[/?(?:b|i|u|color|size|font|center|quote|align)[^\]]*\]', '', text, flags=re.IGNORECASE)
+
     # توحيد الأسطر الفارغة وتنظيف الفراغات
     lines = [l.strip() for l in text.splitlines()]
     clean_lines = []
