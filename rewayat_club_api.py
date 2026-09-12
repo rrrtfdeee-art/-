@@ -79,11 +79,19 @@ class RewayatClubClient:
 
         endpoint = f"{BASE_API_URL}/chapters/{clean_slug}/create/"
 
+        # التأكد من تغليف كل فقرة بـ <p>...</p> لضمان عرض الفقرات منفصلة ومريحة للقراءة في واجهة نادي الروايات
+        raw_text = str(content).strip()
+        if not raw_text.startswith("<p>"):
+            paras = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
+            formatted_content = "\n".join([f"<p>\n{p}\n</p>" for p in paras])
+        else:
+            formatted_content = raw_text
+
         # تجهيز FormData مطابق للـ Nuxt implementation
         form_data = {
             "number": str(chapter_num),
             "title": str(title).strip(),
-            "content": str(content).strip(),
+            "content": formatted_content,
         }
         if schedule_date:
             form_data["date"] = schedule_date

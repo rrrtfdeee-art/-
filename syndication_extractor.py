@@ -243,6 +243,9 @@ def _strip_blogger_html(html: str) -> str:
     # حذف الأنماط الخاصة ببلوجر
     for pat in _BLOGGER_STRIP_PATTERNS:
         text = re.sub(pat, " ", text, flags=re.IGNORECASE | re.DOTALL)
+
+    # حذف صناديق الإعلانات الخاصة بـ Mondiad أو أي إعلانات ممولة
+    text = re.sub(r'<div[^>]*class=["\'][^"\']*(?:sponsored|banner-ad|ad-box)[^"\']*["\'][^>]*>.*?</div>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
     
     # حذف وسوم script و style و SVG و CSS تماماً بمحتواها
     text = re.sub(r'<script[^>]*>.*?</script>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
@@ -280,18 +283,123 @@ def _strip_blogger_html(html: str) -> str:
 
     # توحيد الأسطر الفارغة وتنظيف الفراغات
     lines = [l.strip() for l in text.splitlines()]
-    clean_lines = []
-    prev_empty = False
-    for line in lines:
-        if not line:
-            if not prev_empty:
-                clean_lines.append("")
-            prev_empty = True
-        else:
-            clean_lines.append(line)
-            prev_empty = False
+    clean_lines = [l for l in lines if l]
+    return "\n\n".join(clean_lines).strip()
+
+
+def format_standard_chapter_title(raw_title: str, chapter_num: int, novel_name: str = "") -> str:
+    """
+    توحيد صيغة عنوان الفصل بدقة متناهية لتصبح دائماً:
+    'الفصل {chapter_num}: {العنوان_الفرعي}'
+    أو 'الفصل {chapter_num}' إذا لم يتوفر عنوان فرعي.
+    ينظف تكرار اسم الرواية وأي فواصل شاذة.
+    """
+    t = raw_title.strip()
+    # 1. إزالة اسم الرواية إن وجد في البداية
+    if novel_name:
+        t = re.sub(r'^\s*' + re.escape(novel_name.strip()) + r'\s*[:\-—–|]*\s*', '', t, flags=re.IGNORECASE)
     
-    return "\n".join(clean_lines).strip()
+    # تنظيف أي تكرار لاسم الرواية الإنجليزية أو الفواصل
+    t = re.sub(r'^[A-Za-z\s\']+\s*[:\-—–|]+\s*', '', t).strip()
+
+    # 2. استخراج العنوان الفرعي
+    m = re.search(r'(?:الفصل|chapter)\s*' + str(chapter_num) + r'\s*[:\-—–|]+\s*(.+)', t, re.IGNORECASE)
+    if m:
+        sub = m.group(1).strip()
+        sub = re.sub(r'^[:\-—–|\s]+', '', sub).strip()
+        if sub:
+            return f"الفصل {chapter_num}: {sub}"
+        return f"الفصل {chapter_num}"
+    
+    m = re.search(r'(?:الفصل|chapter)\s*' + str(chapter_num) + r'\s+(.+)', t, re.IGNORECASE)
+    if m:
+        sub = m.group(1).strip()
+        sub = re.sub(r'^[:\-—–|\s]+', '', sub).strip()
+        if sub:
+            return f"الفصل {chapter_num}: {sub}"
+        return f"الفصل {chapter_num}"
+
+    # إذا كان فقط رقم أو كلمة الفصل/Chapter
+    m_num_only = re.search(r'^(?:.*(?:الفصل|chapter)\s*)?' + str(chapter_num) + r'\s*$', t, re.IGNORECASE)
+    if m_num_only:
+        return f"الفصل {chapter_num}"
+
+    # إذا كان هناك فاصل
+    if any(sep in t for sep in [' - ', ' — ', ' : ', ':']):
+        parts = re.split(r'[:\-—–|]', t)
+        last_part = parts[-1].strip()
+        if last_part and not re.search(r'^\d+$', last_part):
+            return f"الفصل {chapter_num}: {last_part}"
+
+    # تنظيف البقايا
+    clean = re.sub(r'^(?:الفصل|chapter)\s*\d*\s*[:\-—–\s]*', '', t, flags=re.IGNORECASE).strip()
+    if clean and clean != str(chapter_num):
+        return f"الفصل {chapter_num}: {clean}"
+    return f"الفصل {chapter_num}"
+
+
+def clean_chapter_paragraphs(raw_text: str, novel_name: str = "", chapter_num: int = 0) -> str:
+    """
+    تنسيق وتنظيف فقرات الفصل:
+    1. حذف تكرار اسم الرواية ورقم الفصل والإعلانات من صدر الفصل.
+    2. تنظيم الأسطر كفقرات واضحة ومستقلة تفصل بينها أسطر فارغة.
+    3. تطهير وسوم المنظومة والـ HTML.
+    """
+    text = raw_text.strip()
+    
+    # فك تشفير رموز HTML
+    import html as _html
+    text = _html.unescape(text)
+
+    # تنظيف وسوم النظام
+    system_tags = ["system", "cultivation", "doc", "letter", "note", "tip", "log", "rift", "status", "panel"]
+    for tag in system_tags:
+        text = re.sub(rf'\[{tag}[^\]]*\]', '\n【 ', text, flags=re.IGNORECASE)
+        text = re.sub(rf'\[/{tag}\]', ' 】\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'\[/?(?:b|i|u|color|size|font|center|quote|align)[^\]]*\]', '', text, flags=re.IGNORECASE)
+
+    # حذف أي وسوم html متبقية
+    text = re.sub(r'<[^>]+>', '', text)
+
+    # تقسيم إلى فقرات أولية
+    raw_lines = [l.strip() for l in text.splitlines()]
+    paras = [l for l in raw_lines if l]
+
+    novel_clean = novel_name.strip().lower()
+
+    # تنظيف مقدمة المحتوى من الترويسات والإعلانات
+    while paras:
+        first = paras[0]
+        first_low = first.lower()
+
+        # إعلانات أو فواصل
+        if "إعلان مُموَّل" in first or "mondiad" in first_low or first in ["📢", "---", "***", "___"]:
+            paras.pop(0)
+            continue
+
+        # اسم الرواية منفرداً
+        if novel_clean and (first_low == novel_clean or first_low.startswith(novel_clean)):
+            paras.pop(0)
+            continue
+
+        # سطر الفصل / العنوان المكرر في بداية المحتوى
+        if chapter_num > 0 and (
+            str(chapter_num) in first and any(k in first_low for k in ["فصل", "chapter", novel_clean])
+        ) or first.startswith("الفصل") or first_low.startswith("chapter"):
+            paras.pop(0)
+            continue
+
+        break
+
+    # تنظيف ذيل المحتوى من أزرار التنقل الزائدة
+    while paras:
+        last = paras[-1].lower()
+        if any(nav in last for nav in ["الفصل التالي", "الفصل السابق", "chapter next", "chapter prev"]):
+            paras.pop()
+            continue
+        break
+
+    return "\n\n".join(paras).strip()
 
 
 # ─────────────────────────────────────────────────────────
@@ -307,8 +415,9 @@ def prepare_chapter_for_publishing(
     """
     الدالة الرئيسية التي تجمع:
       1. سحب الفصل (translate_sheet أولاً، ثم published_sheet، ثم خطأ)
-      2. تنظيف المتن
-      3. إضافة الخاتمة التحفيزية
+      2. تنظيف المتن وتنسيق الفقرات بدقة
+      3. توحيد صيغة العنوان لتكون حصراً 'الفصل رقمه : العنوان'
+      4. إضافة الخاتمة التحفيزية
 
     تُعيد:
       {
@@ -343,16 +452,19 @@ def prepare_chapter_for_publishing(
         result["error"] = f"تعذّر إيجاد الفصل {chapter_num} لرواية '{novel_name}' في أي من الجداول المتاحة."
         return result
 
-    # === 3. تجهيز المتن ===
-    content_clean = data["content"].strip()
+    # === 3. توحيد صيغة العنوان بدقة: الفصل رقمه : العنوان ===
+    title_clean = format_standard_chapter_title(data["title"], chapter_num, novel_name)
+
+    # === 4. تنظيف وتنسيق المتن وحذف الترويسات والإعلانات وفصل الفقرات ===
+    content_clean = clean_chapter_paragraphs(data["content"], novel_name, chapter_num)
     
-    # === 4. دمج الخاتمة التحفيزية ===
+    # === 5. دمج الخاتمة التحفيزية ===
     cta = _build_cta(custom_cta, novel_name, blogger_url)
     content_for_publish = f"{content_clean}\n\n{cta}" if cta else content_clean
 
     result.update({
         "success": True,
-        "title": data["title"],
+        "title": title_clean,
         "content_clean": content_clean,
         "content_for_publish": content_for_publish,
         "source": data["source"]
