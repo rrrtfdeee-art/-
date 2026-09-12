@@ -104,11 +104,9 @@ function doPost(e) {
       var sourceUrl = requestData.source_url || requestData.sourceUrl || "";
       var pTitle = String(requestData.title || "").trim();
 
-      // ضمان احتواء المحتوى على ترويسة الفصل إذا لم تكن موجودة
-      if (rawContent && chNum && !rawContent.startsWith("الفصل " + chNum) && !rawContent.startsWith("الفصل " + Math.floor(chNum))) {
-        var cleanTitle = pTitle.replace(/^(?:الفصل|chapter|chap|ch\.?|第)\s*\d+[\s:ـ\-章.、]*/i, "").replace(/^\d+[\s:ـ\-.]+ */, "").trim();
-        var header = cleanTitle ? ("الفصل " + chNum + " : " + cleanTitle) : ("الفصل " + chNum);
-        rawContent = header + "\n\n" + rawContent;
+      // ضمان احتواء المحتوى على عنوان الفصل الأصلي إذا لم يكن موجوداً
+      if (rawContent && pTitle && !rawContent.startsWith(pTitle)) {
+        rawContent = pTitle + "\n\n" + rawContent;
       }
       
       var resInsert = insertOrUpdateChapterInSheet(rawSsId, "الورقة1", novelName, chNum, [chNum, rawContent, novelName, createdAt, sourceUrl]);

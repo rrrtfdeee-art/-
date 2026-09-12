@@ -125,49 +125,42 @@ def init_db(db_path: str = DB_FILE_PATH):
 
 def format_chapter_with_header(chapter_number: int, title: Optional[str], content: str) -> str:
     """
-    تنسيق رأس ومحتوى الفصل بدقة وفق القاعدة الصارمة:
-    الفصل رقمه : العنوان ثم المحتوى
-    مع تنظيف البوادئ المكررة (مثل Chapter 101: أو 第101章 أو 101:) ومنع تكرار العنوان في السطر الأول.
+    وضع عنوان الفصل المستخرج من المصدر في بداية نص المحتوى بلغته الأصلية،
+    مفصولاً بسطرين فارغين عن المتن، دون فرض أي بادئة عربية على النصوص الأجنبية.
     """
     raw_title = (title or "").strip()
-
-    # تنظيف بوادئ أرقام الفصول المتكررة بلغات متعددة (العربية، الإنجليزية، الصينية)
-    clean_sub = re.sub(
-        r'^(?:الفصل|chapter|chap|ch\.?|第)\s*\d+[\s:ـ\-章.、]*',
-        '',
-        raw_title,
-        flags=re.IGNORECASE
-    ).strip()
-
-    # إزالة الأرقام المنفصلة التي تسبق العنوان مع النقطتين أو الشارحة مثل "101: Title"
-    clean_sub = re.sub(r'^\d+[\s:ـ\-.]+ *', '', clean_sub).strip()
-
-    final_title = clean_sub if clean_sub else raw_title
-    # إذا كان العنوان المتبقي فارغاً أو مجرد رقم مكرر أو كلمة فصل ورقم
-    if not final_title or re.match(r'^\d+$', final_title) or re.match(r'^(?:chapter|الفصل|chap|ch\.?)\s*\d+$', final_title, re.IGNORECASE):
-        header = f"الفصل {chapter_number}"
-    else:
-        header = f"الفصل {chapter_number} : {final_title}"
-
     clean_body = (content or "").strip()
-    if not clean_body:
-        return header
 
-    # إذا كان المحتوى يبدأ بالفعل بهذا الرأس بدقة، نعيده كما هو دون تكرار
-    if clean_body.startswith(header):
+    # تنظيف أي بادئة عربية مصطنعة أضيفت سابقاً إذا كان العنوان الأصلي أجنبياً
+    if raw_title and not re.search(r'[\u0600-\u06FF]', raw_title):
+        clean_body = re.sub(r'^الفصل\s*\d+[\s:ـ\-]*.*?\n+', '', clean_body).strip()
+
+    if not raw_title:
+        # تحديد لغة المتن لاختيار بديل مناسب
+        if re.search(r'[a-zA-Z]', clean_body):
+            raw_title = f"Chapter {chapter_number}"
+        elif re.search(r'[\u4e00-\u9fff]', clean_body):
+            raw_title = f"第{chapter_number}章"
+        else:
+            raw_title = f"الفصل {chapter_number}"
+
+    if not clean_body:
+        return raw_title
+
+    # إذا كان المتن يبدأ بالفعل بالعنوان الأصلي
+    if clean_body.startswith(raw_title):
         return clean_body
 
-    # التحقق مما إذا كان السطر الأول يحتوي على عنوان قديم مكرر لهذا الفصل لتنظيفه
     lines = clean_body.split('\n')
     first_line = lines[0].strip()
+    if first_line.lower() == raw_title.lower():
+        return clean_body
 
-    pattern = r'^(?:الفصل|chapter|chap|ch\.?|第)\s*' + str(chapter_number) + r'(?:[\s:ـ\-章.、].*)?$'
-    if re.match(pattern, first_line, re.IGNORECASE):
-        clean_body = "\n".join(lines[1:]).strip()
-    elif final_title and first_line.lower() == final_title.lower():
+    # إذا كان السطر الأول تكراراً مشابهاً للعنوان
+    if re.match(r'^(?:chapter|chap|ch\.?|第|الفصل)\s*' + str(chapter_number) + r'\b', first_line, re.IGNORECASE):
         clean_body = "\n".join(lines[1:]).strip()
 
-    return f"{header}\n\n{clean_body}"
+    return f"{raw_title}\n\n{clean_body}"
 
 
 # ==============================================================================
