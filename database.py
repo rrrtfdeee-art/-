@@ -932,6 +932,92 @@ def get_truncated_chapters(
         return [dict(r) for r in cursor.fetchall()]
 
 
+def sync_novel_from_sheet(
+    novel_id: int,
+    spreadsheet_id: str = "1v1V4_rQukDs3oCe8Z4Izvni3uCx91iKmSVNOm4A3mH0",
+    db_path: str = DB_FILE_PATH
+) -> Dict[str, Any]:
+    """
+    مزامنة واستيراد فصول شيت الأرشيف (1v1V4) مباشرة إلى قاعدة البيانات المحلية SQLite:
+    - يسحب كافة الفصول الموجودة في الشيت.
+    - يحدث محتوى الفصول المسجلة ويحول حالتها إلى 'downloaded'.
+    - يزيل وهم الفجوات (مثل الفصول 101-200) ويجعل قاعدة البيانات المحلية متطابقة 100% مع شيت الأرشيف.
+    """
+    import csv
+    import io
+    import requests
+
+    csv_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid=0"
+    resp = requests.get(csv_url, timeout=25)
+    resp.encoding = "utf-8"
+    if resp.status_code != 200:
+        return {"success": False, "error": f"تعذر الاتصال بجدول الشيت (رمز الاستجابة: {resp.status_code})"}
+
+    reader = csv.reader(io.StringIO(resp.text))
+    try:
+        header = next(reader)
+    except StopIteration:
+        return {"success": False, "error": "الجدول فارغ"}
+
+    novel_row = get_novel_by_id(novel_id, db_path=db_path)
+    target_novel_name = novel_row["title"].strip().lower() if novel_row else ""
+
+    synced_count = 0
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        for idx, row in enumerate(reader, start=2):
+            if len(row) < 2 or not row[0] or not row[1]:
+                continue
+            
+            row_novel = row[2].strip().lower() if len(row) > 2 else ""
+            if target_novel_name and row_novel:
+                if target_novel_name not in row_novel and row_novel not in target_novel_name:
+                    continue
+
+            ch_raw = row[0].strip()
+            num_match = re.search(r"(\d+(?:\.\d+)?)", ch_raw)
+            if not num_match:
+                continue
+            ch_num = int(float(num_match.group(1)))
+            raw_content = row[1].strip()
+            if len(raw_content) < 50:
+                continue
+
+            created_at = row[3].strip() if len(row) > 3 and row[3].strip() else now_str
+            source_url = row[4].strip() if len(row) > 4 else ""
+
+            first_line = raw_content.split("\n")[0].strip()
+            ch_title = first_line if ("الفصل" in first_line or "Chapter" in first_line) else f"الفصل {ch_num}"
+
+            cursor.execute("""
+                INSERT INTO chapters (novel_id, chapter_number, url, title, content, status, downloaded_at)
+                VALUES (?, ?, ?, ?, ?, 'downloaded', ?)
+                ON CONFLICT(novel_id, chapter_number) DO UPDATE SET
+                    content = CASE WHEN length(excluded.content) >= length(coalesce(chapters.content, '')) THEN excluded.content ELSE chapters.content END,
+                    status = 'downloaded',
+                    title = CASE WHEN chapters.title IS NOT NULL AND chapters.title != '' AND chapters.title NOT LIKE 'الفصل %' THEN chapters.title ELSE excluded.title END,
+                    url = CASE WHEN excluded.url != '' THEN excluded.url ELSE chapters.url END,
+                    downloaded_at = coalesce(chapters.downloaded_at, excluded.downloaded_at);
+            """, (novel_id, ch_num, source_url, ch_title, raw_content, created_at))
+
+            synced_count += 1
+
+        conn.commit()
+
+    stats = get_novel_stats(novel_id, db_path=db_path)
+    gaps_info = get_novel_gaps(novel_id, db_path=db_path)
+
+    return {
+        "success": True,
+        "synced_count": synced_count,
+        "total_downloaded": stats["downloaded"],
+        "remaining_gaps": gaps_info["missing_count"],
+        "message": f"تمت مزامنة {synced_count} فصلاً بنجاح من شيت الأرشيف (1v1V4) إلى قاعدة البيانات المحلية!"
+    }
+
+
 # تهيئة الجداول تلقائياً عند استيراد الوحدة
 try:
     init_db()
