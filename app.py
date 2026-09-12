@@ -58,7 +58,9 @@ from scraper_engine import (
     check_cdp_available,
     calculate_missing_gaps,
     trigger_cloud_sheet_sorting,
-    compare_and_heal_chapter
+    compare_and_heal_chapter,
+    scan_sheet_extreme_outliers,
+    heal_sheet_extreme_outliers
 )
 from media_engine import (
     get_video_info,
@@ -1035,7 +1037,14 @@ if st.session_state.active_novel:
 st.markdown('<div class="scraper-card">', unsafe_allow_html=True)
 st.subheader("3️⃣ سجل الأحداث المباشر & التصدير النهائي")
 
-tab_logs, tab_export, tab_preview, tab_media, tab_nsw = st.tabs(["📟 Live Console Log", "📥 تصدير الرواية .TXT", "⚖️ مقارنة الفصول واستبدال المجتزأ", "🎬 محمل وتجزئة الوسائط", "🩹 استصلاح فصول المدونة"])
+tab_logs, tab_export, tab_outliers, tab_preview, tab_media, tab_nsw = st.tabs([
+    "📟 Live Console Log",
+    "📥 تصدير الرواية .TXT",
+    "📊 كاشف القيم المتطرفة للشيت (1v1V4)",
+    "⚖️ مقارنة الفصول واستبدال المجتزأ",
+    "🎬 محمل وتجزئة الوسائط",
+    "🩹 استصلاح فصول المدونة"
+])
 
 with tab_logs:
     logs_text = "\n".join(st.session_state.logs[-18:])
@@ -1078,6 +1087,118 @@ with tab_export:
             st.info("لا توجد فصول تم تنزيلها بعد في هذا النطاق. ابدأ السحب أولاً!")
     else:
         st.info("قم باختيار رواية وسحب فصولها لتتمكن من تصدير الملف النهائي.")
+
+with tab_outliers:
+    st.markdown("### 📊 المحلل الإحصائي للفصول وكاشف القيم المتطرفة الدنيا (شيت الأرشيف 1v1V4)")
+    st.caption("مقارنة تلقائية ذكية تعتمد على حساب متوسط عدد أحرف الفصول واكتشاف القيم المتطرفة الدنيا (Lower Extreme Outliers) وفق معادلة المخطط الصندوقي (IQR) ونسبة الانحراف، مع إمكانية التعديل والاستبدال المباشر لنفس العمود B داخل شيت الأرشيف.")
+
+    cur_novel_name = ""
+    if st.session_state.active_novel:
+        cur_novel_name = st.session_state.active_novel.get("title", "")
+    if not cur_novel_name:
+        cur_novel_name = "نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا"
+
+    col_out_nov, col_out_sid = st.columns([2, 2])
+    with col_out_nov:
+        target_outlier_novel = st.text_input("اسم الرواية للفحص في الشيت:", value=cur_novel_name, key="outlier_nov_name_inp")
+    with col_out_sid:
+        target_outlier_ssid = st.text_input("معرف شيت الأرشيف (Spreadsheet ID):", value="1v1V4_rQukDs3oCe8Z4Izvni3uCx91iKmSVNOm4A3mH0", key="outlier_ssid_inp")
+
+    col_btn_scan_out, col_btn_heal_out = st.columns([2, 2])
+    with col_btn_scan_out:
+        scan_outliers_clicked = st.button("🔍 فحص وتحليل القيم المتطرفة في الشيت", type="primary", use_container_width=True, key="btn_scan_sheet_outliers")
+    with col_btn_heal_out:
+        heal_outliers_clicked = st.button("⚡ تعديل واستبدال مباشر لكافة الفصول المتطرفة (العمود B)", type="secondary", use_container_width=True, key="btn_heal_sheet_outliers")
+
+    if scan_outliers_clicked:
+        with st.spinner("جاري تنزيل شيت الأرشيف وحساب المتوسط الإحصائي والربيعيات..."):
+            out_res = scan_sheet_extreme_outliers(novel_name=target_outlier_novel, spreadsheet_id=target_outlier_ssid)
+            st.session_state["last_outlier_scan"] = out_res
+
+    last_scan = st.session_state.get("last_outlier_scan")
+    if last_scan:
+        if not last_scan.get("success"):
+            st.error(last_scan.get("error") or last_scan.get("message") or "حدث خطأ أثناء فحص الشيت.")
+        else:
+            tot_chaps = last_scan.get("total_chapters", 0)
+            mean_val = last_scan.get("mean", 0)
+            med_val = last_scan.get("median", 0)
+            thresh_val = last_scan.get("threshold", 0)
+            out_list = last_scan.get("outliers", [])
+            out_cnt = len(out_list)
+
+            st.markdown("---")
+            m_c1, m_c2, m_c3, m_c4, m_c5 = st.columns(5)
+            m_c1.metric("إجمالي الفصول بالشيت", f"{tot_chaps:,}")
+            m_c2.metric("المتوسط الحسابي (Mean)", f"{mean_val:,.1f} حرف")
+            m_c3.metric("الوسيط (Median)", f"{med_val:,} حرف")
+            m_c4.metric("عتبة القيمة المتطرفة", f"{thresh_val:,} حرف")
+            m_c5.metric("الفصول المتطرفة المرصودة", f"{out_cnt:,}", delta=f"{round((out_cnt/max(1, tot_chaps))*100, 1)}%", delta_color="inverse")
+
+            st.markdown(f"""
+            <div style="background-color:#0f172a; border:1px solid #334155; border-radius:10px; padding:12px 18px; margin: 12px 0;">
+                <span style="color:#38bdf8; font-weight:bold;">📐 المعادلة الإحصائية المطبقة:</span>
+                <span style="color:#cbd5e1; font-size:0.92rem;">
+                    الحد المتطرف = <code>min(Mean × 55%, Q1 - 2.5 × IQR)</code> مقيدة بنطاق الأمان [2,500 إلى 5,500 حرف].
+                    <br>الربيع الأول (Q1): <b>{last_scan.get('q1')}</b> | الربيع الثالث (Q3): <b>{last_scan.get('q3')}</b> | المدى الربيعي (IQR): <b>{last_scan.get('iqr')}</b>
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if out_cnt == 0:
+                st.success("🎉 ممتاز! لا توجد أي فصول تمثل قيمة متطرفة دنيا في الشيت. كافة الفصول مكتملة وتتجاوز عتبة الأمان.")
+            else:
+                st.warning(f"⚠️ تم اكتشاف **{out_cnt}** فصلاً يقل حجمها عن حد القيمة المتطرفة ({thresh_val:,} حرفاً) وتحتاج إلى استبدال المحتوى في العمود B:")
+                
+                table_rows = []
+                for o in out_list:
+                    table_rows.append({
+                        "رقم الفصل": o.get("chapter_num"),
+                        "رقم السطر بالشيت": o.get("row_number"),
+                        "طول المحتوى (العمود B)": f"{o.get('content_length'):,} حرفاً",
+                        "العجز عن العتبة": f"-{thresh_val - o.get('content_length'):,} حرفاً",
+                        "النسبة من المتوسط": f"{o.get('ratio_to_mean')}%",
+                        "معاينة البداية": o.get("content_preview")
+                    })
+                st.dataframe(table_rows, use_container_width=True)
+
+    if heal_outliers_clicked:
+        st.markdown("---")
+        st.info("🚀 جاري إطلاق المعالجة والاستبدال المباشر لكافة الفصول المتطرفة في الشيت...")
+        prog_bar = st.progress(0.0)
+        status_txt = st.empty()
+
+        def _streamlit_progress(idx, total, message):
+            pct = min(1.0, idx / max(1, total))
+            prog_bar.progress(pct)
+            status_txt.markdown(f"**[{idx}/{total}]** {message}")
+
+        with st.spinner("جاري سحب المحتوى الأصلي للفصول المتطرفة وتحديث نفس العمود B في الشيت..."):
+            heal_result = heal_sheet_extreme_outliers(
+                novel_name=target_outlier_novel,
+                spreadsheet_id=target_outlier_ssid,
+                cdp_url=cdp_param,
+                progress_callback=_streamlit_progress
+            )
+
+        if heal_result.get("success"):
+            rep_cnt = heal_result.get("repaired_count", 0)
+            scanned_tot = heal_result.get("scanned_outliers", 0)
+            st.success(f"🎉 {heal_result.get('message')}")
+            
+            det_rows = []
+            for d in heal_result.get("details", []):
+                det_rows.append({
+                    "رقم الفصل": d.get("chapter_number"),
+                    "الصف في الشيت": d.get("row_number"),
+                    "الحجم السابق": f"{d.get('old_length'):,} حرفاً",
+                    "الحجم الجديد": f"{d.get('new_length'):,} حرفاً",
+                    "الحالة": "✅ تم الاستبدال بالعمود B" if d.get("replaced") else "تم التخطي"
+                })
+            st.dataframe(det_rows, use_container_width=True)
+            st.session_state["last_outlier_scan"] = None
+        else:
+            st.error(heal_result.get("error") or heal_result.get("message") or "تعذر إكمال عملية الإصلاح.")
 
 with tab_preview:
     st.markdown("#### 📖 قارئ ومقارن الفصول الحية (Chapter Inspector & Comparator)")

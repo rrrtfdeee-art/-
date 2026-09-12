@@ -804,14 +804,121 @@ def compare_and_replace_chapter_content(
         return comp
 
 
+def calculate_novel_length_stats(novel_id: int, db_path: str = DB_FILE_PATH) -> Dict[str, Any]:
+    """
+    حساب الإحصائيات الرياضية المتقدمة لأطوال فصول الرواية واكتشاف القيم المتطرفة الدنيا:
+    - المتوسط الحسابي (Mean)
+    - الانحراف المعياري (Std)
+    - الوسيط (Median) والربيعيات (Q1, Q3, IQR)
+    - حد القيمة المتطرفة الدنيا (Lower Extreme Outlier Threshold)
+    """
+    import math
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT length(content) as clen
+            FROM chapters
+            WHERE novel_id = ? 
+              AND status IN ('downloaded', 'streamed')
+              AND content IS NOT NULL 
+              AND length(trim(content)) > 0
+            ORDER BY clen ASC;
+        """, (novel_id,))
+        rows = cursor.fetchall()
+
+    lens = [r["clen"] for r in rows if r["clen"]]
+    n = len(lens)
+    if n < 5:
+        return {
+            "count": n,
+            "mean": 8000.0,
+            "std": 1000.0,
+            "median": 8000,
+            "q1": 7000,
+            "q3": 9000,
+            "iqr": 2000,
+            "lower_extreme_threshold": 3000,
+            "is_dynamic": False
+        }
+
+    mean = sum(lens) / n
+    variance = sum((x - mean) ** 2 for x in lens) / n
+    std = math.sqrt(variance)
+    median = lens[n // 2]
+    q1 = lens[n // 4]
+    q3 = lens[(3 * n) // 4]
+    iqr = max(1, q3 - q1)
+
+    # حساب حد القيمة المتطرفة الدنيا ديناميكياً:
+    # يجمع بين قاعدة المخطط الصندوقي (Q1 - 2.5 * IQR) ونسبة 55% من المتوسط الحسابي
+    box_threshold = q1 - 2.5 * iqr
+    ratio_threshold = mean * 0.55
+    raw_threshold = min(ratio_threshold, box_threshold) if box_threshold > 0 else ratio_threshold
+    lower_threshold = int(max(2500, min(5500, raw_threshold)))
+
+    return {
+        "count": n,
+        "mean": round(mean, 1),
+        "std": round(std, 1),
+        "median": median,
+        "q1": q1,
+        "q3": q3,
+        "iqr": iqr,
+        "lower_extreme_threshold": lower_threshold,
+        "is_dynamic": True
+    }
+
+
+def get_extreme_outlier_chapters(
+    novel_id: int,
+    custom_threshold: Optional[int] = None,
+    db_path: str = DB_FILE_PATH
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    استخراج كافة الفصول التي تمثل قيمة متطرفة دنيا (Lower Extreme Outliers)
+    مقارنة بمتوسط أطوال فصول الرواية.
+    """
+    stats = calculate_novel_length_stats(novel_id, db_path=db_path)
+    threshold = custom_threshold if custom_threshold is not None else stats["lower_extreme_threshold"]
+
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, novel_id, chapter_number, title, url, status, 
+                   length(content) as content_len, downloaded_at
+            FROM chapters
+            WHERE novel_id = ? 
+              AND status IN ('downloaded', 'streamed')
+              AND (content IS NULL OR length(trim(content)) = 0 OR length(content) < ?)
+            ORDER BY chapter_number ASC;
+        """, (novel_id, threshold))
+        rows = [dict(r) for r in cursor.fetchall()]
+
+    for r in rows:
+        clen = r.get("content_len") or 0
+        r["is_extreme_outlier"] = clen < threshold
+        r["threshold"] = threshold
+        r["mean_length"] = stats["mean"]
+        r["ratio_to_mean"] = round((clen / stats["mean"]) * 100, 1) if stats["mean"] > 0 else 0.0
+
+    return rows, stats
+
+
 def get_truncated_chapters(
     novel_id: int,
-    threshold_length: int = 3000,
+    threshold_length: Optional[int] = None,
     db_path: str = DB_FILE_PATH
 ) -> List[Dict[str, Any]]:
     """
-    استخراج كافة الفصول المشتبه باقتطاعها أو صغر حجمها غير المعتاد لرواية معينة.
+    استخراج كافة الفصول المشتبه باقتطاعها أو صغر حجمها غير المعتاد لرواية معينة،
+    مع اعتماد الحد الإحصائي الديناميكي تلقائياً في حال عدم تحديد حد ثابت.
     """
+    if threshold_length is None:
+        stats = calculate_novel_length_stats(novel_id, db_path=db_path)
+        effective_threshold = stats["lower_extreme_threshold"]
+    else:
+        effective_threshold = threshold_length
+
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -821,7 +928,7 @@ def get_truncated_chapters(
               AND status IN ('downloaded', 'streamed')
               AND (content IS NULL OR length(content) < ?)
             ORDER BY chapter_number ASC;
-        """, (novel_id, threshold_length))
+        """, (novel_id, effective_threshold))
         return [dict(r) for r in cursor.fetchall()]
 
 

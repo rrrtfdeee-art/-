@@ -131,6 +131,36 @@ function doPost(e) {
       return createJsonResponse({ status: "success", gaps: gapsReport }, 200);
     }
 
+    // =========================================================================
+    // 7. كاشف القيم المتطرفة الدنيا الإحصائي لشيت الأرشيف (العمود B)
+    // =========================================================================
+    if (action === "detectSheetExtremeOutliers" || action === "detectSheetOutliers") {
+      var nName = requestData.novel_name || requestData.novelName || "";
+      var ssId = requestData.spreadsheetId || RAW_ARCHIVE_SPREADSHEET_ID;
+      var sName = requestData.sheet_name || requestData.sheetName || "الورقة1";
+      var outliersReport = detectSheetExtremeOutliers(nName, ssId, sName);
+      return createJsonResponse({ status: "success", report: outliersReport }, 200);
+    }
+
+    // =========================================================================
+    // 8. تعديل واستبدال مباشر لنفس خلية المحتوى (العمود B) في شيت الأرشيف
+    // =========================================================================
+    if (action === "updateChapterContentInPlace" || action === "update_chapter_content") {
+      var ssId = requestData.spreadsheetId || RAW_ARCHIVE_SPREADSHEET_ID;
+      var sName = requestData.sheet_name || requestData.sheetName || "الورقة1";
+      var nName = requestData.novel_name || requestData.novelName || "عام";
+      var chNum = requestData.chapter_number || requestData.chapterNumber || 0;
+      var newContent = requestData.content || requestData.rawText || "";
+      var pTitle = String(requestData.title || "").trim();
+
+      if (newContent && pTitle && !newContent.startsWith(pTitle)) {
+        newContent = pTitle + "\n\n" + newContent;
+      }
+
+      var resUpdate = updateChapterContentInPlace(ssId, sName, nName, chNum, newContent);
+      return createJsonResponse({ status: "success", result: resUpdate }, 200);
+    }
+
     return ContentService.createTextOutput("OK");
 
   } catch (err) {
@@ -787,4 +817,205 @@ function detectArchiveGapsReport(novelName, totalChapters) {
     total_missing: missingNums.length
   };
 }
+
+
+// ==============================================================================
+// 5. كاشف القيم المتطرفة الدنيا الإحصائي والتعديل المباشر لشيت الأرشيف (العمود B)
+// ==============================================================================
+
+/**
+ * كاشف القيم المتطرفة الدنيا الإحصائي لفصول شيت الأرشيف (العمود B):
+ * يحسب المتوسط الحسابي، الوسيط، الربيعيات (Q1, Q3, IQR)، والحد الأدنى المتطرف
+ */
+function detectSheetExtremeOutliers(novelName, spreadsheetId, sheetName) {
+  var ssId = spreadsheetId || RAW_ARCHIVE_SPREADSHEET_ID;
+  var ss = SpreadsheetApp.openById(ssId);
+  var sheet = sheetName ? (ss.getSheetByName(sheetName) || ss.getSheets()[0]) : ss.getSheets()[0];
+  var lastRow = sheet.getLastRow();
+
+  if (lastRow <= 1) {
+    return { error: "الجدول فارغ أو لا يحتوي على فصول", total_chapters: 0, outliers: [] };
+  }
+
+  var numCols = sheet.getLastColumn();
+  var headers = sheet.getRange(1, 1, 1, numCols).getValues()[0];
+  var colCfg = detectSheetColumns(sheet, headers);
+  var allData = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
+
+  var cleanTarget = String(novelName || "").trim().toLowerCase();
+  var chapterRows = [];
+  var lengths = [];
+
+  for (var i = 0; i < allData.length; i++) {
+    var rowNovel = String(allData[i][colCfg.novelCol] || "").trim().toLowerCase();
+    if (!cleanTarget || rowNovel.includes(cleanTarget) || cleanTarget.includes(rowNovel)) {
+      var chVal = allData[i][colCfg.chapCol];
+      var p = parseChapterSortKey(chVal);
+      var content = String(allData[i][colCfg.contentCol] || "");
+      var len = content.length;
+      var actualRow = i + 2;
+
+      chapterRows.push({
+        row: actualRow,
+        chapter_num: p.num,
+        suffix: p.suffix,
+        raw_val: chVal,
+        length: len,
+        novel: allData[i][colCfg.novelCol]
+      });
+      lengths.push(len);
+    }
+  }
+
+  if (chapterRows.length === 0) {
+    return { error: "لم يتم العثور على فصول للرواية المحددة", novel_name: novelName, total_chapters: 0, outliers: [] };
+  }
+
+  // حساب المتوسط الحسابي
+  var sum = 0;
+  for (var j = 0; j < lengths.length; j++) {
+    sum += lengths[j];
+  }
+  var mean = sum / lengths.length;
+
+  // حساب الوسيط والربيعيات
+  var sortedLengths = lengths.slice().sort(function(a, b) { return a - b; });
+  var n = sortedLengths.length;
+  var median = (n % 2 === 0) ? (sortedLengths[n / 2 - 1] + sortedLengths[n / 2]) / 2 : sortedLengths[Math.floor(n / 2)];
+
+  var getPercentile = function(sortedArr, p) {
+    var idx = (sortedArr.length - 1) * p;
+    var lower = Math.floor(idx);
+    var upper = Math.ceil(idx);
+    var weight = idx - lower;
+    return sortedArr[lower] * (1 - weight) + sortedArr[upper] * weight;
+  };
+
+  var q1 = getPercentile(sortedLengths, 0.25);
+  var q3 = getPercentile(sortedLengths, 0.75);
+  var iqr = q3 - q1;
+
+  // الانحراف المعياري
+  var varianceSum = 0;
+  for (var k = 0; k < lengths.length; k++) {
+    varianceSum += Math.pow(lengths[k] - mean, 2);
+  }
+  var std = Math.sqrt(varianceSum / lengths.length);
+
+  // حساب عتبة القيمة المتطرفة الدنيا ديناميكياً
+  // المعادلة: Threshold = min(mean * 0.55, Q1 - 2.5 * IQR) مقيدة بين [2500, 5500]
+  var rawThreshold = Math.min(mean * 0.55, q1 - 2.5 * iqr);
+  var dynamicThreshold = Math.floor(Math.max(2500, Math.min(5500, rawThreshold)));
+
+  // فحص الفصول المتطرفة
+  var outliers = [];
+  for (var m = 0; m < chapterRows.length; m++) {
+    var ch = chapterRows[m];
+    if (ch.length < dynamicThreshold) {
+      outliers.push({
+        row: ch.row,
+        chapter_number: ch.chapter_num,
+        suffix: ch.suffix,
+        char_count: ch.length,
+        deficit: dynamicThreshold - ch.length,
+        novel_name: ch.novel
+      });
+    }
+  }
+
+  // ترتيب المتطرفين حسب رقم الفصل
+  outliers.sort(function(a, b) { return a.chapter_number - b.chapter_number; });
+
+  return {
+    novel_name: novelName,
+    total_chapters: chapterRows.length,
+    stats: {
+      count: chapterRows.length,
+      mean_length: Math.round(mean * 10) / 10,
+      median_length: Math.round(median * 10) / 10,
+      std_dev: Math.round(std * 10) / 10,
+      q1: Math.round(q1),
+      q3: Math.round(q3),
+      iqr: Math.round(iqr),
+      calculated_raw_threshold: Math.round(rawThreshold),
+      threshold_used: dynamicThreshold
+    },
+    outliers: outliers,
+    total_outliers: outliers.length
+  };
+}
+
+/**
+ * تحديث محتوى الفصل مباشرة في نفس الخلية (العمود B) دون إتلاف الترتيب أو مس السطور الأخرى
+ */
+function updateChapterContentInPlace(spreadsheetId, sheetName, novelName, chapterNum, newContent) {
+  var ssId = spreadsheetId || RAW_ARCHIVE_SPREADSHEET_ID;
+  var ss = SpreadsheetApp.openById(ssId);
+  var sheet = sheetName ? (ss.getSheetByName(sheetName) || ss.getSheets()[0]) : ss.getSheets()[0];
+  var lastRow = sheet.getLastRow();
+
+  if (lastRow <= 1) {
+    return { success: false, error: "الجدول فارغ" };
+  }
+
+  var numCols = sheet.getLastColumn();
+  var headers = sheet.getRange(1, 1, 1, numCols).getValues()[0];
+  var colCfg = detectSheetColumns(sheet, headers);
+  var targetKey = getChapterDeduplicationKey(novelName, chapterNum);
+
+  var allData = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
+  var foundRowIndex = -1;
+
+  for (var i = 0; i < allData.length; i++) {
+    var rowNovel = String(allData[i][colCfg.novelCol] || "").trim().toLowerCase();
+    var rowChap = allData[i][colCfg.chapCol];
+    var currentKey = getChapterDeduplicationKey(rowNovel, rowChap);
+
+    if (currentKey === targetKey) {
+      foundRowIndex = i;
+      break;
+    }
+  }
+
+  if (foundRowIndex === -1) {
+    return { success: false, error: "الفصل غير موجود في الشيت", chapter: chapterNum };
+  }
+
+  var actualSheetRow = foundRowIndex + 2; // +2 لأن البيانات تبدأ من السطر 2
+  var oldContent = String(allData[foundRowIndex][colCfg.contentCol] || "");
+
+  // التحقق من أن المحتوى الجديد أطول أو ذو فائدة
+  if (newContent.length < oldContent.length && oldContent.length >= 2500) {
+    return {
+      success: false,
+      skipped: true,
+      reason: "المحتوى الموجود أطول من المحتوى الجديد المُراد استبداله",
+      old_length: oldContent.length,
+      new_length: newContent.length,
+      row: actualSheetRow,
+      chapter: chapterNum
+    };
+  }
+
+  // تحديث الخلية في نفس العمود (colCfg.contentCol + 1)
+  sheet.getRange(actualSheetRow, colCfg.contentCol + 1).setValue(newContent);
+
+  // تحديث عمود تاريخ الإنشاء/التعديل إذا وجد (العمود 4)
+  if (numCols >= 4) {
+    sheet.getRange(actualSheetRow, 4).setValue(new Date().toISOString());
+  }
+
+  SpreadsheetApp.flush();
+
+  return {
+    success: true,
+    status: "updated_in_place_column_b",
+    row: actualSheetRow,
+    chapter: chapterNum,
+    old_length: oldContent.length,
+    new_length: newContent.length,
+    gain: newContent.length - oldContent.length
+  };
+}
+
 

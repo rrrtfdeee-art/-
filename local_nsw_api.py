@@ -227,6 +227,24 @@ class NSWLocalAPIHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
+        elif path == "/api/sheet_outliers":
+            novel_q = qs.get("novel", [""])[0] or qs.get("name", [""])[0]
+            sheet_id = qs.get("sheet_id", [""])[0]
+            try:
+                import scraper_engine
+                if sheet_id:
+                    res = scraper_engine.scan_sheet_extreme_outliers(novel_name=novel_q, spreadsheet_id=sheet_id)
+                else:
+                    res = scraper_engine.scan_sheet_extreme_outliers(novel_name=novel_q)
+            except Exception as e:
+                res = {"success": False, "error": str(e)}
+
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
+
         else:
             self.send_response(404)
             self._send_cors_headers()
@@ -396,6 +414,35 @@ class NSWLocalAPIHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({
                 "success": True,
                 "message": f"تم إطلاق سحب الفصل {chap_num} من المصدر الأصلي والضخ المباشر للشيت."
+            }, ensure_ascii=False).encode("utf-8"))
+        elif self.path == "/api/heal_sheet_outliers":
+            novel_name = body.get("novel") or body.get("novelName") or ""
+            sheet_id = body.get("spreadsheetId") or body.get("sheet_id") or "1v1V4_rQukDs3oCe8Z4Izvni3uCx91iKmSVNOm4A3mH0"
+            chapters = body.get("chapters") or body.get("chapter_numbers") or None
+            
+            logger.info(f"🩹 [Local API] استلام أمر إصلاح القيم المتطرفة لرواية [{novel_name}] في شيت الأرشيف...")
+
+            def _run_heal_sheet():
+                try:
+                    import scraper_engine
+                    heal_res = scraper_engine.heal_sheet_extreme_outliers(
+                        novel_name=novel_name,
+                        spreadsheet_id=sheet_id,
+                        target_chapters=chapters
+                    )
+                    logger.info(f"✅ [Local API] اكتمل إصلاح المتطرفات: {heal_res.get('message')}")
+                except Exception as ex_heal:
+                    logger.error(f"خطأ إصلاح المتطرفات: {ex_heal}")
+
+            threading.Thread(target=_run_heal_sheet, daemon=True).start()
+
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "success": True,
+                "message": "تم إطلاق فحص وإصلاح الفصول المتطرفة دنياً في الخلفية وتحديث العمود B مباشرة لشيت 1v1V4."
             }, ensure_ascii=False).encode("utf-8"))
         else:
             self.send_response(404)

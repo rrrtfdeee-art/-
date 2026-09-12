@@ -62,7 +62,9 @@ from database import (
     compare_chapter_contents,
     compare_and_replace_chapter_content,
     get_truncated_chapters,
-    format_chapter_with_header
+    format_chapter_with_header,
+    calculate_novel_length_stats,
+    get_extreme_outlier_chapters
 )
 
 
@@ -1317,17 +1319,208 @@ def start_background_scraping(
     return session
 
 
+def scan_sheet_extreme_outliers(
+    novel_name: str,
+    spreadsheet_id: str = RAW_ARCHIVE_SPREADSHEET_ID
+) -> Dict[str, Any]:
+    """
+    فحص فصول الرواية مباشرة من شيت الأرشيف المركزي (1v1V4 - الورقة1) واكتشاف القيم المتطرفة الدنيا (المبتورة) إحصائياً:
+    - جلب البيانات اللحظية من الشيت.
+    - حساب المتوسط الحسابي (Mean)، الوسيط، والربيعيات (IQR).
+    - تحديد الفصول التي يقل طول محتواها في العمود B عن حد القيمة المتطرفة.
+    """
+    import io
+    import csv
+
+    url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid=0"
+    try:
+        resp = requests.get(url, timeout=20)
+        resp.encoding = "utf-8"
+        if resp.status_code != 200:
+            return {"success": False, "error": f"تعذر تنزيل CSV الشيت (كود {resp.status_code})"}
+        
+        reader = csv.reader(io.StringIO(resp.text))
+        header = next(reader, None)
+        if not header:
+            return {"success": False, "error": "جدول الشيت فارغ"}
+            
+        clean_target = (novel_name or "").strip().lower()
+        
+        chapters = []
+        for idx, row in enumerate(reader, start=2):
+            if len(row) > 1 and row[1]:
+                ch_raw = row[0]
+                content = row[1]
+                row_novel = row[2].strip() if len(row) > 2 else ""
+                
+                # فحص تطابق الرواية
+                is_match = True
+                if clean_target:
+                    r_low = row_novel.lower()
+                    is_match = (clean_target in r_low or r_low in clean_target or 
+                                ("ماهايانا" in clean_target and ("mahayana" in r_low or "انعكاس" in r_low)))
+                
+                if is_match:
+                    p_num = 0
+                    m = re.search(r'(\d+(?:\.\d+)?)', str(ch_raw))
+                    if m:
+                        p_num = float(m.group(1))
+                    
+                    chapters.append({
+                        "row_number": idx,
+                        "chapter_raw": ch_raw,
+                        "chapter_num": p_num,
+                        "content_length": len(content),
+                        "content_preview": content[:80].replace("\n", " "),
+                        "novel": row_novel,
+                        "source_url": row[4] if len(row) > 4 else ""
+                    })
+
+        if not chapters:
+            return {
+                "success": True,
+                "novel_name": novel_name,
+                "count": 0,
+                "mean": 0,
+                "threshold": 0,
+                "outliers": [],
+                "message": "لم يتم العثور على فصول للرواية في الشيت."
+            }
+
+        lens = [c["content_length"] for c in chapters]
+        n = len(lens)
+        mean_len = sum(lens) / n
+        s_lens = sorted(lens)
+        median_len = s_lens[n // 2]
+        q1 = s_lens[n // 4]
+        q3 = s_lens[(3 * n) // 4]
+        iqr = max(1, q3 - q1)
+        
+        # معادلة الحد المتطرف الأدنى
+        box_thresh = q1 - 2.5 * iqr
+        ratio_thresh = mean_len * 0.55
+        raw_thresh = min(ratio_thresh, box_thresh) if box_thresh > 0 else ratio_thresh
+        threshold = int(max(2500, min(5500, raw_thresh)))
+        
+        outliers = []
+        for c in chapters:
+            if c["content_length"] < threshold:
+                c["is_extreme_outlier"] = True
+                c["threshold"] = threshold
+                c["mean"] = round(mean_len, 1)
+                c["ratio_to_mean"] = round((c["content_length"] / mean_len) * 100, 1)
+                outliers.append(c)
+
+        return {
+            "success": True,
+            "novel_name": novel_name,
+            "total_chapters": n,
+            "mean": round(mean_len, 1),
+            "median": median_len,
+            "q1": q1,
+            "q3": q3,
+            "iqr": iqr,
+            "threshold": threshold,
+            "outliers_count": len(outliers),
+            "outliers": outliers
+        }
+    except Exception as e:
+        return {"success": False, "error": f"خطأ أثناء فحص الشيت: {e}"}
+
+
+def heal_sheet_extreme_outliers(
+    novel_name: str,
+    spreadsheet_id: str = RAW_ARCHIVE_SPREADSHEET_ID,
+    target_chapters: Optional[List[int]] = None,
+    cdp_url: Optional[str] = None,
+    headless: bool = True,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None
+) -> Dict[str, Any]:
+    """
+    سحب وإصلاح كافة الفصول المتطرفة دنياً في شيت الأرشيف واستبدال محتواها في نفس العمود B (المحتوى):
+    1. فحص الشيت وتحديد الفصول المبتورة إحصائياً.
+    2. سحب المحتوى الكامل لكل فصل من المصدر الأصلي عبر Playwright.
+    3. صياغة النص بالعنوان الطبيعي وضخه مباشرة في نفس الصف بالعمود B.
+    """
+    if progress_callback:
+        progress_callback(0, 1, "جاري فحص قيم الشيت الإحصائية...")
+
+    scan_res = scan_sheet_extreme_outliers(novel_name=novel_name, spreadsheet_id=spreadsheet_id)
+    if not scan_res.get("success"):
+        return scan_res
+
+    all_outliers = scan_res.get("outliers", [])
+    if target_chapters:
+        t_set = set(target_chapters)
+        outliers = [o for o in all_outliers if int(o["chapter_num"]) in t_set]
+    else:
+        outliers = all_outliers
+
+    if not outliers:
+        return {
+            "success": True,
+            "repaired_count": 0,
+            "message": "لا توجد فصول متطرفة دنياً تحتاج للإصلاح.",
+            "stats": scan_res
+        }
+
+    # العثور على سجل الرواية في SQLite لجلب الروابط ومحددات الـ CSS
+    nov = get_novel_by_title(novel_name) or find_novel_by_query(novel_name)
+    novel_id = nov["id"] if nov else None
+
+    repaired_details = []
+    total_outliers = len(outliers)
+
+    for idx, out in enumerate(outliers, start=1):
+        ch_num = int(out["chapter_num"])
+        old_len = out["content_length"]
+        row_num = out["row_number"]
+        msg = f"جاري إصلاح الفصل {ch_num} (الحجم القديم: {old_len} حرف) [الصف {row_num}]..."
+        if progress_callback:
+            progress_callback(idx, total_outliers, msg)
+
+        # مقارنة وسحب الفصل الأصلي واستبداله في SQLite وشيت 1v1V4 فوراً
+        heal_res = compare_and_heal_chapter(
+            novel_id=novel_id,
+            chapter_number=ch_num,
+            cdp_url=cdp_url,
+            auto_replace=True,
+            auto_stream_to_sheet=True
+        )
+
+        repaired_details.append({
+            "chapter_number": ch_num,
+            "row_number": row_num,
+            "old_length": old_len,
+            "new_length": heal_res.get("original_length", 0),
+            "replaced": heal_res.get("replaced", False),
+            "status": "repaired" if heal_res.get("replaced") else "skipped"
+        })
+
+    success_cnt = sum(1 for r in repaired_details if r["replaced"])
+    return {
+        "success": True,
+        "novel_name": novel_name,
+        "scanned_outliers": total_outliers,
+        "repaired_count": success_cnt,
+        "details": repaired_details,
+        "stats": scan_res,
+        "message": f"تمت معالجة وإصلاح {success_cnt} من أصل {total_outliers} فصول متطرفة بنجاح في الشيت."
+    }
+
+
 def scan_and_repair_truncated_chapters(
     novel_id: int,
     from_chapter: Optional[int] = None,
     to_chapter: Optional[int] = None,
-    threshold_length: int = 3000,
+    threshold_length: Optional[int] = None,
     cdp_url: Optional[str] = "http://127.0.0.1:9222",
     headless: bool = True,
     auto_stream_to_sheet: bool = True
 ) -> Dict[str, Any]:
     """
     فحص فصول الرواية واكتشاف أي فصول مجتزأة أو مبتورة وسحبها من المصدر ومقارنتها واستبدالها آلياً، ثم ضخها لشيت الأرشيف (1v1V4).
+    يعتمد تلقائياً على كاشف القيم المتطرفة الدنيا الإحصائي إذا لم يتم تحديد حد ثابت.
     """
     novel = get_novel_by_id(novel_id)
     if not novel:
@@ -1336,7 +1529,13 @@ def scan_and_repair_truncated_chapters(
     cfg = get_domain_config(novel.get("domain", ""))
     novel_name = novel.get("title", f"رواية #{novel_id}")
 
-    truncated_list = get_truncated_chapters(novel_id, threshold_length=threshold_length)
+    if threshold_length is None:
+        stats = calculate_novel_length_stats(novel_id)
+        effective_threshold = stats["lower_extreme_threshold"]
+    else:
+        effective_threshold = threshold_length
+
+    truncated_list = get_truncated_chapters(novel_id, threshold_length=effective_threshold)
     if from_chapter is not None:
         truncated_list = [c for c in truncated_list if c["chapter_number"] >= from_chapter]
     if to_chapter is not None:
