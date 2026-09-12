@@ -77,7 +77,51 @@ def init_syndication_tables():
     """)
     
     conn.commit()
+    
+    # 4. تهيئة البيانات الافتراضية تلقائياً لدعم السيرفر السحابي (Render Auto-Seeding)
+    _seed_default_syndication_data(conn)
+
     conn.close()
+
+def _seed_default_syndication_data(conn):
+    """تهيئة البيانات الافتراضية المعتمدة تلقائياً إذا كانت الجداول فارغة (مفيد لحاويات Render السحابية)."""
+    try:
+        cur = conn.cursor()
+        # 1. إعدادات حساب نادي الروايات
+        cur.execute("SELECT COUNT(*) FROM syndication_settings WHERE key = 'rewayat_token'")
+        if cur.fetchone()[0] == 0:
+            cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", 
+                        ("rewayat_username", os.environ.get("REWAYAT_USERNAME", "wx")))
+            cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", 
+                        ("rewayat_token", os.environ.get("REWAYAT_TOKEN", "4e3379691bd8dcf3025308a2c677318ed4383f31")))
+        
+        # 2. رواية After Severing Ties
+        cur.execute("SELECT COUNT(*) FROM syndicated_novels WHERE novel_name = 'After Severing Ties'")
+        if cur.fetchone()[0] == 0:
+            cur.execute("""
+            INSERT INTO syndicated_novels (
+                novel_name, blogger_url, blogger_label,
+                rewayat_enabled, rewayat_novel_id, rewayat_novel_url,
+                wattpad_enabled, wattpad_story_id, wattpad_story_url,
+                start_chapter, last_synced_chapter, stop_chapter,
+                interval_hours, next_run_timestamp, custom_cta, is_active
+            ) VALUES (
+                'After Severing Ties',
+                'https://www.novelskyworld.com/p/after-severing-ties.html',
+                'After Severing Ties',
+                1,
+                'after-severing-ties-the-prince-s-family-regrets-it-for-life',
+                'https://rewayat.club/novel/after-severing-ties-the-prince-s-family-regrets-it-for-life',
+                0, '', '',
+                1, 52, 5000,
+                12.0, 0.0,
+                '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها زوروا موقعنا الأصلي: [رابط الرواية] ✨',
+                1
+            )
+            """)
+        conn.commit()
+    except Exception as e_seed:
+        pass
 
 # تهيئة الجداول فور الاستيراد
 init_syndication_tables()
