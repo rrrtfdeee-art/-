@@ -125,6 +125,10 @@ def _seed_default_syndication_data(conn):
         if cur.fetchone()[0] == 0:
             cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", 
                         ("wattpad_username", os.environ.get("WATTPAD_USERNAME", "WX-NOVEL")))
+        cur.execute("SELECT COUNT(*) FROM syndication_settings WHERE key = 'wattpad_token'")
+        if cur.fetchone()[0] == 0:
+            cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", 
+                        ("wattpad_token", os.environ.get("WATTPAD_TOKEN", "923131450:2:1789207256:lJmnOB7TegP-22lFkbJf1qZIo7WjTMuGiPSV2cKEPutx8V6RlmbDjMHqC70hWKhr")))
 
         cur.execute("SELECT COUNT(*) FROM syndicated_novels WHERE wattpad_story_id = '405774700'")
         if cur.fetchone()[0] == 0:

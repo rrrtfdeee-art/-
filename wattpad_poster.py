@@ -32,33 +32,38 @@ class WattpadClient:
             self._apply_token(self.token)
 
     def _apply_token(self, token: str):
-        self.token = token
+        import urllib.parse
+        self.token = urllib.parse.unquote(token.strip())
         # واتباد يقبل إما Authorization Header بالتوكن أو cookie
-        if token.lower().startswith("token ") or token.lower().startswith("bearer "):
-            self.session.headers["Authorization"] = token
+        if self.token.lower().startswith("token ") or self.token.lower().startswith("bearer "):
+            self.session.headers["Authorization"] = self.token
         else:
-            self.session.headers["Authorization"] = f"token {token}"
-            self.session.cookies.set("token", token, domain=".wattpad.com")
+            self.session.headers["Authorization"] = f"token {self.token}"
+            self.session.cookies.set("token", self.token, domain=".wattpad.com")
 
     def test_connection(self) -> Dict[str, Any]:
         """فحص حالة الاتصال وصلاحية الحساب في واتباد."""
         if not self.token and not self.username:
             return {"success": False, "message": "لم يتم إدخال التوكن أو بيانات الحساب بعد."}
         
+        target_user = self.username.strip() or "WX-NOVEL"
         try:
-            # نقطة استعلام المستخدم
-            url = f"{BASE_WATTPAD_API}/users/me"
+            url = f"{BASE_WATTPAD_API}/users/{target_user}"
             res = self.session.get(url, timeout=10)
             if res.status_code == 200:
                 data = res.json()
-                u_name = data.get("username") or data.get("name") or self.username
-                return {"success": True, "message": f"تم التحقق بنجاح من حساب واتباد! مرحباً @{u_name}", "user": data}
+                u_name = data.get("username") or self.username
+                desc = data.get("description", "")
+                short_desc = (desc.split("\n")[0]) if desc else ""
+                msg = f"تم التحقق بنجاح من حساب واتباد! مرحباً @{u_name}"
+                if short_desc:
+                    msg += f" ({short_desc})"
+                return {"success": True, "message": msg, "user": data}
             elif res.status_code in [401, 403]:
                 return {"success": False, "message": "رمز التوكن غير صالح أو انتهت صلاحيته."}
         except Exception as e:
             logger.warning(f"[wattpad] test_connection: {e}")
 
-        # إذا التوكن محفوظ ومسجل
         if self.token:
             return {"success": True, "message": "التوكن محفوظ ومسجل للنشر التلقائي."}
 
