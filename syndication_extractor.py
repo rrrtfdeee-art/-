@@ -244,25 +244,26 @@ def _strip_blogger_html(html: str) -> str:
     for pat in _BLOGGER_STRIP_PATTERNS:
         text = re.sub(pat, " ", text, flags=re.IGNORECASE | re.DOTALL)
     
-    # تحويل الوسوم الشائعة إلى نص
+    # حذف وسوم script و style و SVG و CSS تماماً بمحتواها
+    text = re.sub(r'<script[^>]*>.*?</script>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<style[^>]*>.*?</style>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<svg[^>]*>.*?</svg>', ' ', text, flags=re.IGNORECASE | re.DOTALL)
+
+    # تحويل الوسوم الشائعة إلى أسطر جديدة
     text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'<p[^>]*>', '\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'</p>', '\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'<div[^>]*>', '\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'</div>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?(?:p|div|h[1-6]|li|blockquote)[^>]*>', '\n', text, flags=re.IGNORECASE)
     
-    # حذف أي وسوم HTML متبقية
+    # حذف أي وسوم HTML أو CSS متبقية مثل <span style="..."> أو <font ...>
     text = re.sub(r'<[^>]+>', '', text)
     
-    # تنظيف المسافات والأسطر
-    text = re.sub(r'&nbsp;', ' ', text)
-    text = re.sub(r'&amp;', '&', text)
-    text = re.sub(r'&lt;', '<', text)
-    text = re.sub(r'&gt;', '>', text)
-    text = re.sub(r'&quot;', '"', text)
-    text = re.sub(r'&#39;', "'", text)
+    # فك تشفير كافة الرموز (HTML Entities) مثل &#1548; و &nbsp;
+    import html as _html
+    text = _html.unescape(text)
     
-    # توحيد الأسطر الفارغة المتعددة
+    # حذف أكواد الـ CSS الهاربة أو الشاذة إن وجدت مثل { color: ... }
+    text = re.sub(r'\{[^{}]*(?:color|font|margin|padding|background|border)[^{}]*\}', '', text, flags=re.IGNORECASE)
+
+    # توحيد الأسطر الفارغة وتنظيف الفراغات
     lines = [l.strip() for l in text.splitlines()]
     clean_lines = []
     prev_empty = False
