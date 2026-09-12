@@ -151,6 +151,44 @@ def render_rewayat_club_tab():
                         syndication_db.delete_syndicated_novel(nov["id"])
                         st.success(f"تم حذف {nov['novel_name']}")
                         st.rerun()
+
+                # قسم تعديل الإعدادات والجدولة السريعة لدفعة الفصول
+                with st.expander(f"⚙️ تعديل الجدولة ووتيرة النشر ({nov['novel_name']})", expanded=False):
+                    st.markdown("##### 🚀 الجدولة السريعة (وضع الدفعات):")
+                    c_b1, c_b2 = st.columns(2)
+                    with c_b1:
+                        if st.button("⏱️ ضبط: 20 فصلاً بمعدل فصل كل ساعة", key=f"quick_20_1h_{nov['id']}", use_container_width=True):
+                            nov["interval_hours"] = 1.0
+                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
+                            nov["next_run_timestamp"] = time.time()
+                            syndication_db.save_or_update_syndicated_novel(nov)
+                            st.success(f"تم الضبط! سينشر المحرك 20 فصلاً (من {nov['last_synced_chapter']+1} إلى {nov['stop_chapter']}) بمعدل فصل كل ساعة.")
+                            st.rerun()
+                    with c_b2:
+                        if st.button("⏸️ إيقاف / استئناف النشر التلقائي", key=f"toggle_act_{nov['id']}", use_container_width=True):
+                            nov["is_active"] = 0 if nov["is_active"] else 1
+                            syndication_db.save_or_update_syndicated_novel(nov)
+                            st.info(f"تم تغيير الحالة إلى: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
+                            st.rerun()
+                    
+                    st.markdown("##### ✏️ ضبط يدوي مخصص:")
+                    with st.form(f"edit_novel_form_{nov['id']}"):
+                        ce1, ce2, ce3 = st.columns(3)
+                        with ce1:
+                            new_interval = st.number_input("⏱️ الوتيرة (ساعات بين كل فصل):", min_value=0.25, value=float(nov['interval_hours']), step=0.25, key=f"int_{nov['id']}")
+                        with ce2:
+                            new_last_ch = st.number_input("آخر فصل تم نشره:", min_value=0, value=int(nov['last_synced_chapter']), step=1, key=f"last_{nov['id']}")
+                        with ce3:
+                            new_stop_ch = st.number_input("سقف التوقف (آخر فصل):", min_value=1, value=int(nov['stop_chapter']), step=1, key=f"stop_{nov['id']}")
+                        
+                        btn_save_edit = st.form_submit_button("💾 حفظ التعديلات", type="primary")
+                        if btn_save_edit:
+                            nov["interval_hours"] = float(new_interval)
+                            nov["last_synced_chapter"] = int(new_last_ch)
+                            nov["stop_chapter"] = int(new_stop_ch)
+                            syndication_db.save_or_update_syndicated_novel(nov)
+                            st.success("تم تحديث إعدادات الرواية بنجاح!")
+                            st.rerun()
                 st.markdown("---")
 
     # 4. قسم معاينة الفصل قبل نشره
@@ -396,6 +434,44 @@ def render_wattpad_tab():
                         syndication_db.delete_syndicated_novel(nov["id"])
                         st.success(f"تم حذف {nov['novel_name']}")
                         st.rerun()
+
+                # قسم تعديل الإعدادات والجدولة السريعة لدفعة الفصول لواتباد
+                with st.expander(f"⚙️ تعديل الجدولة ووتيرة النشر ({nov['novel_name']})", expanded=False):
+                    st.markdown("##### 🚀 الجدولة السريعة (وضع الدفعات):")
+                    c_wb1, c_wb2 = st.columns(2)
+                    with c_wb1:
+                        if st.button("⏱️ ضبط: 20 فصلاً بمعدل فصل كل ساعة", key=f"wp_quick_20_1h_{nov['id']}", use_container_width=True):
+                            nov["interval_hours"] = 1.0
+                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
+                            nov["next_run_timestamp"] = time.time()
+                            syndication_db.save_or_update_syndicated_novel(nov)
+                            st.success(f"تم الضبط! سينشر المحرك 20 فصلاً على واتباد (من {nov['last_synced_chapter']+1} إلى {nov['stop_chapter']}) بمعدل فصل كل ساعة.")
+                            st.rerun()
+                    with c_wb2:
+                        if st.button("⏸️ إيقاف / استئناف النشر التلقائي", key=f"wp_toggle_act_{nov['id']}", use_container_width=True):
+                            nov["is_active"] = 0 if nov["is_active"] else 1
+                            syndication_db.save_or_update_syndicated_novel(nov)
+                            st.info(f"تم تغيير الحالة إلى: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
+                            st.rerun()
+                    
+                    st.markdown("##### ✏️ ضبط يدوي مخصص:")
+                    with st.form(f"wp_edit_novel_form_{nov['id']}"):
+                        ce1, ce2, ce3 = st.columns(3)
+                        with ce1:
+                            new_interval = st.number_input("⏱️ الوتيرة (ساعات بين كل فصل):", min_value=0.25, value=float(nov['interval_hours']), step=0.25, key=f"wp_int_{nov['id']}")
+                        with ce2:
+                            new_last_ch = st.number_input("آخر فصل تم نشره:", min_value=0, value=int(nov['last_synced_chapter']), step=1, key=f"wp_last_{nov['id']}")
+                        with ce3:
+                            new_stop_ch = st.number_input("سقف التوقف (آخر فصل):", min_value=1, value=int(nov['stop_chapter']), step=1, key=f"wp_stop_{nov['id']}")
+                        
+                        btn_save_edit = st.form_submit_button("💾 حفظ التعديلات", type="primary")
+                        if btn_save_edit:
+                            nov["interval_hours"] = float(new_interval)
+                            nov["last_synced_chapter"] = int(new_last_ch)
+                            nov["stop_chapter"] = int(new_stop_ch)
+                            syndication_db.save_or_update_syndicated_novel(nov)
+                            st.success("تم تحديث إعدادات الرواية بنجاح!")
+                            st.rerun()
                 st.markdown("---")
 
     # 4. معاينة فصل في واتباد
