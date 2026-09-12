@@ -23,10 +23,24 @@ def render_rewayat_club_tab():
         with col_p:
             rewayat_token = st.text_input("رمز التوكن أو كلمة المرور (Bearer Token / Password):", value=stored_token, type="password", key="rc_token")
             
-        if st.button("💾 حفظ بيانات الحساب", key="save_rc_creds"):
-            syndication_db.save_synd_setting("rewayat_username", rewayat_user.strip())
-            syndication_db.save_synd_setting("rewayat_token", rewayat_token.strip())
-            st.success("تم حفظ بيانات الدخول لنادي الروايات بنجاح.")
+        col_s1, col_s2 = st.columns(2)
+        with col_s1:
+            if st.button("💾 حفظ بيانات الحساب", key="save_rc_creds", use_container_width=True):
+                syndication_db.save_synd_setting("rewayat_username", rewayat_user.strip())
+                syndication_db.save_synd_setting("rewayat_token", rewayat_token.strip())
+                st.success("تم حفظ بيانات الدخول لنادي الروايات بنجاح.")
+        with col_s2:
+            if st.button("🔍 فحص الاتصال بالحساب", key="test_rc_conn", use_container_width=True):
+                import rewayat_club_api
+                client = rewayat_club_api.RewayatClubClient(
+                    token=rewayat_token.strip() or stored_token,
+                    username=rewayat_user.strip() or stored_user
+                )
+                chk = client.test_connection()
+                if chk.get("success"):
+                    st.success(f"✅ {chk.get('message')}")
+                else:
+                    st.warning(f"⚠️ {chk.get('message')}")
 
     # 2. إضافة / تعديل رواية
     with st.expander("➕ إضافة رواية جديدة لنادي الروايات", expanded=True):
@@ -138,6 +152,50 @@ def render_rewayat_club_tab():
                     available = syndication_extractor.get_available_chapters_for_novel(preview_novel)
                     if available:
                         st.info(f"📚 إجمالي الفصول المتاحة لهذه الرواية في شيت الترجمة: **{len(available)}** فصل (من {min(available)} إلى {max(available)})")
+
+                    st.markdown("---")
+                    st.markdown("##### 🚀 النشر التجريبي الفعلي (Live Publishing Test)")
+                    if st.button("📤 نشر هذا الفصل الآن إلى نادي الروايات", key="rc_live_publish_btn", type="primary"):
+                        import rewayat_club_api
+                        user_token = syndication_db.get_synd_setting("rewayat_token", "")
+                        if not user_token:
+                            st.error("❌ يرجى إدخال وحفظ التوكن (Bearer Token) لحساب نادي الروايات أولاً.")
+                        elif not nov_cfg.get("rewayat_novel_id"):
+                            st.error("❌ الرواية لا تحتوي على معرف (Novel ID) في نادي الروايات.")
+                        else:
+                            with st.spinner("⏳ جاري إرسال الفصل إلى منصة نادي الروايات..."):
+                                client = rewayat_club_api.RewayatClubClient(token=user_token)
+                                pub_res = client.publish_chapter(
+                                    novel_id=nov_cfg["rewayat_novel_id"],
+                                    chapter_num=int(preview_chapter),
+                                    title=result["title"],
+                                    content=result["content_for_publish"]
+                                )
+                                if pub_res.get("success"):
+                                    st.balloons()
+                                    st.success(f"🎉 {pub_res.get('message')}")
+                                    # توثيق في السجل
+                                    syndication_db.log_syndication_event(
+                                        novel_id=nov_cfg["id"],
+                                        chapter_num=int(preview_chapter),
+                                        platform="rewayat_club",
+                                        status="SUCCESS",
+                                        post_url=pub_res.get("post_url", "")
+                                    )
+                                    # تحديث عداد آخر فصل تم نشره إذا كان هذا الفصل أحدث
+                                    if int(preview_chapter) > nov_cfg.get("last_synced_chapter", 0):
+                                        nov_cfg["last_synced_chapter"] = int(preview_chapter)
+                                        syndication_db.save_or_update_syndicated_novel(nov_cfg)
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ {pub_res.get('error')}")
+                                    syndication_db.log_syndication_event(
+                                        novel_id=nov_cfg["id"],
+                                        chapter_num=int(preview_chapter),
+                                        platform="rewayat_club",
+                                        status="FAILED",
+                                        error_msg=pub_res.get("error", "")
+                                    )
                 else:
                     st.error(f"❌ {result['error']}")
 
