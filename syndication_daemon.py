@@ -37,7 +37,8 @@ def run_syndication_cycle():
         try:
             # 1. التحقق هل حان موعد النشر؟
             next_run = nov.get("next_run_timestamp", 0.0)
-            if next_run and now < next_run:
+            # قاعدة صارمة: إذا لم يتم تحديد موعد جدولة صريح (> 0) أو لم يحن وقته بعد، نمنع النشر نهائياً
+            if not next_run or next_run <= 0.0 or now < next_run:
                 continue
 
             # مزامنة العداد تلقائياً مع الواقع الفعلي في نادي الروايات لتفادي التكرار
@@ -150,8 +151,8 @@ def run_syndication_cycle():
                 if not is_already:
                     try:
                         from nsw_healer_engine import notify_admin
-                        import datetime
-                        next_dt = datetime.datetime.fromtimestamp(nov["next_run_timestamp"]).strftime('%I:%M %p')
+                        from ui_syndication_tabs import format_schedule_time_label
+                        next_dt_label = format_schedule_time_label(nov["next_run_timestamp"])
                         pub_links = []
                         if success_rc:
                             pub_links.append(f"• نادي الروايات: {rc_res.get('post_url', 'تم')}")
@@ -164,7 +165,7 @@ def run_syndication_cycle():
                             f"📑 <b>الفصل:</b> {target_ch}\n"
                             f"🏷️ <b>العنوان:</b> {extracted.get('title', '')}\n"
                             f"{links_txt}\n\n"
-                            f"⏱️ <b>موعد الفصل القادم ({target_ch + 1}):</b> الساعة {next_dt} (بعد {nov['interval_hours']} ساعة)"
+                            f"⏰ <b>موعد الفصل القادم ({target_ch + 1}):</b> {next_dt_label} (بعد {nov['interval_hours']} ساعة)"
                         )
                         notify_admin(msg)
                     except Exception as ex_notif:
@@ -186,12 +187,29 @@ def run_syndication_cycle():
         except Exception as e_nov:
             logger.error(f"Error in syndication cycle for {nov.get('novel_name', '?')}: {e_nov}")
 
+def _ping_render_keep_alive():
+    """إرسال نبضة حياة هادئة كل 10 دقائق لمنع خمول وحظر سيرفر Render السحابي المجاني."""
+    try:
+        import os, urllib.request
+        render_url = os.environ.get("RENDER_EXTERNAL_URL", "https://2-yqmt.onrender.com/")
+        req = urllib.request.Request(render_url, headers={"User-Agent": "NSW-Daemon-KeepAlive/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            pass
+    except Exception:
+        pass
+
 def daemon_worker_loop():
     """حلقة السيرفر الدائرية التي تعمل 24/7 في الخلفية."""
     global _DAEMON_RUNNING
     logger.info("Syndication Daemon worker loop started (24/7).")
+    last_ping = 0.0
     while _DAEMON_RUNNING:
         try:
+            # نبضة حياة دورية لمنع نوم حاوية Render
+            if time.time() - last_ping > 600:
+                last_ping = time.time()
+                _ping_render_keep_alive()
+
             run_syndication_cycle()
         except Exception as ex:
             logger.error(f"Error in daemon loop: {ex}")

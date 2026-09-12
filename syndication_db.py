@@ -113,10 +113,10 @@ def _seed_default_syndication_data(conn):
                 'after-severing-ties-the-prince-s-family-regrets-it-for-life',
                 'https://rewayat.club/novel/after-severing-ties-the-prince-s-family-regrets-it-for-life',
                 0, '', '',
-                1, 54, 5000,
-                12.0, 0.0,
+                1, 68, 5000,
+                1.0, 0.0,
                 '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها زوروا موقعنا الأصلي: [رابط الرواية] ✨',
-                1
+                0
             )
             """)
 
@@ -144,9 +144,9 @@ def _seed_default_syndication_data(conn):
                 '405774700',
                 'https://wattpad.com/story/405774700',
                 1, 13, 5000,
-                12.0, 0.0,
+                1.0, 0.0,
                 '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها تفضلوا بزيارة موقعنا: [رابط الرواية] ✨',
-                1
+                0
             )
             """)
         conn.commit()
