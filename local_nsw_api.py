@@ -356,6 +356,43 @@ class NSWLocalAPIHandler(BaseHTTPRequestHandler):
                 "gaps_count": len(gaps_to_fix),
                 "gaps": gaps_to_fix[:50]
             }, ensure_ascii=False).encode("utf-8"))
+        elif self.path == "/api/heal_chapter":
+            novel_q = body.get("novelName") or body.get("novel", "")
+            chap_num = int(body.get("chapterNumber") or body.get("chapter", 0))
+            logger.info(f"🩹 [Local API] تلقي طلب استصلاح وسحب مباشر للفصل {chap_num} لرواية [{novel_q}]...")
+            
+            nov = find_novel_by_query(novel_q)
+            if not nov or chap_num <= 0:
+                self.send_response(200)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "message": "رواية أو رقم فصل غير صالح"}, ensure_ascii=False).encode("utf-8"))
+                return
+
+            def _run_single_heal():
+                try:
+                    import scraper_engine
+                    scraper_engine.compare_and_heal_chapter(
+                        novel_id=nov["id"],
+                        chapter_number=chap_num,
+                        auto_replace=True,
+                        auto_stream_to_sheet=True
+                    )
+                    logger.info(f"✅ [Local API] اكتمل استصلاح وضخ الفصل {chap_num} مباشرة إلى شيت الأرشيف!")
+                except Exception as ex_heal:
+                    logger.error(f"خطأ استصلاح الفصل: {ex_heal}")
+
+            threading.Thread(target=_run_single_heal, daemon=True).start()
+
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "success": True,
+                "message": f"تم إطلاق سحب الفصل {chap_num} من المصدر الأصلي والضخ المباشر للشيت."
+            }, ensure_ascii=False).encode("utf-8"))
         else:
             self.send_response(404)
             self._send_cors_headers()
