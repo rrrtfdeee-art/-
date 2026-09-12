@@ -140,7 +140,7 @@ def run_syndication_cycle():
             # 5. إذا تم النشر بنجاح على منصة واحدة على الأقل
             if success_rc or success_wp:
                 nov["last_synced_chapter"] = target_ch
-                interval_secs = max(0.5, float(nov.get("interval_hours", 12.0))) * 3600
+                interval_secs = max(0.1, float(nov.get("interval_hours", 1.0))) * 3600
                 nov["next_run_timestamp"] = time.time() + interval_secs
                 syndication_db.save_or_update_syndicated_novel(nov)
                 logger.info(f"Published Ch.{target_ch} for {nov['novel_name']}. Next in {nov['interval_hours']}h")

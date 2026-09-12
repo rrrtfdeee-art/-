@@ -11,6 +11,25 @@ import syndication_extractor
 import time
 import datetime
 
+def format_schedule_time_label(ts: float) -> str:
+    """تنسيق وقت وتاريخ الجدولة بأسلوب عربي ذكي (اليوم / غداً / بعد غد / التاريخ المخصص)"""
+    if not ts or ts <= 0:
+        return "الآن (جاهز)"
+    dt = datetime.datetime.fromtimestamp(ts)
+    now = datetime.datetime.now()
+    today = now.date()
+    target_date = dt.date()
+    time_str = dt.strftime('%I:%M %p')
+    if target_date == today:
+        day_str = "اليوم"
+    elif target_date == today + datetime.timedelta(days=1):
+        day_str = "غداً"
+    elif target_date == today + datetime.timedelta(days=2):
+        day_str = "بعد غد"
+    else:
+        day_str = dt.strftime('%Y-%m-%d')
+    return f"{day_str} الساعة {time_str}"
+
 def render_rewayat_club_tab():
     # التأكد من تشغيل المشغل الذاتي المجدول 24/7 في الخلفية
     try:
@@ -82,7 +101,15 @@ def render_rewayat_club_tab():
                     last_ch = st.number_input("آخر فصل تم نشره:", min_value=0, value=0, step=1)
                 with col_c3:
                     stop_ch = st.number_input("أقصى فصل للتوقف عنده:", min_value=1, value=5000, step=1)
-                interval = st.number_input("⏱️ معدل النشر (ساعات بين كل فصل):", min_value=0.5, value=12.0, step=0.5)
+                interval = st.number_input("⏱️ معدل النشر (ساعات بين كل فصل):", min_value=0.25, value=1.0, step=0.25)
+
+            col_ad1, col_ad2, col_ad3 = st.columns([1.5, 1.5, 1])
+            with col_ad1:
+                rc_add_date = st.date_input("📅 تاريخ بدء النشر:", value=datetime.date.today(), key="rc_add_d")
+            with col_ad2:
+                rc_add_time = st.time_input("⏰ وقت بدء النشر:", value=datetime.datetime.now().time().replace(second=0, microsecond=0), key="rc_add_t")
+            with col_ad3:
+                rc_add_now = st.checkbox("🚀 البدء فوراً (الآن)", value=True, key="rc_add_now_chk")
 
             cta_default = "✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها زوروا موقعنا الأصلي: [رابط الرواية] ✨"
             custom_cta = st.text_area("💬 التعليق التحفيزي الثابت لنهاية كل فصل:", value=cta_default, height=70)
@@ -92,6 +119,10 @@ def render_rewayat_club_tab():
                 if not n_name.strip():
                     st.error("يرجى إدخال اسم الرواية على الأقل.")
                 else:
+                    if rc_add_now:
+                        init_next_run = 0.0
+                    else:
+                        init_next_run = datetime.datetime.combine(rc_add_date, rc_add_time).timestamp()
                     syndication_db.save_or_update_syndicated_novel({
                         "novel_name": n_name.strip(),
                         "blogger_url": n_blogger_url.strip(),
@@ -106,6 +137,7 @@ def render_rewayat_club_tab():
                         "last_synced_chapter": int(last_ch),
                         "stop_chapter": int(stop_ch),
                         "interval_hours": float(interval),
+                        "next_run_timestamp": float(init_next_run),
                         "custom_cta": custom_cta.strip(),
                         "is_active": 1
                     })
@@ -131,8 +163,8 @@ def render_rewayat_club_tab():
                     now_ts = time.time()
                     if next_run and next_run > now_ts:
                         rem_hours = (next_run - now_ts) / 3600.0
-                        dt_str = datetime.datetime.fromtimestamp(next_run).strftime('%I:%M %p')
-                        st.caption(f"⏳ **موعد الفصل {target_ch}:** الساعة {dt_str} (بعد {rem_hours:.1f} ساعة)")
+                        dt_label = format_schedule_time_label(next_run)
+                        st.caption(f"⏳ **موعد الفصل {target_ch}:** {dt_label} (بعد {rem_hours:.1f} ساعة)")
                     else:
                         st.caption(f"🟢 **الفصل القادم {target_ch}:** جاهز للنشر في الدورة القادمة")
                     st.caption(f"⏱️ الوتيرة: فصل كل {nov['interval_hours']} ساعة | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
@@ -155,23 +187,56 @@ def render_rewayat_club_tab():
                 # قسم تعديل الإعدادات والجدولة السريعة لدفعة الفصول
                 with st.expander(f"⚙️ تعديل الجدولة ووتيرة النشر ({nov['novel_name']})", expanded=False):
                     st.markdown("##### 🚀 الجدولة السريعة (وضع الدفعات):")
-                    c_b1, c_b2 = st.columns(2)
+                    c_b1, c_b2, c_b3, c_b4 = st.columns(4)
+                    tmrw = datetime.date.today() + datetime.timedelta(days=1)
+                    t_10am = datetime.datetime.combine(tmrw, datetime.time(10, 0)).timestamp()
+                    t_6pm = datetime.datetime.combine(tmrw, datetime.time(18, 0)).timestamp()
+                    t_midnight = datetime.datetime.combine(tmrw, datetime.time(0, 0)).timestamp()
+
                     with c_b1:
-                        if st.button("⏱️ ضبط: 20 فصلاً بمعدل فصل كل ساعة", key=f"quick_20_1h_{nov['id']}", use_container_width=True):
+                        if st.button("🚀 البدء الآن (20 فصل)", key=f"quick_now_{nov['id']}", use_container_width=True, help="نشر 20 فصلاً بمعدل فصل كل ساعة بدءاً من هذه اللحظة"):
                             nov["interval_hours"] = 1.0
                             nov["stop_chapter"] = nov["last_synced_chapter"] + 20
                             nov["next_run_timestamp"] = time.time()
+                            nov["is_active"] = 1
                             syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success(f"تم الضبط! سينشر المحرك 20 فصلاً (من {nov['last_synced_chapter']+1} إلى {nov['stop_chapter']}) بمعدل فصل كل ساعة.")
+                            st.success(f"تم الضبط! البدء فوراً لنشر 20 فصلاً (حتى {nov['stop_chapter']}) بمعدل فصل كل ساعة.")
                             st.rerun()
                     with c_b2:
-                        if st.button("⏸️ إيقاف / استئناف النشر التلقائي", key=f"toggle_act_{nov['id']}", use_container_width=True):
-                            nov["is_active"] = 0 if nov["is_active"] else 1
+                        if st.button("🌅 غداً 10:00 ص (20 فصل)", key=f"quick_tmrw10_{nov['id']}", use_container_width=True, help="بدء النشر غداً في تمام العاشرة صباحاً بمعدل فصل كل ساعة"):
+                            nov["interval_hours"] = 1.0
+                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
+                            nov["next_run_timestamp"] = t_10am
+                            nov["is_active"] = 1
                             syndication_db.save_or_update_syndicated_novel(nov)
-                            st.info(f"تم تغيير الحالة إلى: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
+                            st.success(f"تمت الجدولة! سيبدأ أول فصل غداً الساعة 10:00 ص، ثم فصلاً كل ساعة حتى الفصل {nov['stop_chapter']}.")
                             st.rerun()
+                    with c_b3:
+                        if st.button("🌆 غداً 06:00 م (20 فصل)", key=f"quick_tmrw18_{nov['id']}", use_container_width=True, help="بدء النشر غداً في تمام السادسة مساءً بمعدل فصل كل ساعة"):
+                            nov["interval_hours"] = 1.0
+                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
+                            nov["next_run_timestamp"] = t_6pm
+                            nov["is_active"] = 1
+                            syndication_db.save_or_update_syndicated_novel(nov)
+                            st.success(f"تمت الجدولة! سيبدأ أول فصل غداً الساعة 06:00 م، ثم فصلاً كل ساعة حتى الفصل {nov['stop_chapter']}.")
+                            st.rerun()
+                    with c_b4:
+                        if st.button("🌙 غداً 12:00 ليلاً (20 فصل)", key=f"quick_tmrw00_{nov['id']}", use_container_width=True, help="بدء النشر غداً في منتصف الليل بمعدل فصل كل ساعة"):
+                            nov["interval_hours"] = 1.0
+                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
+                            nov["next_run_timestamp"] = t_midnight
+                            nov["is_active"] = 1
+                            syndication_db.save_or_update_syndicated_novel(nov)
+                            st.success(f"تمت الجدولة! سيبدأ أول فصل غداً 12:00 منتصف الليل، ثم فصلاً كل ساعة حتى الفصل {nov['stop_chapter']}.")
+                            st.rerun()
+
+                    if st.button("⏸️ إيقاف / استئناف النشر التلقائي للرواية", key=f"toggle_act_{nov['id']}", use_container_width=True):
+                        nov["is_active"] = 0 if nov["is_active"] else 1
+                        syndication_db.save_or_update_syndicated_novel(nov)
+                        st.info(f"تم تغيير الحالة إلى: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
+                        st.rerun()
                     
-                    st.markdown("##### ✏️ ضبط يدوي مخصص:")
+                    st.markdown("##### ✏️ ضبط يدوي مخصص (تحديد التاريخ والوقت بدقة):")
                     with st.form(f"edit_novel_form_{nov['id']}"):
                         ce1, ce2, ce3 = st.columns(3)
                         with ce1:
@@ -181,13 +246,29 @@ def render_rewayat_club_tab():
                         with ce3:
                             new_stop_ch = st.number_input("سقف التوقف (آخر فصل):", min_value=1, value=int(nov['stop_chapter']), step=1, key=f"stop_{nov['id']}")
                         
-                        btn_save_edit = st.form_submit_button("💾 حفظ التعديلات", type="primary")
+                        st.markdown("###### 📅 موعد انطلاق أول فصل قادم:")
+                        cf1, cf2, cf3 = st.columns([1.5, 1.5, 1])
+                        cur_nr = nov.get("next_run_timestamp", 0.0)
+                        def_dt = datetime.datetime.fromtimestamp(cur_nr) if cur_nr and cur_nr > time.time() else datetime.datetime.now()
+                        with cf1:
+                            edit_date = st.date_input("تاريخ الانطلاق:", value=def_dt.date(), key=f"ed_d_{nov['id']}")
+                        with cf2:
+                            edit_time = st.time_input("وقت الانطلاق:", value=def_dt.time().replace(second=0, microsecond=0), key=f"ed_t_{nov['id']}")
+                        with cf3:
+                            edit_now_chk = st.checkbox("🚀 البدء فوراً (الآن)", value=(not cur_nr or cur_nr <= time.time()), key=f"ed_now_{nov['id']}")
+
+                        btn_save_edit = st.form_submit_button("💾 حفظ الإعدادات وموعد الجدولة", type="primary")
                         if btn_save_edit:
                             nov["interval_hours"] = float(new_interval)
                             nov["last_synced_chapter"] = int(new_last_ch)
                             nov["stop_chapter"] = int(new_stop_ch)
+                            if edit_now_chk:
+                                nov["next_run_timestamp"] = 0.0
+                            else:
+                                combined_dt = datetime.datetime.combine(edit_date, edit_time)
+                                nov["next_run_timestamp"] = combined_dt.timestamp()
                             syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success("تم تحديث إعدادات الرواية بنجاح!")
+                            st.success("تم تحديث إعدادات وموعد جدولة الرواية بنجاح!")
                             st.rerun()
                 st.markdown("---")
 
@@ -365,7 +446,15 @@ def render_wattpad_tab():
                     w_last_ch = st.number_input("آخر فصل تم نشره:", min_value=0, value=0, step=1, key="wp_last")
                 with col_c3:
                     w_stop_ch = st.number_input("أقصى فصل للتوقف عنده:", min_value=1, value=5000, step=1, key="wp_stop")
-                w_interval = st.number_input("⏱️ معدل النشر (ساعات):", min_value=0.5, value=12.0, step=0.5, key="wp_interval")
+                w_interval = st.number_input("⏱️ معدل النشر (ساعات):", min_value=0.25, value=1.0, step=0.25, key="wp_interval")
+
+            col_wad1, col_wad2, col_wad3 = st.columns([1.5, 1.5, 1])
+            with col_wad1:
+                wp_add_date = st.date_input("📅 تاريخ بدء النشر:", value=datetime.date.today(), key="wp_add_d")
+            with col_wad2:
+                wp_add_time = st.time_input("⏰ وقت بدء النشر:", value=datetime.datetime.now().time().replace(second=0, microsecond=0), key="wp_add_t")
+            with col_wad3:
+                wp_add_now = st.checkbox("🚀 البدء فوراً (الآن)", value=True, key="wp_add_now_chk")
 
             w_cta_default = "✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها تفضلوا بزيارة موقعنا: [رابط الرواية] ✨"
             w_custom_cta = st.text_area("💬 التعليق التحفيزي لقصة واتباد:", value=w_cta_default, height=70, key="wp_cta")
@@ -375,6 +464,10 @@ def render_wattpad_tab():
                 if not w_name.strip():
                     st.error("يرجى إدخال اسم الرواية على الأقل.")
                 else:
+                    if wp_add_now:
+                        init_wp_next_run = 0.0
+                    else:
+                        init_wp_next_run = datetime.datetime.combine(wp_add_date, wp_add_time).timestamp()
                     syndication_db.save_or_update_syndicated_novel({
                         "novel_name": w_name.strip(),
                         "blogger_url": w_blogger_url.strip(),
@@ -389,6 +482,7 @@ def render_wattpad_tab():
                         "last_synced_chapter": int(w_last_ch),
                         "stop_chapter": int(w_stop_ch),
                         "interval_hours": float(w_interval),
+                        "next_run_timestamp": float(init_wp_next_run),
                         "custom_cta": w_custom_cta.strip(),
                         "is_active": 1
                     })
@@ -414,8 +508,8 @@ def render_wattpad_tab():
                     now_ts = time.time()
                     if next_run and next_run > now_ts:
                         rem_hours = (next_run - now_ts) / 3600.0
-                        dt_str = datetime.datetime.fromtimestamp(next_run).strftime('%I:%M %p')
-                        st.caption(f"⏳ **موعد الفصل {target_ch}:** الساعة {dt_str} (بعد {rem_hours:.1f} ساعة)")
+                        dt_label = format_schedule_time_label(next_run)
+                        st.caption(f"⏳ **موعد الفصل {target_ch}:** {dt_label} (بعد {rem_hours:.1f} ساعة)")
                     else:
                         st.caption(f"🟢 **الفصل القادم {target_ch}:** جاهز للنشر في الدورة القادمة")
                     st.caption(f"⏱️ الوتيرة: فصل كل {nov['interval_hours']} ساعة | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
@@ -438,23 +532,56 @@ def render_wattpad_tab():
                 # قسم تعديل الإعدادات والجدولة السريعة لدفعة الفصول لواتباد
                 with st.expander(f"⚙️ تعديل الجدولة ووتيرة النشر ({nov['novel_name']})", expanded=False):
                     st.markdown("##### 🚀 الجدولة السريعة (وضع الدفعات):")
-                    c_wb1, c_wb2 = st.columns(2)
+                    c_wb1, c_wb2, c_wb3, c_wb4 = st.columns(4)
+                    tmrw = datetime.date.today() + datetime.timedelta(days=1)
+                    t_10am = datetime.datetime.combine(tmrw, datetime.time(10, 0)).timestamp()
+                    t_6pm = datetime.datetime.combine(tmrw, datetime.time(18, 0)).timestamp()
+                    t_midnight = datetime.datetime.combine(tmrw, datetime.time(0, 0)).timestamp()
+
                     with c_wb1:
-                        if st.button("⏱️ ضبط: 20 فصلاً بمعدل فصل كل ساعة", key=f"wp_quick_20_1h_{nov['id']}", use_container_width=True):
+                        if st.button("🚀 البدء الآن (20 فصل)", key=f"wp_quick_now_{nov['id']}", use_container_width=True, help="نشر 20 فصلاً بمعدل فصل كل ساعة بدءاً من هذه اللحظة"):
                             nov["interval_hours"] = 1.0
                             nov["stop_chapter"] = nov["last_synced_chapter"] + 20
                             nov["next_run_timestamp"] = time.time()
+                            nov["is_active"] = 1
                             syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success(f"تم الضبط! سينشر المحرك 20 فصلاً على واتباد (من {nov['last_synced_chapter']+1} إلى {nov['stop_chapter']}) بمعدل فصل كل ساعة.")
+                            st.success(f"تم الضبط! البدء فوراً لنشر 20 فصلاً على واتباد (حتى {nov['stop_chapter']}) بمعدل فصل كل ساعة.")
                             st.rerun()
                     with c_wb2:
-                        if st.button("⏸️ إيقاف / استئناف النشر التلقائي", key=f"wp_toggle_act_{nov['id']}", use_container_width=True):
-                            nov["is_active"] = 0 if nov["is_active"] else 1
+                        if st.button("🌅 غداً 10:00 ص (20 فصل)", key=f"wp_quick_tmrw10_{nov['id']}", use_container_width=True, help="بدء النشر على واتباد غداً في تمام العاشرة صباحاً"):
+                            nov["interval_hours"] = 1.0
+                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
+                            nov["next_run_timestamp"] = t_10am
+                            nov["is_active"] = 1
                             syndication_db.save_or_update_syndicated_novel(nov)
-                            st.info(f"تم تغيير الحالة إلى: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
+                            st.success(f"تمت الجدولة! سيبدأ أول فصل على واتباد غداً الساعة 10:00 ص، ثم فصلاً كل ساعة حتى الفصل {nov['stop_chapter']}.")
                             st.rerun()
+                    with c_wb3:
+                        if st.button("🌆 غداً 06:00 م (20 فصل)", key=f"wp_quick_tmrw18_{nov['id']}", use_container_width=True, help="بدء النشر على واتباد غداً في تمام السادسة مساءً"):
+                            nov["interval_hours"] = 1.0
+                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
+                            nov["next_run_timestamp"] = t_6pm
+                            nov["is_active"] = 1
+                            syndication_db.save_or_update_syndicated_novel(nov)
+                            st.success(f"تمت الجدولة! سيبدأ أول فصل على واتباد غداً الساعة 06:00 م، ثم فصلاً كل ساعة حتى الفصل {nov['stop_chapter']}.")
+                            st.rerun()
+                    with c_wb4:
+                        if st.button("🌙 غداً 12:00 ليلاً (20 فصل)", key=f"wp_quick_tmrw00_{nov['id']}", use_container_width=True, help="بدء النشر على واتباد غداً في منتصف الليل"):
+                            nov["interval_hours"] = 1.0
+                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
+                            nov["next_run_timestamp"] = t_midnight
+                            nov["is_active"] = 1
+                            syndication_db.save_or_update_syndicated_novel(nov)
+                            st.success(f"تمت الجدولة! سيبدأ أول فصل على واتباد غداً 12:00 منتصف الليل، ثم فصلاً كل ساعة حتى الفصل {nov['stop_chapter']}.")
+                            st.rerun()
+
+                    if st.button("⏸️ إيقاف / استئناف النشر التلقائي لواتباد", key=f"wp_toggle_act_{nov['id']}", use_container_width=True):
+                        nov["is_active"] = 0 if nov["is_active"] else 1
+                        syndication_db.save_or_update_syndicated_novel(nov)
+                        st.info(f"تم تغيير الحالة إلى: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
+                        st.rerun()
                     
-                    st.markdown("##### ✏️ ضبط يدوي مخصص:")
+                    st.markdown("##### ✏️ ضبط يدوي مخصص (تحديد التاريخ والوقت بدقة):")
                     with st.form(f"wp_edit_novel_form_{nov['id']}"):
                         ce1, ce2, ce3 = st.columns(3)
                         with ce1:
@@ -464,13 +591,29 @@ def render_wattpad_tab():
                         with ce3:
                             new_stop_ch = st.number_input("سقف التوقف (آخر فصل):", min_value=1, value=int(nov['stop_chapter']), step=1, key=f"wp_stop_{nov['id']}")
                         
-                        btn_save_edit = st.form_submit_button("💾 حفظ التعديلات", type="primary")
+                        st.markdown("###### 📅 موعد انطلاق أول فصل قادم على واتباد:")
+                        cf1, cf2, cf3 = st.columns([1.5, 1.5, 1])
+                        cur_nr = nov.get("next_run_timestamp", 0.0)
+                        def_dt = datetime.datetime.fromtimestamp(cur_nr) if cur_nr and cur_nr > time.time() else datetime.datetime.now()
+                        with cf1:
+                            edit_date = st.date_input("تاريخ الانطلاق:", value=def_dt.date(), key=f"wp_ed_d_{nov['id']}")
+                        with cf2:
+                            edit_time = st.time_input("وقت الانطلاق:", value=def_dt.time().replace(second=0, microsecond=0), key=f"wp_ed_t_{nov['id']}")
+                        with cf3:
+                            edit_now_chk = st.checkbox("🚀 فوراً (الآن)", value=(not cur_nr or cur_nr <= time.time()), key=f"wp_ed_now_{nov['id']}")
+
+                        btn_save_edit = st.form_submit_button("💾 حفظ الإعدادات وموعد الجدولة", type="primary")
                         if btn_save_edit:
                             nov["interval_hours"] = float(new_interval)
                             nov["last_synced_chapter"] = int(new_last_ch)
                             nov["stop_chapter"] = int(new_stop_ch)
+                            if edit_now_chk:
+                                nov["next_run_timestamp"] = 0.0
+                            else:
+                                combined_dt = datetime.datetime.combine(edit_date, edit_time)
+                                nov["next_run_timestamp"] = combined_dt.timestamp()
                             syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success("تم تحديث إعدادات الرواية بنجاح!")
+                            st.success("تم تحديث إعدادات وموعد جدولة الرواية على واتباد بنجاح!")
                             st.rerun()
                 st.markdown("---")
 

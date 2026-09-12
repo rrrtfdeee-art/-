@@ -95,8 +95,8 @@ def _seed_default_syndication_data(conn):
             cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", 
                         ("rewayat_token", os.environ.get("REWAYAT_TOKEN", "4e3379691bd8dcf3025308a2c677318ed4383f31")))
         
-        # 2. رواية After Severing Ties
-        cur.execute("SELECT COUNT(*) FROM syndicated_novels WHERE novel_name = 'After Severing Ties'")
+        # 2. رواية After Severing Ties لنادي الروايات
+        cur.execute("SELECT COUNT(*) FROM syndicated_novels WHERE rewayat_novel_id = 'after-severing-ties-the-prince-s-family-regrets-it-for-life'")
         if cur.fetchone()[0] == 0:
             cur.execute("""
             INSERT INTO syndicated_novels (
@@ -116,6 +116,36 @@ def _seed_default_syndication_data(conn):
                 1, 54, 5000,
                 12.0, 0.0,
                 '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها زوروا موقعنا الأصلي: [رابط الرواية] ✨',
+                1
+            )
+            """)
+
+        # 3. إعدادات وقصة واتباد الافتراضية
+        cur.execute("SELECT COUNT(*) FROM syndication_settings WHERE key = 'wattpad_username'")
+        if cur.fetchone()[0] == 0:
+            cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", 
+                        ("wattpad_username", os.environ.get("WATTPAD_USERNAME", "WX-NOVEL")))
+
+        cur.execute("SELECT COUNT(*) FROM syndicated_novels WHERE wattpad_story_id = '405774700'")
+        if cur.fetchone()[0] == 0:
+            cur.execute("""
+            INSERT INTO syndicated_novels (
+                novel_name, blogger_url, blogger_label,
+                rewayat_enabled, rewayat_novel_id, rewayat_novel_url,
+                wattpad_enabled, wattpad_story_id, wattpad_story_url,
+                start_chapter, last_synced_chapter, stop_chapter,
+                interval_hours, next_run_timestamp, custom_cta, is_active
+            ) VALUES (
+                'After Severing Ties',
+                'https://www.novelskyworld.com/p/after-severing-ties.html',
+                'After Severing Ties',
+                0, '', '',
+                1,
+                '405774700',
+                'https://wattpad.com/story/405774700',
+                1, 13, 5000,
+                12.0, 0.0,
+                '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها تفضلوا بزيارة موقعنا: [رابط الرواية] ✨',
                 1
             )
             """)
@@ -174,6 +204,7 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
     cur = conn.cursor()
     
     novel_id = data.get("id")
+    data.setdefault("next_run_timestamp", 0.0)
     if novel_id:
         # تحديث
         cur.execute("""
@@ -191,6 +222,7 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
             last_synced_chapter = :last_synced_chapter,
             stop_chapter = :stop_chapter,
             interval_hours = :interval_hours,
+            next_run_timestamp = :next_run_timestamp,
             custom_cta = :custom_cta,
             is_active = :is_active
         WHERE id = :id
@@ -204,13 +236,13 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
             rewayat_enabled, rewayat_novel_id, rewayat_novel_url,
             wattpad_enabled, wattpad_story_id, wattpad_story_url,
             start_chapter, last_synced_chapter, stop_chapter,
-            interval_hours, custom_cta, is_active
+            interval_hours, next_run_timestamp, custom_cta, is_active
         ) VALUES (
             :novel_name, :blogger_url, :blogger_label,
             :rewayat_enabled, :rewayat_novel_id, :rewayat_novel_url,
             :wattpad_enabled, :wattpad_story_id, :wattpad_story_url,
             :start_chapter, :last_synced_chapter, :stop_chapter,
-            :interval_hours, :custom_cta, :is_active
+            :interval_hours, :next_run_timestamp, :custom_cta, :is_active
         )
         """, data)
         res_id = cur.lastrowid
