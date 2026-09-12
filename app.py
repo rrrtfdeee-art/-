@@ -72,6 +72,7 @@ from media_engine import (
 import nsw_bot_bridge
 import nsw_healer_engine
 import telegram_bot as _tg_bot_module
+import ui_syndication_tabs
 
 # إطلاق بوت تليجرام الذكي (البوت الرئيسي) في الخلفية مرة واحدة فقط
 # ملاحظة: nsw_bot_bridge معطل لتجنب التعارض مع البوت الرئيسي على نفس التوكن
@@ -507,6 +508,24 @@ with st.sidebar:
 
 st.markdown('<div class="scraper-header">📚 Smart Novel Scraper AI</div>', unsafe_allow_html=True)
 st.caption("نظام هجين ذكي لسحب فصول الروايات تلقائياً مع محرك استكشاف فوري وتحليل احتياطي بالذكاء الاصطناعي.")
+
+# محدد التبويبات الرئيسي
+main_nav_tab = st.radio(
+    "اختر لوحة العمل:",
+    ["📚 محرك السحب والاستكشاف والترجمة (الرئيسي)", "🏛️ نادي الروايات (Rewayat Club)", "🟧 واتباد (Wattpad)"],
+    index=0,
+    horizontal=True,
+    label_visibility="collapsed"
+)
+
+st.markdown("---")
+
+if main_nav_tab == "🏛️ نادي الروايات (Rewayat Club)":
+    ui_syndication_tabs.render_rewayat_club_tab()
+    st.stop()
+elif main_nav_tab == "🟧 واتباد (Wattpad)":
+    ui_syndication_tabs.render_wattpad_tab()
+    st.stop()
 
 is_cdp_connected = check_cdp_available("http://localhost:9222")
 cdp_param = "http://localhost:9222" if is_cdp_connected else None
