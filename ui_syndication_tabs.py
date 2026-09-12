@@ -8,9 +8,32 @@ import streamlit as st
 import syndication_db
 import syndication_extractor
 
+import time
+import datetime
+
 def render_rewayat_club_tab():
+    # التأكد من تشغيل المشغل الذاتي المجدول 24/7 في الخلفية
+    try:
+        import syndication_daemon
+        syndication_daemon.start_syndication_daemon()
+    except Exception:
+        pass
+
     st.subheader("🏛️ إدارة النشر التلقائي — نادي الروايات (Rewayat Club)")
     st.caption("أتمتة سحب الفصول من مدونة عالم سماء الروايات ونشرها دورياً على حسابك في منصة rewayat.club.")
+
+    col_stat1, col_stat2 = st.columns([3, 1])
+    with col_stat1:
+        st.markdown('<div style="background-color:#064e3b; border:1px solid #059669; border-radius:8px; padding:7px 14px; margin-bottom:12px; color:#6ee7b7; font-size:0.90rem; font-weight:bold;">🟢 <b>المجدول التلقائي الذاتي (24/7 Background Scheduler):</b> نشط ويعمل في الخلفية لمراقبة مواعيد الفصول ونشرها بدقة.</div>', unsafe_allow_html=True)
+    with col_stat2:
+        if st.button("🔄 فحص وجدولة الآن", key="rc_trigger_now", use_container_width=True):
+            try:
+                import syndication_daemon
+                syndication_daemon.run_syndication_cycle()
+                st.success("تم تشغيل دورة الفحص!")
+                st.rerun()
+            except Exception as ex_trig:
+                st.error(f"خطأ: {ex_trig}")
     
     # 1. إعدادات حساب نادي الروايات
     with st.expander("🔐 بيانات حساب نادي الروايات (Authentication)", expanded=False):
@@ -102,9 +125,28 @@ def render_rewayat_club_tab():
                     st.markdown(f"**📖 {nov['novel_name']}**")
                     st.caption(f"معرف نادي الروايات: `{nov['rewayat_novel_id'] or 'غير محدد'}` | المصدر: `{nov['blogger_label']}`")
                 with col_status:
+                    target_ch = nov['last_synced_chapter'] + 1
                     st.markdown(f"📊 آخر فصل تم نشره: **{nov['last_synced_chapter']}** / التوقف عند: **{nov['stop_chapter']}**")
+                    next_run = nov.get("next_run_timestamp", 0.0)
+                    now_ts = time.time()
+                    if next_run and next_run > now_ts:
+                        rem_hours = (next_run - now_ts) / 3600.0
+                        dt_str = datetime.datetime.fromtimestamp(next_run).strftime('%I:%M %p')
+                        st.caption(f"⏳ **موعد الفصل {target_ch}:** الساعة {dt_str} (بعد {rem_hours:.1f} ساعة)")
+                    else:
+                        st.caption(f"🟢 **الفصل القادم {target_ch}:** جاهز للنشر في الدورة القادمة")
                     st.caption(f"⏱️ الوتيرة: فصل كل {nov['interval_hours']} ساعة | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
                 with col_actions:
+                    if st.button("⚡ نشر فوراً", key=f"fast_pub_{nov['id']}", help="نشر الفصل القادم الآن دون انتظار المؤقت"):
+                        nov["next_run_timestamp"] = 0.0
+                        syndication_db.save_or_update_syndicated_novel(nov)
+                        try:
+                            import syndication_daemon
+                            syndication_daemon.run_syndication_cycle()
+                            st.success(f"تم إطلاق نشر الفصل {target_ch}!")
+                            st.rerun()
+                        except Exception as ex_f:
+                            st.error(f"خطأ: {ex_f}")
                     if st.button("🗑️ حذف", key=f"del_rc_nov_{nov['id']}"):
                         syndication_db.delete_syndicated_novel(nov["id"])
                         st.success(f"تم حذف {nov['novel_name']}")
@@ -215,8 +257,28 @@ def render_rewayat_club_tab():
                 st.caption(f"⚠️ {log['error_msg']}")
 
 def render_wattpad_tab():
+    # التأكد من تشغيل المشغل الذاتي المجدول 24/7 في الخلفية
+    try:
+        import syndication_daemon
+        syndication_daemon.start_syndication_daemon()
+    except Exception:
+        pass
+
     st.subheader("🟧 إدارة النشر التلقائي — واتباد (Wattpad)")
     st.caption("أتمتة سحب الفصول من مدونة عالم سماء الروايات ونشرها كأجزاء داخل قصص حسابك على Wattpad.")
+
+    col_stat1, col_stat2 = st.columns([3, 1])
+    with col_stat1:
+        st.markdown('<div style="background-color:#064e3b; border:1px solid #059669; border-radius:8px; padding:7px 14px; margin-bottom:12px; color:#6ee7b7; font-size:0.90rem; font-weight:bold;">🟢 <b>المجدول التلقائي الذاتي (24/7 Background Scheduler):</b> نشط ويعمل في الخلفية لمراقبة مواعيد الفصول ونشرها بدقة.</div>', unsafe_allow_html=True)
+    with col_stat2:
+        if st.button("🔄 فحص وجدولة الآن", key="wp_trigger_now", use_container_width=True):
+            try:
+                import syndication_daemon
+                syndication_daemon.run_syndication_cycle()
+                st.success("تم تشغيل دورة الفحص!")
+                st.rerun()
+            except Exception as ex_trig:
+                st.error(f"خطأ: {ex_trig}")
     
     # 1. إعدادات حساب واتباد
     with st.expander("🔐 بيانات حساب واتباد (Wattpad Credentials)", expanded=False):
@@ -308,9 +370,28 @@ def render_wattpad_tab():
                     st.markdown(f"**📖 {nov['novel_name']}**")
                     st.caption(f"معرف قصة واتباد: `{nov['wattpad_story_id'] or 'غير محدد'}` | المصدر: `{nov['blogger_label']}`")
                 with col_status:
+                    target_ch = nov['last_synced_chapter'] + 1
                     st.markdown(f"📊 آخر فصل تم نشره: **{nov['last_synced_chapter']}** / التوقف عند: **{nov['stop_chapter']}**")
+                    next_run = nov.get("next_run_timestamp", 0.0)
+                    now_ts = time.time()
+                    if next_run and next_run > now_ts:
+                        rem_hours = (next_run - now_ts) / 3600.0
+                        dt_str = datetime.datetime.fromtimestamp(next_run).strftime('%I:%M %p')
+                        st.caption(f"⏳ **موعد الفصل {target_ch}:** الساعة {dt_str} (بعد {rem_hours:.1f} ساعة)")
+                    else:
+                        st.caption(f"🟢 **الفصل القادم {target_ch}:** جاهز للنشر في الدورة القادمة")
                     st.caption(f"⏱️ الوتيرة: فصل كل {nov['interval_hours']} ساعة | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
                 with col_actions:
+                    if st.button("⚡ نشر فوراً", key=f"fast_pub_wp_{nov['id']}", help="نشر الفصل القادم الآن دون انتظار المؤقت"):
+                        nov["next_run_timestamp"] = 0.0
+                        syndication_db.save_or_update_syndicated_novel(nov)
+                        try:
+                            import syndication_daemon
+                            syndication_daemon.run_syndication_cycle()
+                            st.success(f"تم إطلاق نشر الفصل {target_ch}!")
+                            st.rerun()
+                        except Exception as ex_f:
+                            st.error(f"خطأ: {ex_f}")
                     if st.button("🗑️ حذف", key=f"del_wp_nov_{nov['id']}"):
                         syndication_db.delete_syndicated_novel(nov["id"])
                         st.success(f"تم حذف {nov['novel_name']}")
