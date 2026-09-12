@@ -6,6 +6,7 @@ ui_syndication_tabs.py — واجهة التبويبين لنادي الرواي
 
 import streamlit as st
 import syndication_db
+import syndication_extractor
 
 def render_rewayat_club_tab():
     st.subheader("🏛️ إدارة النشر التلقائي — نادي الروايات (Rewayat Club)")
@@ -96,6 +97,65 @@ def render_rewayat_club_tab():
                         st.rerun()
                 st.markdown("---")
 
+    # 4. قسم معاينة الفصل قبل نشره
+    st.markdown("### 👁️ معاينة فصل وتجهيزه (اختبار المحرك)")
+    with st.expander("🔍 معاينة فصل مجهّز جاهز للنشر", expanded=False):
+        all_novels_names = [n["novel_name"] for n in syndication_db.get_all_syndicated_novels() if n.get("rewayat_enabled") == 1]
+        if not all_novels_names:
+            st.info("أضف رواية أولاً من النموذج أعلاه.")
+        else:
+            col_pv1, col_pv2 = st.columns([2, 1])
+            with col_pv1:
+                preview_novel = st.selectbox("📚 اختر الرواية:", all_novels_names, key="rc_preview_novel")
+            with col_pv2:
+                preview_chapter = st.number_input("رقم الفصل للمعاينة:", min_value=1, value=1, step=1, key="rc_preview_chap")
+
+            if st.button("🔍 جلب ومعاينة الفصل", key="rc_preview_btn", use_container_width=True):
+                # البحث عن إعدادات الرواية
+                all_novs = syndication_db.get_all_syndicated_novels()
+                nov_cfg = next((n for n in all_novs if n["novel_name"] == preview_novel), None)
+                custom_cta = nov_cfg["custom_cta"] if nov_cfg else ""
+                blogger_url = nov_cfg["blogger_url"] if nov_cfg else ""
+                
+                with st.spinner(f"⏳ جاري سحب الفصل {preview_chapter} من جداول الترجمة..."):
+                    result = syndication_extractor.prepare_chapter_for_publishing(
+                        novel_name=preview_novel,
+                        chapter_num=int(preview_chapter),
+                        custom_cta=custom_cta,
+                        blogger_url=blogger_url
+                    )
+                
+                if result["success"]:
+                    st.success(f"✅ تم جلب الفصل من المصدر: `{result['source']}`")
+                    st.markdown(f"**📌 عنوان الفصل:** {result['title']}")
+                    st.markdown("**📄 معاينة أول 500 حرف من المتن:**")
+                    st.text_area("المتن المُجهَّز:", value=result["content_for_publish"][:500] + "...", height=180, disabled=True, key="rc_preview_output")
+                    
+                    chars = len(result["content_for_publish"])
+                    st.caption(f"📊 الطول الإجمالي: {chars:,} حرف | المصدر: `{result['source']}`")
+                    
+                    # عرض الفصول المتاحة
+                    available = syndication_extractor.get_available_chapters_for_novel(preview_novel)
+                    if available:
+                        st.info(f"📚 إجمالي الفصول المتاحة لهذه الرواية في شيت الترجمة: **{len(available)}** فصل (من {min(available)} إلى {max(available)})")
+                else:
+                    st.error(f"❌ {result['error']}")
+
+    # 5. سجل النشر الأخير
+    st.markdown("### 📋 سجل النشر الأخير (نادي الروايات)")
+    recent_logs = syndication_db.get_recent_syndication_logs(limit=20)
+    rc_logs = [l for l in recent_logs if l.get("platform") == "rewayat_club"]
+    if not rc_logs:
+        st.info("لا توجد سجلات نشر بعد.")
+    else:
+        for log in rc_logs:
+            icon = "✅" if log["status"] == "SUCCESS" else "❌"
+            st.markdown(f"{icon} **{log.get('novel_name','؟')}** — الفصل `{log['chapter_num']}` — `{log['published_at']}`")
+            if log.get("post_url"):
+                st.caption(f"🔗 {log['post_url']}")
+            if log.get("error_msg"):
+                st.caption(f"⚠️ {log['error_msg']}")
+
 def render_wattpad_tab():
     st.subheader("🟧 إدارة النشر التلقائي — واتباد (Wattpad)")
     st.caption("أتمتة سحب الفصول من مدونة عالم سماء الروايات ونشرها كأجزاء داخل قصص حسابك على Wattpad.")
@@ -184,3 +244,56 @@ def render_wattpad_tab():
                         st.success(f"تم حذف {nov['novel_name']}")
                         st.rerun()
                 st.markdown("---")
+
+    # 4. معاينة فصل في واتباد
+    st.markdown("### 👁️ معاينة فصل (اختبار المحرك)")
+    with st.expander("🔍 معاينة فصل جاهز للنشر على واتباد", expanded=False):
+        all_wp_names = [n["novel_name"] for n in syndication_db.get_all_syndicated_novels() if n.get("wattpad_enabled") == 1]
+        if not all_wp_names:
+            st.info("أضف قصة أولاً من النموذج أعلاه.")
+        else:
+            col_pv1, col_pv2 = st.columns([2, 1])
+            with col_pv1:
+                wp_preview_novel = st.selectbox("📚 اختر الرواية:", all_wp_names, key="wp_preview_novel")
+            with col_pv2:
+                wp_preview_chapter = st.number_input("رقم الفصل:", min_value=1, value=1, step=1, key="wp_preview_chap")
+
+            if st.button("🔍 جلب ومعاينة الفصل", key="wp_preview_btn", use_container_width=True):
+                all_novs = syndication_db.get_all_syndicated_novels()
+                nov_cfg = next((n for n in all_novs if n["novel_name"] == wp_preview_novel), None)
+                custom_cta = nov_cfg["custom_cta"] if nov_cfg else ""
+                blogger_url = nov_cfg["blogger_url"] if nov_cfg else ""
+
+                with st.spinner(f"⏳ جاري سحب الفصل {wp_preview_chapter}..."):
+                    result = syndication_extractor.prepare_chapter_for_publishing(
+                        novel_name=wp_preview_novel,
+                        chapter_num=int(wp_preview_chapter),
+                        custom_cta=custom_cta,
+                        blogger_url=blogger_url
+                    )
+
+                if result["success"]:
+                    st.success(f"✅ تم جلب الفصل من المصدر: `{result['source']}`")
+                    st.markdown(f"**📌 عنوان الفصل:** {result['title']}")
+                    st.text_area("المتن المُجهَّز:", value=result["content_for_publish"][:500] + "...", height=180, disabled=True, key="wp_preview_output")
+                    st.caption(f"📊 الطول: {len(result['content_for_publish']):,} حرف")
+                    available = syndication_extractor.get_available_chapters_for_novel(wp_preview_novel)
+                    if available:
+                        st.info(f"📚 فصول متاحة: **{len(available)}** (من {min(available)} إلى {max(available)})")
+                else:
+                    st.error(f"❌ {result['error']}")
+
+    # 5. سجل النشر الأخير (واتباد)
+    st.markdown("### 📋 سجل النشر الأخير (واتباد)")
+    recent_logs = syndication_db.get_recent_syndication_logs(limit=20)
+    wp_logs = [l for l in recent_logs if l.get("platform") == "wattpad"]
+    if not wp_logs:
+        st.info("لا توجد سجلات نشر بعد.")
+    else:
+        for log in wp_logs:
+            icon = "✅" if log["status"] == "SUCCESS" else "❌"
+            st.markdown(f"{icon} **{log.get('novel_name','؟')}** — الفصل `{log['chapter_num']}` — `{log['published_at']}`")
+            if log.get("post_url"):
+                st.caption(f"🔗 {log['post_url']}")
+            if log.get("error_msg"):
+                st.caption(f"⚠️ {log['error_msg']}")
