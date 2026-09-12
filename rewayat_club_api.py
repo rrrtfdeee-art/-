@@ -112,6 +112,16 @@ class RewayatClubClient:
                 }
             elif res.status_code == 400:
                 err_text = res.text
+                if "لقد قمت بإنشاء فصل بهذا الرقم" in err_text or "already created" in err_text.lower():
+                    # الفصل موجود ومنشور بالفعل مسبقاً على نادي الروايات
+                    live_url = f"{BASE_WEB_URL}/novel/{clean_slug}/{chapter_num}"
+                    return {
+                        "success": True,
+                        "chapter_num": chapter_num,
+                        "post_url": live_url,
+                        "already_exists": True,
+                        "message": f"الفصل {chapter_num} منشور مسبقاً على نادي الروايات."
+                    }
                 return {"success": False, "error": f"خطأ في بيانات النشر (400): {err_text[:250]}"}
             elif res.status_code in [401, 403]:
                 return {"success": False, "error": f"غير مصرح بالنشر لهذه الرواية أو التوكن غير صالح ({res.status_code})."}
@@ -122,3 +132,24 @@ class RewayatClubClient:
 
         except Exception as e:
             return {"success": False, "error": f"استثناء أثناء محاولة النشر: {str(e)}"}
+
+    def get_latest_chapter_number(self, novel_id: str) -> Optional[int]:
+        """استعلام أحدث رقم فصل منشور على نادي الروايات مباشرة عبر API."""
+        clean_slug = novel_id.strip()
+        if "rewayat.club/novel/" in clean_slug:
+            clean_slug = clean_slug.split("rewayat.club/novel/")[-1].split("/")[0].split("?")[0]
+        clean_slug = clean_slug.rstrip("/")
+
+        endpoint = f"{BASE_API_URL}/chapters/{clean_slug}/"
+        try:
+            res = self.session.get(endpoint, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                results = data.get("results", [])
+                if results and "number" in results[0]:
+                    return int(results[0]["number"])
+                if "count" in data:
+                    return int(data["count"])
+        except Exception as e:
+            logger.warning(f"Error fetching latest chapter for {clean_slug}: {e}")
+        return None

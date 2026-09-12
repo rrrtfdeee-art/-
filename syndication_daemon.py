@@ -40,6 +40,18 @@ def run_syndication_cycle():
             if next_run and now < next_run:
                 continue
 
+            # مزامنة العداد تلقائياً مع الواقع الفعلي في نادي الروايات لتفادي التكرار
+            if nov.get("rewayat_enabled") and nov.get("rewayat_novel_id") and rc_token:
+                try:
+                    rc_temp = rewayat_club_api.RewayatClubClient(token=rc_token)
+                    live_num = rc_temp.get_latest_chapter_number(nov["rewayat_novel_id"])
+                    if live_num and live_num > nov.get("last_synced_chapter", 0):
+                        logger.info(f"Auto-synced last_synced_chapter for {nov['novel_name']}: {nov.get('last_synced_chapter')} -> {live_num}")
+                        nov["last_synced_chapter"] = live_num
+                        syndication_db.save_or_update_syndicated_novel(nov)
+                except Exception as e_sync:
+                    logger.warning(f"Could not auto-sync chapter count: {e_sync}")
+
             last_ch = nov.get("last_synced_chapter", 0)
             stop_ch = nov.get("stop_chapter", 9999)
             target_ch = last_ch + 1
@@ -133,28 +145,30 @@ def run_syndication_cycle():
                 syndication_db.save_or_update_syndicated_novel(nov)
                 logger.info(f"Published Ch.{target_ch} for {nov['novel_name']}. Next in {nov['interval_hours']}h")
 
-                # إرسال إشعار تليجرام فوري للمشرف
-                try:
-                    from nsw_healer_engine import notify_admin
-                    import datetime
-                    next_dt = datetime.datetime.fromtimestamp(nov["next_run_timestamp"]).strftime('%I:%M %p')
-                    pub_links = []
-                    if success_rc:
-                        pub_links.append(f"• نادي الروايات: {rc_res.get('post_url', 'تم')}")
-                    if success_wp:
-                        pub_links.append(f"• واتباد: {wp_res.get('post_url', 'تم')}")
-                    links_txt = "\n".join(pub_links)
-                    msg = (
-                        f"🚀 <b>[نشر تلقائي مجدول — ناجح]</b>\n\n"
-                        f"📖 <b>الرواية:</b> {nov['novel_name']}\n"
-                        f"📑 <b>الفصل:</b> {target_ch}\n"
-                        f"🏷️ <b>العنوان:</b> {extracted.get('title', '')}\n"
-                        f"{links_txt}\n\n"
-                        f"⏱️ <b>موعد الفصل القادم ({target_ch + 1}):</b> الساعة {next_dt} (بعد {nov['interval_hours']} ساعة)"
-                    )
-                    notify_admin(msg)
-                except Exception as ex_notif:
-                    logger.warning(f"Could not send telegram notification: {ex_notif}")
+                # إرسال إشعار تليجرام فوري للمشرف (إذا كان فصلاً جديداً)
+                is_already = (success_rc and rc_res.get("already_exists")) or (success_wp and wp_res.get("already_exists"))
+                if not is_already:
+                    try:
+                        from nsw_healer_engine import notify_admin
+                        import datetime
+                        next_dt = datetime.datetime.fromtimestamp(nov["next_run_timestamp"]).strftime('%I:%M %p')
+                        pub_links = []
+                        if success_rc:
+                            pub_links.append(f"• نادي الروايات: {rc_res.get('post_url', 'تم')}")
+                        if success_wp:
+                            pub_links.append(f"• واتباد: {wp_res.get('post_url', 'تم')}")
+                        links_txt = "\n".join(pub_links)
+                        msg = (
+                            f"🚀 <b>[نشر تلقائي مجدول — ناجح]</b>\n\n"
+                            f"📖 <b>الرواية:</b> {nov['novel_name']}\n"
+                            f"📑 <b>الفصل:</b> {target_ch}\n"
+                            f"🏷️ <b>العنوان:</b> {extracted.get('title', '')}\n"
+                            f"{links_txt}\n\n"
+                            f"⏱️ <b>موعد الفصل القادم ({target_ch + 1}):</b> الساعة {next_dt} (بعد {nov['interval_hours']} ساعة)"
+                        )
+                        notify_admin(msg)
+                    except Exception as ex_notif:
+                        logger.warning(f"Could not send telegram notification: {ex_notif}")
             else:
                 # في حال فشل النشر تأجيل المحاولة 15 دقيقة مع إشعار تحذيري
                 nov["next_run_timestamp"] = time.time() + 900
