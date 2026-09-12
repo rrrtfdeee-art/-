@@ -39,7 +39,7 @@ logger = logging.getLogger("NSW_Local_API")
 PORT = 58242
 
 from urllib.parse import urlparse, parse_qs, unquote
-from database import find_novel_by_query, get_novel_gaps, get_chapters
+from database import find_novel_by_query, get_novel_gaps, get_chapters, format_chapter_with_header
 
 class NSWLocalAPIHandler(BaseHTTPRequestHandler):
     def _send_cors_headers(self):
@@ -146,9 +146,13 @@ class NSWLocalAPIHandler(BaseHTTPRequestHandler):
                             except Exception:
                                 pass
 
+                    ch_title = r.get("title") or f"الفصل {r['chapter_number']}"
+                    if content:
+                        content = format_chapter_with_header(r["chapter_number"], ch_title, content)
+
                     out_chapters.append({
                         "chapNum": r["chapter_number"],
-                        "title": r.get("title") or f"الفصل {r['chapter_number']}",
+                        "title": ch_title,
                         "authorTitle": r.get("title") or "",
                         "text": content,
                         "status": r.get("status", "unknown"),

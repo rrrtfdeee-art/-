@@ -4,6 +4,7 @@ import sqlite3
 import datetime
 from typing import List, Dict, Optional, Any, Tuple
 import os
+import re
 
 DB_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "novel_scraper.db")
 
@@ -116,6 +117,57 @@ def init_db(db_path: str = DB_FILE_PATH):
             """, (p_dom, p_toc, p_title, p_cont, p_purge, p_notes))
 
         conn.commit()
+
+
+# ==============================================================================
+# تنسيق وضبط رأس الفصل المعياري (Standard Chapter Header Formatting)
+# ==============================================================================
+
+def format_chapter_with_header(chapter_number: int, title: Optional[str], content: str) -> str:
+    """
+    تنسيق رأس ومحتوى الفصل بدقة وفق القاعدة الصارمة:
+    الفصل رقمه : العنوان ثم المحتوى
+    مع تنظيف البوادئ المكررة (مثل Chapter 101: أو 第101章 أو 101:) ومنع تكرار العنوان في السطر الأول.
+    """
+    raw_title = (title or "").strip()
+
+    # تنظيف بوادئ أرقام الفصول المتكررة بلغات متعددة (العربية، الإنجليزية، الصينية)
+    clean_sub = re.sub(
+        r'^(?:الفصل|chapter|chap|ch\.?|第)\s*\d+[\s:ـ\-章.、]*',
+        '',
+        raw_title,
+        flags=re.IGNORECASE
+    ).strip()
+
+    # إزالة الأرقام المنفصلة التي تسبق العنوان مع النقطتين أو الشارحة مثل "101: Title"
+    clean_sub = re.sub(r'^\d+[\s:ـ\-.]+ *', '', clean_sub).strip()
+
+    final_title = clean_sub if clean_sub else raw_title
+    # إذا كان العنوان المتبقي فارغاً أو مجرد رقم مكرر أو كلمة فصل ورقم
+    if not final_title or re.match(r'^\d+$', final_title) or re.match(r'^(?:chapter|الفصل|chap|ch\.?)\s*\d+$', final_title, re.IGNORECASE):
+        header = f"الفصل {chapter_number}"
+    else:
+        header = f"الفصل {chapter_number} : {final_title}"
+
+    clean_body = (content or "").strip()
+    if not clean_body:
+        return header
+
+    # إذا كان المحتوى يبدأ بالفعل بهذا الرأس بدقة، نعيده كما هو دون تكرار
+    if clean_body.startswith(header):
+        return clean_body
+
+    # التحقق مما إذا كان السطر الأول يحتوي على عنوان قديم مكرر لهذا الفصل لتنظيفه
+    lines = clean_body.split('\n')
+    first_line = lines[0].strip()
+
+    pattern = r'^(?:الفصل|chapter|chap|ch\.?|第)\s*' + str(chapter_number) + r'(?:[\s:ـ\-章.、].*)?$'
+    if re.match(pattern, first_line, re.IGNORECASE):
+        clean_body = "\n".join(lines[1:]).strip()
+    elif final_title and first_line.lower() == final_title.lower():
+        clean_body = "\n".join(lines[1:]).strip()
+
+    return f"{header}\n\n{clean_body}"
 
 
 # ==============================================================================
@@ -332,6 +384,10 @@ def save_chapter_content(
     """حفظ محتوى الفصل الذي تم سحبه وتحديث حالته فوراً في قاعدة البيانات."""
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") if status == "downloaded" else None
     
+    # ضمان تطبيق صيغة (الفصل رقمه : العنوان ثم المحتوى) عند اكتمال تنزيل المحتوى
+    if content and status == "downloaded":
+        content = format_chapter_with_header(chapter_number, title, content)
+
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -463,6 +519,7 @@ def export_novel_to_text(
         ch_num = ch["chapter_number"]
         ch_title = (ch["title"] or f"الفصل {ch_num}").strip()
         ch_content = (ch["content"] or "").strip()
+        ch_content = format_chapter_with_header(ch_num, ch_title, ch_content)
         
         block = (
             f"===CHAPTER_START===\n"
@@ -685,6 +742,10 @@ def compare_and_replace_chapter_content(
     """
     مقارنة محتوى الفصل الأصلي مع الفصل المخزن في SQLite، واستبدال المحتوى القديم فوراً إذا كان مجتزأً أو إذا كان الجديد أكمل وأطول.
     """
+    # ضمان تطبيق صيغة (الفصل رقمه : العنوان ثم المحتوى) على المحتوى المستخرج
+    if original_content:
+        original_content = format_chapter_with_header(chapter_number, original_title or "", original_content)
+
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("""

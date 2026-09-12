@@ -61,7 +61,8 @@ from database import (
     get_novel_stats,
     compare_chapter_contents,
     compare_and_replace_chapter_content,
-    get_truncated_chapters
+    get_truncated_chapters,
+    format_chapter_with_header
 )
 
 
@@ -780,6 +781,9 @@ def upload_single_chapter_to_sheet(
     if not content or len(content.strip()) < 50:
         return False
 
+    # ضمان احتواء المحتوى على ترويسة الفصل بصيغة: الفصل رقمه : العنوان ثم المحتوى
+    content = format_chapter_with_header(chapter_number, title, content)
+
     # توثيق التوقيت بتوقيت بغداد الصارم (UTC+3)
     tz_baghdad = timezone(timedelta(hours=3))
     created_at = datetime.now(tz_baghdad).strftime("%Y-%m-%d %H:%M:%S")
@@ -1083,7 +1087,7 @@ class NovelScrapingSession:
                                 buffered_ready[ch_num] = {
                                     "chapter_number": ch_num,
                                     "title": ch.get("title") or f"الفصل {ch_num}",
-                                    "content": cached_content,
+                                    "content": format_chapter_with_header(ch_num, ch.get("title") or f"الفصل {ch_num}", cached_content),
                                     "url": ch_url
                                 }
                             self.progress_callback(processed_count, total_in_range, f"تم التخطي (مخزن كامل): فصل {ch_num}")
@@ -1117,6 +1121,9 @@ class NovelScrapingSession:
 
                             if not clean_content or len(clean_content) < 50:
                                 raise ValueError("لم يتم استخراج محتوى كافٍ من الصفحة (> 50 حرفاً).")
+
+                            # صياغة الفصل بالنمط الصارم الإلزامي: (الفصل رقمه : العنوان ثم المحتوى)
+                            clean_content = format_chapter_with_header(ch_num, ch_title, clean_content)
 
                             # مقارنة المحتوى مع المخزن مسبقاً واستبدال المجتزأ فوراً في SQLite
                             comp = compare_and_replace_chapter_content(
@@ -1423,6 +1430,11 @@ def compare_and_heal_chapter(
             "downloaded_length": downloaded_len,
             "downloaded_content": downloaded_content
         }
+
+    original_content = format_chapter_with_header(chapter_number, orig_title, original_content)
+    if downloaded_content:
+        downloaded_content = format_chapter_with_header(chapter_number, downloaded_title, downloaded_content)
+        downloaded_len = len(downloaded_content)
 
     original_len = len(original_content)
     diff_chars = original_len - downloaded_len
