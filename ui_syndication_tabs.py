@@ -98,11 +98,13 @@ def render_rewayat_club_tab():
         with rc_c2:
             rc_ch1, rc_ch2, rc_ch3 = st.columns(3)
             with rc_ch1:
-                n_start_ch = st.number_input("من الفصل:", min_value=1, value=1, step=1, key="rc_uni_start")
+                n_start_ch = st.number_input("من الفصل (بداية الترقيم):", min_value=1, value=1, step=1, help="رقم أول فصل تريد جدولته في الشيت (مثلاً 1)", key="rc_uni_start")
             with rc_ch2:
-                n_stop_ch = st.number_input("إلى الفصل:", min_value=1, value=20, step=1, key="rc_uni_stop")
+                n_stop_ch = st.number_input("إلى الفصل (نهاية الترقيم):", min_value=1, value=50, step=1, help="آخر فصل في الدفعة تتوقف عنده الجدولة (مثلاً 50 أو 100)", key="rc_uni_stop")
             with rc_ch3:
-                n_last_ch = st.number_input("آخر فصل نُشر مسبقاً:", min_value=0, value=0, step=1, help="اتركه 0 إذا كانت رواية جديدة تماماً", key="rc_uni_last")
+                n_last_ch = st.number_input("آخر فصل نُشر مسبقاً (تخطي تلقائي):", min_value=0, value=0, step=1, help="حدد هنا آخر فصل منشور لتخطيه تلقائياً! مثلاً إذا كتبت 23، سيبدأ السيرفر فوراً بنشر الفصل 24 وما بعده دون تكرار الفصول القديمة.", key="rc_uni_last")
+        
+        st.info("💡 **توضيح أرقام الفصول:** 'من الفصل' و 'إلى الفصل' يحددان نطاق الفصول المراد جدولتها في الشيت. أما **'آخر فصل نُشر مسبقاً'** فهو الأهم لتحديد نقطة انطلاق النشر الفعلي: إذا وضعت فيه `23`، سيتخطى السيرفر تلقائياً كافة الفصول حتى 23 ويبدأ فوراً بنشر الفصل **24**!")
 
         st.markdown("##### 2️⃣ خطة النشر والجدولة في Google Sheet (بتوقيت مكة والعراق):")
         rc_m1, rc_m2 = st.columns([1.5, 2.5])
@@ -475,21 +477,32 @@ def render_rewayat_club_tab():
                 preview_chapter = st.number_input("رقم الفصل للمعاينة:", min_value=1, value=1, step=1, key="rc_preview_chap")
 
             if st.button("🔍 جلب ومعاينة الفصل", key="rc_preview_btn", use_container_width=True):
-                # البحث عن إعدادات الرواية
                 all_novs = syndication_db.get_all_syndicated_novels()
                 nov_cfg = next((n for n in all_novs if n["novel_name"] == preview_novel), None)
                 custom_cta = nov_cfg["custom_cta"] if nov_cfg else ""
                 blogger_url = nov_cfg["blogger_url"] if nov_cfg else ""
                 
                 with st.spinner(f"⏳ جاري سحب الفصل {preview_chapter} من جداول الترجمة..."):
-                    result = syndication_extractor.prepare_chapter_for_publishing(
+                    res = syndication_extractor.prepare_chapter_for_publishing(
                         novel_name=preview_novel,
                         chapter_num=int(preview_chapter),
                         custom_cta=custom_cta,
                         blogger_url=blogger_url
                     )
+                    st.session_state["rc_preview_data"] = res
+                    st.session_state["rc_preview_meta"] = {
+                        "novel": preview_novel,
+                        "chapter": int(preview_chapter),
+                        "nov_cfg": nov_cfg
+                    }
+
+            if "rc_preview_data" in st.session_state and st.session_state.get("rc_preview_meta", {}).get("novel") == preview_novel:
+                result = st.session_state["rc_preview_data"]
+                meta = st.session_state["rc_preview_meta"]
+                p_chap = meta["chapter"]
+                nov_cfg = meta["nov_cfg"]
                 
-                if result["success"]:
+                if result.get("success"):
                     st.success(f"✅ تم جلب الفصل من المصدر: `{result['source']}`")
                     st.markdown(f"**📌 عنوان الفصل:** {result['title']}")
                     st.markdown("**📄 معاينة أول 500 حرف من المتن:**")
@@ -510,14 +523,14 @@ def render_rewayat_club_tab():
                         user_token = syndication_db.get_synd_setting("rewayat_token", "")
                         if not user_token:
                             st.error("❌ يرجى إدخال وحفظ التوكن (Bearer Token) لحساب نادي الروايات أولاً.")
-                        elif not nov_cfg.get("rewayat_novel_id"):
+                        elif not (nov_cfg and nov_cfg.get("rewayat_novel_id")):
                             st.error("❌ الرواية لا تحتوي على معرف (Novel ID) في نادي الروايات.")
                         else:
                             with st.spinner("⏳ جاري إرسال الفصل إلى منصة نادي الروايات..."):
                                 client = rewayat_club_api.RewayatClubClient(token=user_token)
                                 pub_res = client.publish_chapter(
                                     novel_id=nov_cfg["rewayat_novel_id"],
-                                    chapter_num=int(preview_chapter),
+                                    chapter_num=int(p_chap),
                                     title=result["title"],
                                     content=result["content_for_publish"]
                                 )
@@ -527,27 +540,28 @@ def render_rewayat_club_tab():
                                     # توثيق في السجل
                                     syndication_db.log_syndication_event(
                                         novel_id=nov_cfg["id"],
-                                        chapter_num=int(preview_chapter),
+                                        chapter_num=int(p_chap),
                                         platform="rewayat_club",
                                         status="SUCCESS",
                                         post_url=pub_res.get("post_url", "")
                                     )
                                     # تحديث عداد آخر فصل تم نشره إذا كان هذا الفصل أحدث
-                                    if int(preview_chapter) > nov_cfg.get("last_synced_chapter", 0):
-                                        nov_cfg["last_synced_chapter"] = int(preview_chapter)
+                                    if int(p_chap) > nov_cfg.get("last_synced_chapter", 0):
+                                        nov_cfg["last_synced_chapter"] = int(p_chap)
                                         syndication_db.save_or_update_syndicated_novel(nov_cfg)
+                                    st.session_state.pop("rc_preview_data", None)
                                     st.rerun()
                                 else:
                                     st.error(f"❌ {pub_res.get('error')}")
                                     syndication_db.log_syndication_event(
                                         novel_id=nov_cfg["id"],
-                                        chapter_num=int(preview_chapter),
+                                        chapter_num=int(p_chap),
                                         platform="rewayat_club",
                                         status="FAILED",
                                         error_msg=pub_res.get("error", "")
                                     )
                 else:
-                    st.error(f"❌ {result['error']}")
+                    st.error(f"❌ {result.get('error', 'تعذر جلب الفصل')}")
 
     # 5. سجل النشر الأخير
     st.markdown("### 📋 سجل النشر الأخير (نادي الروايات)")
@@ -1225,14 +1239,26 @@ def render_wattpad_tab():
                 blogger_url = nov_cfg["blogger_url"] if nov_cfg else ""
 
                 with st.spinner(f"⏳ جاري سحب الفصل {wp_preview_chapter}..."):
-                    result = syndication_extractor.prepare_chapter_for_publishing(
+                    res = syndication_extractor.prepare_chapter_for_publishing(
                         novel_name=wp_preview_novel,
                         chapter_num=int(wp_preview_chapter),
                         custom_cta=custom_cta,
                         blogger_url=blogger_url
                     )
+                    st.session_state["wp_preview_data"] = res
+                    st.session_state["wp_preview_meta"] = {
+                        "novel": wp_preview_novel,
+                        "chapter": int(wp_preview_chapter),
+                        "nov_cfg": nov_cfg
+                    }
 
-                if result["success"]:
+            if "wp_preview_data" in st.session_state and st.session_state.get("wp_preview_meta", {}).get("novel") == wp_preview_novel:
+                result = st.session_state["wp_preview_data"]
+                meta = st.session_state["wp_preview_meta"]
+                wp_chap = meta["chapter"]
+                nov_cfg = meta["nov_cfg"]
+
+                if result.get("success"):
                     st.success(f"✅ تم جلب الفصل من المصدر: `{result['source']}`")
                     st.markdown(f"**📌 عنوان الفصل:** {result['title']}")
                     st.text_area("المتن المُجهَّز:", value=result["content_for_publish"][:500] + "...", height=180, disabled=True, key="wp_preview_output")
@@ -1248,14 +1274,14 @@ def render_wattpad_tab():
                         w_user_token = syndication_db.get_synd_setting("wattpad_token", "")
                         if not w_user_token:
                             st.error("❌ يرجى إدخال وحفظ التوكن لحساب واتباد أولاً.")
-                        elif not nov_cfg.get("wattpad_story_id"):
+                        elif not (nov_cfg and nov_cfg.get("wattpad_story_id")):
                             st.error("❌ الرواية لا تحتوي على معرف قصة (Story ID) في واتباد.")
                         else:
                             with st.spinner("⏳ جاري إرسال الفصل كجزء جديد إلى قصة واتباد..."):
                                 w_client = wattpad_poster.WattpadClient(token=w_user_token)
                                 w_pub_res = w_client.publish_chapter_to_story(
                                     story_id=nov_cfg["wattpad_story_id"],
-                                    chapter_num=int(wp_preview_chapter),
+                                    chapter_num=int(wp_chap),
                                     title=result["title"],
                                     content=result["content_for_publish"]
                                 )
@@ -1264,26 +1290,27 @@ def render_wattpad_tab():
                                     st.success(f"🎉 {w_pub_res.get('message')}")
                                     syndication_db.log_syndication_event(
                                         novel_id=nov_cfg["id"],
-                                        chapter_num=int(wp_preview_chapter),
+                                        chapter_num=int(wp_chap),
                                         platform="wattpad",
                                         status="SUCCESS",
                                         post_url=w_pub_res.get("post_url", "")
                                     )
-                                    if int(wp_preview_chapter) > nov_cfg.get("last_synced_chapter", 0):
-                                        nov_cfg["last_synced_chapter"] = int(wp_preview_chapter)
+                                    if int(wp_chap) > nov_cfg.get("last_synced_chapter", 0):
+                                        nov_cfg["last_synced_chapter"] = int(wp_chap)
                                         syndication_db.save_or_update_syndicated_novel(nov_cfg)
+                                    st.session_state.pop("wp_preview_data", None)
                                     st.rerun()
                                 else:
                                     st.error(f"❌ {w_pub_res.get('error')}")
                                     syndication_db.log_syndication_event(
                                         novel_id=nov_cfg["id"],
-                                        chapter_num=int(wp_preview_chapter),
+                                        chapter_num=int(wp_chap),
                                         platform="wattpad",
                                         status="FAILED",
                                         error_msg=w_pub_res.get("error", "")
                                     )
                 else:
-                    st.error(f"❌ {result['error']}")
+                    st.error(f"❌ {result.get('error', 'تعذر جلب الفصل')}")
 
     # 5. سجل النشر الأخير (واتباد)
     st.markdown("### 📋 سجل النشر الأخير (واتباد)")

@@ -55,16 +55,24 @@ REQUEST_TIMEOUT = 15  # ثانية
 # ─────────────────────────────────────────────────────────
 
 def _fetch_sheet_csv(spreadsheet_id: str, sheet_gid: str = "0") -> list:
-    """تحميل بيانات ورقة الجدول كقائمة صفوف."""
-    url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={sheet_gid}"
-    try:
-        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        reader = csv.reader(StringIO(resp.text))
-        return list(reader)
-    except Exception as e:
-        logger.warning(f"[extractor] خطأ في تحميل الشيت {spreadsheet_id}: {e}")
-        return []
+    """تحميل بيانات ورقة الجدول كقائمة صفوف مع مسارات احتياطية قوية."""
+    urls = [
+        f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={sheet_gid}",
+        f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv",
+        f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq?tqx=out:csv"
+    ]
+    for u in urls:
+        try:
+            resp = requests.get(u, timeout=REQUEST_TIMEOUT, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200 and resp.text.strip():
+                reader = csv.reader(StringIO(resp.text))
+                rows = list(reader)
+                if rows:
+                    return rows
+        except Exception:
+            continue
+    logger.warning(f"[extractor] تعذر تحميل الشيت {spreadsheet_id} بكافة المسارات.")
+    return []
 
 
 # ─────────────────────────────────────────────────────────
@@ -157,12 +165,21 @@ def fetch_chapter_from_published_sheet(
             continue
         
         row_novel = str(row[COL_PUB_NOVEL_NAME]).strip().lower()
-        if novel_low not in row_novel and row_novel not in novel_low:
+        row_labels = str(row[COL_PUB_LABELS]).strip().lower() if len(row) > COL_PUB_LABELS else ""
+        
+        matches_novel = (
+            novel_low in row_novel or 
+            row_novel in novel_low or 
+            novel_low in row_labels or 
+            (len(novel_low) >= 6 and novel_low[:6] in row_novel)
+        )
+        if not matches_novel:
             continue
         
         try:
-            row_chapter = int(str(row[COL_PUB_CHAPTER_NUM]).strip())
-        except ValueError:
+            ch_str = str(row[COL_PUB_CHAPTER_NUM]).strip()
+            row_chapter = int(float(ch_str))
+        except (ValueError, TypeError):
             continue
         
         if row_chapter == chapter_num:
@@ -184,35 +201,42 @@ def fetch_chapter_from_published_sheet(
 
 def _fetch_post_content_via_gas(post_id: str, post_url: str) -> Optional[str]:
     """يجلب محتوى المنشور من بلوجر عبر Apps Script WebApp أو مباشرة من رابط التدوينة."""
-    # 1. محاولة عبر رابط المدونة مباشرة (أسرع وأدق كـ Fallback)
+    # 1. محاولة عبر رابط المدونة مباشرة مع محاولات إعادة وترقية المهلة
     if post_url:
-        try:
-            resp = requests.get(post_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=REQUEST_TIMEOUT)
-            if resp.status_code == 200:
-                html = resp.text
-                # استخراج محتوى التدوينة من الوسم الرئيسي للبلوجر
-                m = re.search(r"<div[^>]*class=['\"][^'\"]*post-body[^'\"]*['\"][^>]*>(.*?)</div>\s*<div[^>]*class=['\"][^'\"]*post-footer", html, re.DOTALL | re.IGNORECASE)
-                if not m:
-                    m = re.search(r"<div[^>]*class=['\"][^'\"]*post-body[^'\"]*['\"][^>]*>(.*)", html, re.DOTALL | re.IGNORECASE)
-                if m:
-                    clean = _strip_blogger_html(m.group(1))
-                    if len(clean) > 200:
-                        return clean
-        except Exception as e_direct:
-            logger.warning(f"[extractor] تعذر الجلب المباشر من الرابط: {e_direct}")
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        }
+        for attempt in range(2):
+            try:
+                resp = requests.get(post_url, headers=headers, timeout=25)
+                if resp.status_code == 200 and resp.text.strip():
+                    html = resp.text
+                    # استخراج محتوى التدوينة من الوسم الرئيسي للبلوجر
+                    m = re.search(r"<div[^>]*class=['\"][^'\"]*post-body[^'\"]*['\"][^>]*>(.*?)</div>\s*<div[^>]*class=['\"][^'\"]*post-footer", html, re.DOTALL | re.IGNORECASE)
+                    if not m:
+                        m = re.search(r"<div[^>]*class=['\"][^'\"]*post-body[^'\"]*['\"][^>]*>(.*)", html, re.DOTALL | re.IGNORECASE)
+                    if m:
+                        clean = _strip_blogger_html(m.group(1))
+                        if len(clean) > 200:
+                            return clean
+                break
+            except Exception as e_direct:
+                if attempt == 1:
+                    logger.warning(f"[extractor] تعذر الجلب المباشر من الرابط: {e_direct}")
+                time.sleep(1)
 
     # 2. محاولة عبر Apps Script WebApp
     try:
         params = {"action": "getPostContent", "postId": post_id, "postUrl": post_url}
         resp = requests.get(GAS_WEBAPP_URL, params=params, timeout=REQUEST_TIMEOUT)
         if resp.status_code == 200 and resp.text.strip():
-            try:
+            raw_text = resp.text.strip()
+            if not raw_text.startswith("<"):
                 data = resp.json()
                 raw_html = data.get("content") or data.get("body") or ""
                 if raw_html:
                     return _strip_blogger_html(raw_html)
-            except Exception:
-                pass
     except Exception as e:
         logger.warning(f"[extractor] خطأ GAS لجلب postId={post_id}: {e}")
     return None
