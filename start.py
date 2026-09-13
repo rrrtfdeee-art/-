@@ -47,7 +47,8 @@ if __name__ == "__main__":
     print("  Telegram Bot + Streamlit UI")
     print("=" * 50)
 
-    # تشغيل البوت في خيط خلفي
+    # تشغيل البوت في خيط خلفي مع وسم منع الازدواجية
+    os.environ["NSW_BOT_RUNNER"] = "start_py"
     bot_thread = threading.Thread(target=run_telegram_bot, daemon=True, name="TelegramBot")
     bot_thread.start()
     print("[Launcher] Telegram Bot thread started.")

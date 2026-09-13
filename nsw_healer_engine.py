@@ -182,10 +182,32 @@ def get_realtime_engine_report() -> str:
 # 🔔 1. نظام التنبيهات وإشعارات الأعطال ونفاد الحصص
 # ==============================================================================
 
-def notify_admin(message: str, parse_mode: str = "HTML"):
-    """إرسال إشعار فوري مزدوج لكل من تليجرام وديسكورد للمشرف."""
-    # 1. إرسال إلى تليجرام
-    if TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID:
+def notify_admin(message: str, parse_mode: str = "HTML", force_push: bool = False):
+    """إرسال إشعار فوري مزدوج مع الالتزام بالوضع الصامت وتسجيل النشاطات في السجل."""
+    # تسجيل النشاط في قاعدة البيانات للتقارير الدورية دائماً
+    try:
+        import re
+        import database
+        clean_title = re.sub(r'<[^>]+>', '', message.split("\n")[0]).strip()[:150]
+        database.log_bot_activity(
+            event_type="healer",
+            title=clean_title,
+            details=message,
+            status="INFO"
+        )
+    except Exception:
+        pass
+
+    # فحص ما إذا كانت الدردشة مفتوحة من المشرف
+    live_open = False
+    try:
+        import database
+        live_open = database.is_live_chat_open()
+    except Exception:
+        live_open = False
+
+    # 1. إرسال إلى تليجرام فقط إذا كانت الدردشة مفتوحة أو إشعار إجباري (force_push)
+    if (live_open or force_push) and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": parse_mode}, timeout=15)

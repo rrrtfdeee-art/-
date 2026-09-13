@@ -107,8 +107,25 @@ def get_novel_from_catalog_idx(idx_str: str) -> Optional[str]:
     return "After Severing Ties"
 
 
-def notify_admin(message: str, parse_mode: str = "HTML"):
-    """إرسال إشعار تليجرام فوري للمشرف الأساسي."""
+def notify_admin(message: str, parse_mode: str = "HTML", force_push: bool = False):
+    """إرسال إشعار للمشرف مع دعم الوضع الصامت التلقائي وتسجيل النشاطات في السجل."""
+    # 1. تسجيل النشاط دائماً في قاعدة البيانات للتقارير الدورية
+    try:
+        import re
+        clean_title = re.sub(r'<[^>]+>', '', message.split("\n")[0]).strip()[:150]
+        database.log_bot_activity(
+            event_type="notification",
+            title=clean_title,
+            details=message,
+            status="INFO"
+        )
+    except Exception:
+        pass
+
+    # 2. إرسال الرسالة المنبثقة للمشرف فقط إذا كانت الدردشة مفتوحة بـ /chat_on أو force_push
+    if not force_push and not database.is_live_chat_open():
+        return  # الوضع الصامت مفعل، لا ترسل إشعارات عشوائية منبثقة
+
     admin_id = ADMIN_CHAT_ID or os.getenv("NSW_TELEGRAM_CHAT_ID", "8883556949")
     token = BOT_TOKEN or os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4")
     if not token or not admin_id:
@@ -149,12 +166,15 @@ def create_bot_app():
     apihelper.CONNECT_TIMEOUT = 30
     apihelper.RETRY_ON_ERROR = True
 
-    bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+    bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=True, num_threads=10)
 
     # تسجيل قائمة الأوامر في زر Menu الرسمي بتطبيق تيليجرام
     try:
         bot.set_my_commands([
             types.BotCommand("menu", "📑 القائمة الرئيسية وأزرار التحكم"),
+            types.BotCommand("chat_on", "🟢 فتح الدردشة المباشرة (تلقي الإشعارات)"),
+            types.BotCommand("chat_off", "🔕 الوضع الصامت (تخفيف الرسائل)"),
+            types.BotCommand("report", "📊 طلب تقرير مجمع للعمليات"),
             types.BotCommand("repair", "🛡️ الإصلاح الشامل (فجوات + مبتورات + تنقل)"),
             types.BotCommand("fix_dates", "🗓️ إصلاح وتنسيق تواريخ نشر الفصول"),
             types.BotCommand("fix_titles", "🏷️ توحيد صيغة العناوين (الفصل X: العنوان)"),
@@ -170,6 +190,159 @@ def create_bot_app():
         ])
     except Exception as cmd_err:
         print(f"[Telegram Bot] Warning setting commands menu: {cmd_err}")
+
+    # ----------------------------------------------------
+    # نظام وضع الدردشة المباشرة والتقارير المجمعة (Silent Mode & Reports)
+    # ----------------------------------------------------
+    def _send_operations_report(chat_id: int, hours: float = 3.0, title_label: str = "آخر 3 ساعات", message_id: Optional[int] = None):
+        """إرسال أو تحديث تقرير العمليات التنفيذي مع لوحة أزرار تفاعلية."""
+        summary = database.get_bot_activities_summary(hours=hours)
+        total = summary["total_operations"]
+        by_type = summary["counts_by_type"]
+        novels = summary["novels_list"]
+        highlights = summary["recent_highlights"]
+
+        # إحصائيات النشر التلقائي
+        synd_count = 0
+        try:
+            import syndication_db
+            import datetime as _dt
+            logs = syndication_db.get_recent_syndication_logs(limit=100)
+            cutoff_dt = _dt.datetime.now() - _dt.timedelta(hours=hours)
+            for l in logs:
+                try:
+                    p_dt = _dt.datetime.strptime(l["published_at"], "%Y-%m-%d %H:%M:%S")
+                    if p_dt >= cutoff_dt and l.get("status") == "SUCCESS":
+                        synd_count += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        time_label = f"آخر {int(hours)} ساعات" if hours < 24 else ("اليوم (24 ساعة)" if hours == 24 else (f"{int(hours//24)} أيام"))
+        text = (
+            f"📊 <b>التقرير التنفيذي الشامل للعمليات:</b>\n"
+            f"🏷️ <b>الفترة:</b> {title_label} ({time_label})\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ <b>إجمالي الأنشطة والمهام:</b> <code>{total}</code> عملية\n"
+            f"🚀 <b>فصول تم نشرها بنجاح:</b> <code>{synd_count}</code> فصل\n"
+            f"📚 <b>الروايات المشمولة:</b> <code>{len(novels)}</code> رواية\n"
+        )
+        if novels:
+            text += f"• <i>{', '.join(list(novels)[:3])}</i>\n"
+
+        text += f"\n📈 <b>تصنيف العمليات المنفذة:</b>\n"
+        type_names = {
+            "notification": "🔔 تنبيهات المنظومة",
+            "healer": "🩹 صيانة واستصلاح الفصول",
+            "syndication": "📤 نشر وجدولة الفصول",
+            "scrape": "🕷️ سحب وأرشفة الفصول",
+            "repair": "🛠️ إصلاح العناوين والروابط",
+            "system": "🖥️ مهام السيرفر وإقلاع"
+        }
+        if by_type:
+            for k, v in by_type.items():
+                lbl = type_names.get(k, f"• {k}")
+                text += f"• {lbl}: <code>{v}</code>\n"
+        else:
+            text += "• <i>لم تُسجل عمليات خاصة في هذه الفترة.</i>\n"
+
+        text += f"\n📌 <b>أبرز الأحداث الأخيرة:</b>\n"
+        if highlights:
+            for h in highlights[:6]:
+                text += f"{h}\n"
+        else:
+            text += "• <i>السيرفر يعمل باستقرار وهدوء تام دون أخطاء.</i>\n"
+
+        is_open = database.is_live_chat_open()
+        chat_status = "🟢 مفتوحة (الإشعارات تصلك حياً)" if is_open else "🔕 مغلقة (الوضع الصامت مفعل لمنع الإزعاج)"
+        text += (
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💬 <b>حالة الدردشة المباشرة:</b> {chat_status}\n"
+            f"💡 <i>يمكنك التبديل بين الفترات بالأزرار أدناه:</i>"
+        )
+
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("🕒 آخر 3 ساعات", callback_data="rep_3h"),
+            types.InlineKeyboardButton("📅 اليوم (24 س)", callback_data="rep_24h"),
+            types.InlineKeyboardButton("🗓️ الأسبوع (7 أيام)", callback_data="rep_168h"),
+            types.InlineKeyboardButton("📊 الشهر (30 يوماً)", callback_data="rep_720h")
+        )
+        if is_open:
+            markup.add(types.InlineKeyboardButton("🔕 تفعيل الوضع الصامت (كتم)", callback_data="act_chat_off"))
+        else:
+            markup.add(types.InlineKeyboardButton("🟢 فتح الدردشة المباشرة", callback_data="act_chat_on"))
+
+        try:
+            if message_id:
+                bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+            else:
+                bot.send_message(chat_id, text, reply_markup=markup)
+        except Exception:
+            bot.send_message(chat_id, text, reply_markup=markup)
+
+    @bot.message_handler(commands=['chat_on', 'open_chat'])
+    def handle_chat_on(message):
+        database.set_live_chat_open(True)
+        bot.reply_to(
+            message,
+            "🟢 <b>تم فتح وضع الدردشة المباشرة بنجاح!</b>\n\n"
+            "ستصلك الآن كافة إشعارات السيرفر وعمليات النشر والصيانة لحظة بلحظة.\n"
+            "• لإيقاف الإشعارات والعودة للوضع الصامت: أرسل <code>/chat_off</code> أو 'إغلاق الدردشة'."
+        )
+
+    @bot.message_handler(commands=['chat_off', 'close_chat', 'mute'])
+    def handle_chat_off(message):
+        database.set_live_chat_open(False)
+        bot.reply_to(
+            message,
+            "🔕 <b>تم تفعيل الوضع الصامت وتخفيف الرسائل!</b>\n\n"
+            "لن يرسل البوت أي إشعارات تلقائية مزعجة، وسيتم حفظ كافة العمليات في سجل الخلفية.\n"
+            "• لعرض ما تم في أي وقت: أرسل <code>/report</code>\n"
+            "• لإعادة فتح الدردشة المباشرة: أرسل <code>/chat_on</code>"
+        )
+
+    @bot.message_handler(commands=['report', 'rep'])
+    def handle_report_cmd(message):
+        text_arg = message.text.lower()
+        if "daily" in text_arg or "يوم" in text_arg or "24" in text_arg:
+            _send_operations_report(message.chat.id, hours=24.0, title_label="اليومي")
+        elif "week" in text_arg or "اسبوع" in text_arg or "أسبوع" in text_arg:
+            _send_operations_report(message.chat.id, hours=168.0, title_label="الأسبوعي")
+        elif "month" in text_arg or "شهر" in text_arg:
+            _send_operations_report(message.chat.id, hours=720.0, title_label="الشهري")
+        else:
+            _send_operations_report(message.chat.id, hours=3.0, title_label="آخر 3 ساعات")
+
+    @bot.message_handler(commands=['ping'])
+    def handle_ping(message):
+        bot.reply_to(message, "⚡ <b>Pong! السيرفر يعمل واستجابة البوت فورية ومباشرة.</b>")
+
+    @bot.callback_query_handler(func=lambda call: call.data in ['rep_3h', 'rep_24h', 'rep_168h', 'rep_720h', 'act_chat_on', 'act_chat_off'])
+    def handle_report_callbacks(call):
+        if call.data == 'rep_3h':
+            _send_operations_report(call.message.chat.id, hours=3.0, title_label="آخر 3 ساعات", message_id=call.message.message_id)
+        elif call.data == 'rep_24h':
+            _send_operations_report(call.message.chat.id, hours=24.0, title_label="اليومي", message_id=call.message.message_id)
+        elif call.data == 'rep_168h':
+            _send_operations_report(call.message.chat.id, hours=168.0, title_label="الأسبوعي", message_id=call.message.message_id)
+        elif call.data == 'rep_720h':
+            _send_operations_report(call.message.chat.id, hours=720.0, title_label="الشهري", message_id=call.message.message_id)
+        elif call.data == 'act_chat_on':
+            database.set_live_chat_open(True)
+            try:
+                bot.answer_callback_query(call.id, "🟢 تم فتح الدردشة المباشرة!")
+            except Exception:
+                pass
+            _send_operations_report(call.message.chat.id, hours=3.0, title_label="آخر 3 ساعات", message_id=call.message.message_id)
+        elif call.data == 'act_chat_off':
+            database.set_live_chat_open(False)
+            try:
+                bot.answer_callback_query(call.id, "🔕 تم تفعيل الوضع الصامت!")
+            except Exception:
+                pass
+            _send_operations_report(call.message.chat.id, hours=3.0, title_label="آخر 3 ساعات", message_id=call.message.message_id)
 
     # ----------------------------------------------------
     # أوامر المشرف ومعلومات الحساب (Admin & Account Info)
@@ -2238,7 +2411,47 @@ def create_bot_app():
                 else:
                     bot.edit_message_text("⚠️ لم يتم العثور على فصول مسحوبة بنجاح في هذا النطاق.", chat_id, status_msg.message_id)
 
-            threading.Thread(target=_novel_task, daemon=True).start()
+    @bot.message_handler(func=lambda msg: True, content_types=['text'])
+    def handle_incoming_text_message(message):
+        """الاستجابة الفورية لكافة الرسائل النصية المباشرة دون أي تأخير مهما كانت أعباء السيرفر."""
+        text = message.text.strip().lower()
+        chat_id = message.chat.id
+
+        # 1. أوامر فتح وإغلاق الدردشة النصية
+        if any(w in text for w in ["فتح الدردشة", "افتح الدردشة", "تشغيل الاشعارات", "chat on", "open chat"]):
+            database.set_live_chat_open(True)
+            bot.reply_to(message, "🟢 <b>تم فتح وضع الدردشة المباشرة!</b>\nستصلك الآن كافة إشعارات السيرفر والعمليات الجارية لحظة بلحظة.\n• للإغلاق: أرسل 'إغلاق الدردشة' أو <code>/chat_off</code>")
+            return
+        elif any(w in text for w in ["اغلاق الدردشة", "إغلاق الدردشة", "كتم", "الوضع الصامت", "chat off", "close chat", "mute"]):
+            database.set_live_chat_open(False)
+            bot.reply_to(message, "🔕 <b>تم تفعيل الوضع الصامت بنجاح!</b>\nلن تصلك إشعارات عشوائية مزعجة، وسيتم حفظ كل النشاطات في السجل.\n• لعرض تقرير في أي وقت: أرسل 'تقرير' أو <code>/report</code>\n• لفتح الدردشة: أرسل 'فتح الدردشة'")
+            return
+
+        # 2. أوامر التقارير النصية
+        elif "تقرير" in text or "report" in text:
+            if any(w in text for w in ["يوم", "يومي", "24", "daily"]):
+                _send_operations_report(chat_id, hours=24.0, title_label="اليومي")
+            elif any(w in text for w in ["اسبوع", "أسبوع", "weekly"]):
+                _send_operations_report(chat_id, hours=168.0, title_label="الأسبوعي")
+            elif any(w in text for w in ["شهر", "شهري", "monthly"]):
+                _send_operations_report(chat_id, hours=720.0, title_label="الشهري")
+            else:
+                _send_operations_report(chat_id, hours=3.0, title_label="آخر 3 ساعات")
+            return
+
+        # 3. رسائل التحية والاستجابة اللحظية الفورية
+        elif any(w in text for w in ["هلا", "مرحبا", "سلام", "ping", "الو", "شغال", "بوت", "test", "تست"]):
+            is_open = database.is_live_chat_open()
+            status_desc = "🟢 مفتوحة" if is_open else "🔕 صامتة ومستقرة"
+            bot.reply_to(
+                message,
+                f"👋 <b>مرحباً بك! السيرفر يعمل واستجابة البوت فورية 100%.</b>\n\n"
+                f"• <b>حالة الإشعارات الحية:</b> {status_desc}\n"
+                f"• لطلب تقرير بالعمليات: أرسل <code>/report</code> أو 'تقرير'\n"
+                f"• للتحكم في الإشعارات: <code>/chat_on</code> أو <code>/chat_off</code>\n"
+                f"• للقائمة الرئيسية الشاملة: <code>/menu</code>"
+            )
+            return
 
     return bot
 
@@ -2250,6 +2463,8 @@ _BOT_SOCKET_LOCK = None
 def acquire_bot_lock(retries: int = 5, delay: float = 2.0) -> bool:
     """ضمان تشغيل نسخة واحدة فقط من البوت على مستوى الجهاز لمنع تكرار Polling وخطأ 409 Conflict مع دعم إعادة المحاولة وإعادة استخدام المنفذ."""
     global _BOT_SOCKET_LOCK
+    if _BOT_SOCKET_LOCK is not None:
+        return True
     for attempt in range(retries):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -2267,10 +2482,10 @@ def acquire_bot_lock(retries: int = 5, delay: float = 2.0) -> bool:
                 else:
                     print("[Telegram Bot] ⚠️ هناك نسخة أخرى من البوت تعمل بالفعل. تم تخطي التشغيل لمنع خطأ 409 Conflict.")
                     return False
-            return True
+            return False
         except Exception:
-            return True
-    return True
+            return False
+    return False
 
 
 def run_telegram_bot_loop():
@@ -2293,7 +2508,7 @@ def run_telegram_bot_loop():
 
     while True:
         try:
-            bot.polling(none_stop=True, interval=1, timeout=30)
+            bot.polling(none_stop=True, interval=0, timeout=20)
         except Exception as e:
             err_str = str(e)
             if "409" in err_str or "Conflict" in err_str:
@@ -2301,7 +2516,7 @@ def run_telegram_bot_loop():
                 time.sleep(10)
             else:
                 print(f"[Telegram Bot Error] {e}")
-                time.sleep(5)
+                time.sleep(3)
 
 
 if __name__ == "__main__":

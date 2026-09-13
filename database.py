@@ -48,6 +48,20 @@ def init_db(db_path: str = DB_FILE_PATH):
             );
         """)
 
+        # 2.1 جدول سجل عمليات ونشاطات البوت الشامل (للتقارير الصامتة والدورية)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bot_activity_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                details TEXT,
+                novel_name TEXT,
+                chapter_num INTEGER,
+                status TEXT DEFAULT 'SUCCESS',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
         # 3. جدول الروايات
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS novels (
@@ -564,6 +578,87 @@ def save_setting(key: str, value: str, db_path: str = DB_FILE_PATH) -> bool:
 
 # تهيئة الجداول تلقائياً عند استيراد الوحدة
 init_db()
+
+
+def is_live_chat_open(db_path: str = DB_FILE_PATH) -> bool:
+    """فحص ما إذا كانت الدردشة المباشرة مع المشرف مفتوحة أم مقفلة (الوضع الصامت)."""
+    return get_setting("telegram_live_chat_open", "0", db_path=db_path) == "1"
+
+
+def set_live_chat_open(is_open: bool, db_path: str = DB_FILE_PATH) -> bool:
+    """تفعيل أو تعطيل وضع الدردشة المباشرة وتخفيف الرسائل."""
+    return save_setting("telegram_live_chat_open", "1" if is_open else "0", db_path=db_path)
+
+
+def log_bot_activity(
+    event_type: str,
+    title: str,
+    details: str = "",
+    novel_name: str = "",
+    chapter_num: Optional[int] = None,
+    status: str = "SUCCESS",
+    db_path: str = DB_FILE_PATH
+) -> bool:
+    """تسجيل نشاط أو عملية في سجل العمليات الشامل لعرضها في التقارير الدورية دون إزعاج المستخدم."""
+    try:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with get_connection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO bot_activity_logs (event_type, title, details, novel_name, chapter_num, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (event_type, title, details, novel_name, chapter_num, status, now))
+            conn.commit()
+            return True
+    except Exception:
+        return False
+
+
+def get_bot_activities(hours: float = 3.0, limit: int = 200, db_path: str = DB_FILE_PATH) -> List[Dict[str, Any]]:
+    """جلب سجل الأنشطة والعمليات التي تمت خلال آخر N ساعات."""
+    try:
+        cutoff = (datetime.datetime.now() - datetime.timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+        with get_connection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM bot_activity_logs
+                WHERE created_at >= ?
+                ORDER BY id DESC
+                LIMIT ?
+            """, (cutoff, limit))
+            return [dict(r) for r in cursor.fetchall()]
+    except Exception:
+        return []
+
+
+def get_bot_activities_summary(hours: float = 3.0, db_path: str = DB_FILE_PATH) -> Dict[str, Any]:
+    """توليد ملخص تنفيذي مجمع لكافة العمليات خلال فترة محددة (3 ساعات، يومي، أسبوعي، شهري)."""
+    acts = get_bot_activities(hours=hours, limit=500, db_path=db_path)
+    total = len(acts)
+    counts_by_type: Dict[str, int] = {}
+    counts_by_status: Dict[str, int] = {}
+    novels_involved = set()
+    highlights = []
+
+    for a in acts:
+        e_type = a.get("event_type", "other")
+        stat = a.get("status", "SUCCESS")
+        counts_by_type[e_type] = counts_by_type.get(e_type, 0) + 1
+        counts_by_status[stat] = counts_by_status.get(stat, 0) + 1
+        if a.get("novel_name"):
+            novels_involved.add(a["novel_name"])
+        if len(highlights) < 10 and a.get("title"):
+            highlights.append(f"• {a['title']}")
+
+    return {
+        "hours": hours,
+        "total_operations": total,
+        "counts_by_type": counts_by_type,
+        "counts_by_status": counts_by_status,
+        "novels_count": len(novels_involved),
+        "novels_list": list(novels_involved),
+        "recent_highlights": highlights
+    }
 
 
 def clear_single_chapter_content(novel_id: int, chapter_number: int, db_path: str = DB_FILE_PATH) -> bool:

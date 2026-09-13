@@ -79,9 +79,8 @@ import nsw_healer_engine
 import telegram_bot as _tg_bot_module
 import ui_syndication_tabs
 
-# إطلاق بوت تليجرام الذكي (البوت الرئيسي) في الخلفية مرة واحدة فقط
-# ملاحظة: nsw_bot_bridge معطل لتجنب التعارض مع البوت الرئيسي على نفس التوكن
-if "tg_bot_started" not in st.session_state:
+# إطلاق بوت تليجرام الذكي في الخلفية فقط إذا لم يكن يعمل عبر start.py
+if os.getenv("NSW_BOT_RUNNER") != "start_py" and "tg_bot_started" not in st.session_state:
     try:
         import threading as _tg_threading
         _tg_thread = _tg_threading.Thread(
