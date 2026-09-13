@@ -45,16 +45,18 @@ def render_rewayat_club_tab():
 
     col_stat1, col_stat2 = st.columns([3, 1])
     with col_stat1:
-        st.markdown('<div style="background-color:#064e3b; border:1px solid #059669; border-radius:8px; padding:7px 14px; margin-bottom:12px; color:#6ee7b7; font-size:0.90rem; font-weight:bold;">🟢 <b>المجدول التلقائي الذاتي (24/7 Background Scheduler):</b> نشط ويعمل في الخلفية لمراقبة مواعيد الفصول ونشرها بدقة.</div>', unsafe_allow_html=True)
+        st.markdown('<div style="background-color:#064e3b; border:1px solid #059669; border-radius:8px; padding:7px 14px; margin-bottom:12px; color:#6ee7b7; font-size:0.90rem; font-weight:bold;">🟢 <b>المجدول الذاتي وسحابة Google Sheet:</b> متصل بالجدول السحابي ونشط 24/7 — الفصول والمواعيد محفوظة سحابياً ضد انقطاع السيرفر.</div>', unsafe_allow_html=True)
     with col_stat2:
-        if st.button("🔄 فحص وجدولة الآن", key="rc_trigger_now", use_container_width=True):
+        if st.button("🔄 مزامنة وفحص الآن", key="rc_trigger_now", use_container_width=True):
             try:
                 import syndication_daemon
+                syndication_db.sync_schedule_from_sheet()
                 syndication_daemon.run_syndication_cycle()
-                st.success("تم تشغيل دورة الفحص!")
+                st.success("تمت المزامنة من Google Sheet وتشغيل دورة الفحص!")
                 st.rerun()
             except Exception as ex_trig:
                 st.error(f"خطأ: {ex_trig}")
+
     
     # 1. إعدادات حساب نادي الروايات
     with st.expander("🔐 بيانات حساب نادي الروايات (Authentication)", expanded=False):
@@ -86,65 +88,136 @@ def render_rewayat_club_tab():
                 else:
                     st.warning(f"⚠️ {chk.get('message')}")
 
-    # 2. إضافة / تعديل رواية
-    with st.expander("➕ إضافة رواية جديدة لنادي الروايات", expanded=True):
-        with st.form("form_add_novel_rewayat"):
-            col1, col2 = st.columns(2)
-            with col1:
-                n_name = st.text_input("🏷️ اسم الرواية (كما هو معتمد بالشيت/المدونة):", placeholder="مثال: Shadow Slave")
-                n_blogger_url = st.text_input("🔗 رابط صفحة الرواية في مدونتك (Blogger):", placeholder="https://novelskyworld.blogspot.com/p/...")
-                n_blogger_label = st.text_input("🏷️ تصنيف الرواية في بلوجر (Label / Novelname):", placeholder="Shadow Slave")
-            with col2:
-                n_rewayat_id = st.text_input("🆔 معرف / رابط الرواية في نادي الروايات:", placeholder="مثال: 5420 أو https://rewayat.club/novel/...")
-                col_c1, col_c2, col_c3 = st.columns(3)
-                with col_c1:
-                    start_ch = st.number_input("الفصل الأول:", min_value=1, value=1, step=1)
-                with col_c2:
-                    last_ch = st.number_input("آخر فصل تم نشره:", min_value=0, value=0, step=1)
-                with col_c3:
-                    stop_ch = st.number_input("أقصى فصل للتوقف عنده:", min_value=1, value=5000, step=1)
-                interval = st.number_input("⏱️ معدل النشر (ساعات بين كل فصل):", min_value=0.25, value=1.0, step=0.25)
+    # 2. إضافة رواية جديدة وجدولة فصولها (سلسة ومباشرة في خطوة واحدة)
+    with st.expander("➕ إضافة رواية جديدة وجدولة فصولها في Google Sheet", expanded=True):
+        st.markdown("##### 1️⃣ البيانات الأساسية للرواية:")
+        rc_c1, rc_c2 = st.columns(2)
+        with rc_c1:
+            n_name = st.text_input("🏷️ اسم الرواية (مطلوب):", placeholder="مثال: Shadow Slave", key="rc_uni_name")
+            n_rewayat_id = st.text_input("🆔 معرّف أو رابط الرواية في نادي الروايات (مطلوب):", placeholder="مثال: 5420 أو https://rewayat.club/novel/...", key="rc_uni_id")
+        with rc_c2:
+            rc_ch1, rc_ch2, rc_ch3 = st.columns(3)
+            with rc_ch1:
+                n_start_ch = st.number_input("من الفصل:", min_value=1, value=1, step=1, key="rc_uni_start")
+            with rc_ch2:
+                n_stop_ch = st.number_input("إلى الفصل:", min_value=1, value=20, step=1, key="rc_uni_stop")
+            with rc_ch3:
+                n_last_ch = st.number_input("آخر فصل نُشر مسبقاً:", min_value=0, value=0, step=1, help="اتركه 0 إذا كانت رواية جديدة تماماً", key="rc_uni_last")
 
-            col_ad1, col_ad2, col_ad3 = st.columns([1.5, 1.5, 1])
-            with col_ad1:
-                rc_add_date = st.date_input("📅 تاريخ بدء النشر:", value=datetime.date.today(), key="rc_add_d")
-            with col_ad2:
-                rc_add_time = st.time_input("⏰ وقت بدء النشر:", value=datetime.datetime.now().time().replace(second=0, microsecond=0), key="rc_add_t")
-            with col_ad3:
-                rc_add_now = st.checkbox("🚀 البدء فوراً (الآن)", value=True, key="rc_add_now_chk")
+        st.markdown("##### 2️⃣ خطة النشر والجدولة في Google Sheet (بتوقيت مكة والعراق):")
+        rc_m1, rc_m2 = st.columns([1.5, 2.5])
+        with rc_m1:
+            rc_mode = st.radio(
+                "اختر طريقة تحديد مواعيد الفصول:",
+                ["daily_manual", "interval_hours", "weekly"],
+                format_func=lambda x: {
+                    "daily_manual": "⏰ ساعات يومية محددة يدوياً (موصى بها)",
+                    "interval_hours": "⏱️ معدل زمني ثابت (فصل كل N ساعة)",
+                    "weekly": "📅 موعد أسبوعي محدد"
+                }.get(x, x),
+                key="rc_uni_mode"
+            )
+            rc_start_date = st.date_input("📅 تاريخ بدء النشر:", value=datetime.date.today(), key="rc_uni_date")
 
+        rc_selected_hours = []
+        rc_interval_val = 1.0
+
+        with rc_m2:
+            if rc_mode == "daily_manual":
+                rc_daily_times = st.number_input("🔢 كم فصلاً يومياً؟", min_value=1, max_value=12, value=3, step=1, key="rc_uni_cnt")
+                st.markdown(f"**⏰ حدد ساعات النشر اليدوية ({rc_daily_times} مواعيد يومياً):**")
+                cols_rc_h = st.columns(min(int(rc_daily_times), 4))
+                def_hours = ["10:00", "14:00", "18:00", "21:30", "23:00", "01:00", "08:00", "12:00"]
+                for i in range(int(rc_daily_times)):
+                    c_idx = i % len(cols_rc_h)
+                    with cols_rc_h[c_idx]:
+                        def_t_str = def_hours[i] if i < len(def_hours) else "12:00"
+                        dh_p = def_t_str.split(":")
+                        t_val = st.time_input(f"الموعد {i+1}:", value=datetime.time(int(dh_p[0]), int(dh_p[1])), key=f"rc_uni_h_{i}")
+                        rc_selected_hours.append(t_val.strftime("%H:%M"))
+                rc_interval_val = round(24.0 / max(len(rc_selected_hours), 1), 2)
+            elif rc_mode == "interval_hours":
+                rc_interval_val = st.number_input("⏱️ فصل جديد كل كم ساعة؟", min_value=0.25, value=1.0, step=0.25, key="rc_uni_int")
+                t_start = st.time_input("⏰ وقت انطلاق أول فصل:", value=datetime.datetime.now(TZ_ARABIA).time().replace(second=0, microsecond=0), key="rc_uni_tstart")
+                rc_selected_hours.append(t_start.strftime("%H:%M"))
+            elif rc_mode == "weekly":
+                w_time = st.time_input("⏰ وقت النشر الأسبوعي:", value=datetime.time(20, 0), key="rc_uni_wtime")
+                rc_selected_hours.append(w_time.strftime("%H:%M"))
+                rc_interval_val = 168.0
+
+        with st.expander("⚙️ خيارات إضافية متقدمة (اختيارية)", expanded=False):
+            rc_opt1, rc_opt2 = st.columns(2)
+            with rc_opt1:
+                n_blogger_url = st.text_input("🔗 رابط صفحة الرواية في المدونة (Blogger):", placeholder="https://novelskyworld.blogspot.com/p/...", key="rc_uni_burl")
+            with rc_opt2:
+                n_blogger_label = st.text_input("🏷️ تصنيف الرواية في بلوجر (Label):", placeholder="Shadow Slave", key="rc_uni_blbl")
             cta_default = "✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها زوروا موقعنا الأصلي: [رابط الرواية] ✨"
-            custom_cta = st.text_area("💬 التعليق التحفيزي الثابت لنهاية كل فصل:", value=cta_default, height=70)
-            
-            submit_btn = st.form_submit_button("🚀 حفظ الرواية وبدء جدولتها", type="primary")
-            if submit_btn:
-                if not n_name.strip():
-                    st.error("يرجى إدخال اسم الرواية على الأقل.")
-                else:
-                    if rc_add_now:
-                        init_next_run = 0.0
-                    else:
-                        init_next_run = datetime.datetime.combine(rc_add_date, rc_add_time).timestamp()
+            custom_cta = st.text_area("💬 التعليق التحفيزي الثابت لنهاية كل فصل:", value=cta_default, height=70, key="rc_uni_cta")
+
+        if st.button("🚀 حفظ الرواية وتثبيت جدولتها فوراً في Google Sheet", key="rc_uni_save_btn", type="primary", use_container_width=True):
+            if not n_name.strip():
+                st.error("❌ يرجى إدخال اسم الرواية.")
+            elif not n_rewayat_id.strip():
+                st.error("❌ يرجى إدخال معرّف أو رابط الرواية في نادي الروايات.")
+            elif int(n_start_ch) > int(n_stop_ch):
+                st.error("❌ رقم بداية الفصول يجب أن يكون أقل من أو يساوي رقم النهاية.")
+            else:
+                with st.spinner("⏳ جاري حفظ الرواية وضخ جدول الفصول في Google Sheet..."):
+                    clean_rc_id = n_rewayat_id.strip()
+                    if "novel/" in clean_rc_id:
+                        clean_rc_id = clean_rc_id.split("novel/")[-1].split("/")[0].strip()
+
+                    freq_key = "daily" if rc_mode == "daily_manual" else ("interval" if rc_mode == "interval_hours" else "weekly")
+                    step_count = rc_interval_val if rc_mode == "interval_hours" else len(rc_selected_hours)
+
+                    gen_rows = syndication_db.generate_schedule_from_period_rules(
+                        novel_name=n_name.strip(),
+                        start_ch=int(n_start_ch),
+                        end_ch=int(n_stop_ch),
+                        freq_type=freq_key,
+                        times_per_day=int(step_count) if rc_mode != "interval_hours" else step_count,
+                        selected_hours=rc_selected_hours,
+                        start_date_str=rc_start_date.strftime("%Y-%m-%d"),
+                        platform="rewayat_club"
+                    )
+
+                    first_run_ts = gen_rows[0]["scheduled_timestamp"] if gen_rows else time.time()
+
                     syndication_db.save_or_update_syndicated_novel({
                         "novel_name": n_name.strip(),
                         "blogger_url": n_blogger_url.strip(),
                         "blogger_label": n_blogger_label.strip() or n_name.strip(),
                         "rewayat_enabled": 1,
-                        "rewayat_novel_id": n_rewayat_id.strip(),
+                        "rewayat_novel_id": clean_rc_id,
                         "rewayat_novel_url": n_rewayat_id.strip() if "rewayat.club" in n_rewayat_id else "",
                         "wattpad_enabled": 0,
                         "wattpad_story_id": "",
                         "wattpad_story_url": "",
-                        "start_chapter": int(start_ch),
-                        "last_synced_chapter": int(last_ch),
-                        "stop_chapter": int(stop_ch),
-                        "interval_hours": float(interval),
-                        "next_run_timestamp": float(init_next_run),
+                        "start_chapter": int(n_start_ch),
+                        "last_synced_chapter": int(n_last_ch),
+                        "stop_chapter": int(n_stop_ch),
+                        "interval_hours": float(rc_interval_val),
+                        "next_run_timestamp": float(first_run_ts),
                         "custom_cta": custom_cta.strip(),
                         "is_active": 1
                     })
-                    st.success(f"🎉 تم تسجيل الرواية '{n_name}' بنجاح في جدول النشر بنادي الروايات!")
+
+                    syndication_db.save_chapter_schedules_batch(n_name.strip(), gen_rows)
+                    syndication_db.save_period_rule({
+                        "novel_name": n_name.strip(),
+                        "start_chapter": int(n_start_ch),
+                        "end_chapter": int(n_stop_ch),
+                        "frequency_type": freq_key,
+                        "times_per_day": len(rc_selected_hours),
+                        "selected_hours": json.dumps(rc_selected_hours),
+                        "start_date": rc_start_date.strftime("%Y-%m-%d"),
+                        "is_active": 1
+                    })
+
+                    st.balloons()
+                    st.success(f"🎉 تم بنجاح حفظ رواية '{n_name.strip()}' وتثبيت {len(gen_rows)} فصلاً مجدولاً في Google Sheet!")
                     st.rerun()
+
 
     # 3. عرض الروايات المسجلة
     st.markdown("### 📚 الروايات المربوطة حالياً بنادي الروايات")
@@ -425,7 +498,7 @@ def render_advanced_period_scheduler_section(default_platform="all"):
 
     novel_names = [n["novel_name"] for n in all_novels]
 
-    with st.expander("➕ مُنشئ نطاقات الفترات والساعات اليدوية (Period & Manual Hours Builder)", expanded=True):
+    with st.expander("🛠️ أداة جدولة دفعات إضافية مجمعة (نطاقات مخصصة - اختياري)", expanded=False):
         col_nov, col_plat = st.columns([2, 1])
         with col_nov:
             selected_novel = st.selectbox("📚 اختر الرواية:", novel_names, key=f"p_nov_sel_{default_platform}")
@@ -525,7 +598,8 @@ def render_advanced_period_scheduler_section(default_platform="all"):
                     st.rerun()
 
     # 3. جدول مواعيد الفصول التفاعلي
-    st.markdown("### 📋 جدول الفصول المجدولة التفاعلي")
+    st.markdown("### 📋 جدول الفصول المجدولة في Google Sheet")
+    st.caption("يعرض جميع الفصول المحسوبة والمثبتة سحابياً في Google Sheet. ينفذ السيرفر النشر تلقائياً فور حلول وقت كل فصل.")
     c_f1, c_f2 = st.columns([2, 1])
     with c_f1:
         tbl_novel = st.selectbox("🔍 تصفية حسب الرواية:", ["الكل"] + novel_names, key=f"tbl_nov_sel_{default_platform}")
@@ -593,13 +667,14 @@ def render_wattpad_tab():
 
     col_stat1, col_stat2 = st.columns([3, 1])
     with col_stat1:
-        st.markdown('<div style="background-color:#064e3b; border:1px solid #059669; border-radius:8px; padding:7px 14px; margin-bottom:12px; color:#6ee7b7; font-size:0.90rem; font-weight:bold;">🟢 <b>المجدول التلقائي الذاتي (24/7 Background Scheduler):</b> نشط ويعمل في الخلفية لمراقبة مواعيد الفصول ونشرها بدقة.</div>', unsafe_allow_html=True)
+        st.markdown('<div style="background-color:#064e3b; border:1px solid #059669; border-radius:8px; padding:7px 14px; margin-bottom:12px; color:#6ee7b7; font-size:0.90rem; font-weight:bold;">🟢 <b>المجدول الذاتي وسحابة Google Sheet:</b> متصل بالجدول السحابي ونشط 24/7 — الفصول والمواعيد محفوظة سحابياً ضد انقطاع السيرفر.</div>', unsafe_allow_html=True)
     with col_stat2:
-        if st.button("🔄 فحص وجدولة الآن", key="wp_trigger_now", use_container_width=True):
+        if st.button("🔄 مزامنة وفحص الآن", key="wp_trigger_now", use_container_width=True):
             try:
                 import syndication_daemon
+                syndication_db.sync_schedule_from_sheet()
                 syndication_daemon.run_syndication_cycle()
-                st.success("تم تشغيل دورة الفحص!")
+                st.success("تمت المزامنة من Google Sheet وتشغيل دورة الفحص!")
                 st.rerun()
             except Exception as ex_trig:
                 st.error(f"خطأ: {ex_trig}")
@@ -653,45 +728,101 @@ def render_wattpad_tab():
                 else:
                     st.warning(f"⚠️ {w_chk.get('message')}")
 
-    # 2. إضافة رواية لواتباد
-    with st.expander("➕ إضافة رواية جديدة لواتباد", expanded=True):
-        with st.form("form_add_novel_wattpad"):
-            col1, col2 = st.columns(2)
-            with col1:
-                w_name = st.text_input("🏷️ اسم الرواية:", placeholder="مثال: Shadow Slave")
-                w_blogger_url = st.text_input("🔗 رابط صفحة الرواية في بلوجر:", placeholder="https://novelskyworld.blogspot.com/p/...")
-                w_blogger_label = st.text_input("🏷️ تصنيف الرواية في بلوجر:", placeholder="Shadow Slave")
-            with col2:
-                w_story_id = st.text_input("🆔 معرف قصة واتباد (Story ID / URL):", placeholder="مثال: 987654321 أو رابط القصة")
-                col_c1, col_c2, col_c3 = st.columns(3)
-                with col_c1:
-                    w_start_ch = st.number_input("الفصل الأول:", min_value=1, value=1, step=1, key="wp_start")
-                with col_c2:
-                    w_last_ch = st.number_input("آخر فصل تم نشره:", min_value=0, value=0, step=1, key="wp_last")
-                with col_c3:
-                    w_stop_ch = st.number_input("أقصى فصل للتوقف عنده:", min_value=1, value=5000, step=1, key="wp_stop")
-                w_interval = st.number_input("⏱️ معدل النشر (ساعات):", min_value=0.25, value=1.0, step=0.25, key="wp_interval")
+    # 2. إضافة قصة جديدة لواتباد وجدولة فصولها في Google Sheet
+    with st.expander("➕ إضافة قصة جديدة وجدولة فصولها في Google Sheet", expanded=True):
+        st.markdown("##### 1️⃣ البيانات الأساسية للقصة على واتباد:")
+        wp_c1, wp_c2 = st.columns(2)
+        with wp_c1:
+            w_name = st.text_input("🏷️ اسم الرواية (مطلوب):", placeholder="مثال: Shadow Slave", key="wp_uni_name")
+            w_story_id = st.text_input("🆔 معرّف القصة أو رابطها في واتباد (مطلوب):", placeholder="مثال: 987654321 أو رابط القصة", key="wp_uni_id")
+        with wp_c2:
+            wp_ch1, wp_ch2, wp_ch3 = st.columns(3)
+            with wp_ch1:
+                w_start_ch = st.number_input("من الفصل:", min_value=1, value=1, step=1, key="wp_uni_start")
+            with wp_ch2:
+                w_stop_ch = st.number_input("إلى الفصل:", min_value=1, value=20, step=1, key="wp_uni_stop")
+            with wp_ch3:
+                w_last_ch = st.number_input("آخر فصل نُشر مسبقاً:", min_value=0, value=0, step=1, help="اتركه 0 إذا كانت رواية جديدة تماماً", key="wp_uni_last")
 
-            col_wad1, col_wad2, col_wad3 = st.columns([1.5, 1.5, 1])
-            with col_wad1:
-                wp_add_date = st.date_input("📅 تاريخ بدء النشر:", value=datetime.date.today(), key="wp_add_d")
-            with col_wad2:
-                wp_add_time = st.time_input("⏰ وقت بدء النشر:", value=datetime.datetime.now().time().replace(second=0, microsecond=0), key="wp_add_t")
-            with col_wad3:
-                wp_add_now = st.checkbox("🚀 البدء فوراً (الآن)", value=True, key="wp_add_now_chk")
+        st.markdown("##### 2️⃣ خطة النشر والجدولة في Google Sheet (بتوقيت مكة والعراق):")
+        wp_m1, wp_m2 = st.columns([1.5, 2.5])
+        with wp_m1:
+            wp_mode = st.radio(
+                "اختر طريقة تحديد مواعيد الفصول:",
+                ["daily_manual", "interval_hours", "weekly"],
+                format_func=lambda x: {
+                    "daily_manual": "⏰ ساعات يومية محددة يدوياً (موصى بها)",
+                    "interval_hours": "⏱️ معدل زمني ثابت (فصل كل N ساعة)",
+                    "weekly": "📅 موعد أسبوعي محدد"
+                }.get(x, x),
+                key="wp_uni_mode"
+            )
+            wp_start_date = st.date_input("📅 تاريخ بدء النشر:", value=datetime.date.today(), key="wp_uni_date")
 
+        wp_selected_hours = []
+        wp_interval_val = 1.0
+
+        with wp_m2:
+            if wp_mode == "daily_manual":
+                wp_daily_times = st.number_input("🔢 كم فصلاً يومياً؟", min_value=1, max_value=12, value=3, step=1, key="wp_uni_cnt")
+                st.markdown(f"**⏰ حدد ساعات النشر اليدوية ({wp_daily_times} مواعيد يومياً):**")
+                cols_wp_h = st.columns(min(int(wp_daily_times), 4))
+                def_hours = ["10:00", "14:00", "18:00", "21:30", "23:00", "01:00", "08:00", "12:00"]
+                for i in range(int(wp_daily_times)):
+                    c_idx = i % len(cols_wp_h)
+                    with cols_wp_h[c_idx]:
+                        def_t_str = def_hours[i] if i < len(def_hours) else "12:00"
+                        dh_p = def_t_str.split(":")
+                        t_val = st.time_input(f"الموعد {i+1}:", value=datetime.time(int(dh_p[0]), int(dh_p[1])), key=f"wp_uni_h_{i}")
+                        wp_selected_hours.append(t_val.strftime("%H:%M"))
+                wp_interval_val = round(24.0 / max(len(wp_selected_hours), 1), 2)
+            elif wp_mode == "interval_hours":
+                wp_interval_val = st.number_input("⏱️ فصل جديد كل كم ساعة؟", min_value=0.25, value=1.0, step=0.25, key="wp_uni_int")
+                t_start = st.time_input("⏰ وقت انطلاق أول فصل:", value=datetime.datetime.now(TZ_ARABIA).time().replace(second=0, microsecond=0), key="wp_uni_tstart")
+                wp_selected_hours.append(t_start.strftime("%H:%M"))
+            elif wp_mode == "weekly":
+                w_time = st.time_input("⏰ وقت النشر الأسبوعي:", value=datetime.time(20, 0), key="wp_uni_wtime")
+                wp_selected_hours.append(w_time.strftime("%H:%M"))
+                wp_interval_val = 168.0
+
+        with st.expander("⚙️ خيارات إضافية متقدمة (اختيارية)", expanded=False):
+            wp_opt1, wp_opt2 = st.columns(2)
+            with wp_opt1:
+                w_blogger_url = st.text_input("🔗 رابط صفحة الرواية في المدونة (Blogger):", placeholder="https://novelskyworld.blogspot.com/p/...", key="wp_uni_burl")
+            with wp_opt2:
+                w_blogger_label = st.text_input("🏷️ تصنيف الرواية في بلوجر (Label):", placeholder="Shadow Slave", key="wp_uni_blbl")
             w_cta_default = "✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها تفضلوا بزيارة موقعنا: [رابط الرواية] ✨"
-            w_custom_cta = st.text_area("💬 التعليق التحفيزي لقصة واتباد:", value=w_cta_default, height=70, key="wp_cta")
-            
-            w_submit_btn = st.form_submit_button("🚀 حفظ الرواية وبدء جدولتها على واتباد", type="primary")
-            if w_submit_btn:
-                if not w_name.strip():
-                    st.error("يرجى إدخال اسم الرواية على الأقل.")
-                else:
-                    if wp_add_now:
-                        init_wp_next_run = 0.0
-                    else:
-                        init_wp_next_run = datetime.datetime.combine(wp_add_date, wp_add_time).timestamp()
+            w_custom_cta = st.text_area("💬 التعليق التحفيزي لنهاية كل فصل في واتباد:", value=w_cta_default, height=70, key="wp_uni_cta")
+
+        if st.button("🚀 حفظ الرواية وتثبيت جدولتها فوراً في Google Sheet", key="wp_uni_save_btn", type="primary", use_container_width=True):
+            if not w_name.strip():
+                st.error("❌ يرجى إدخال اسم الرواية.")
+            elif not w_story_id.strip():
+                st.error("❌ يرجى إدخال معرّف قصة واتباد أو رابطها.")
+            elif int(w_start_ch) > int(w_stop_ch):
+                st.error("❌ رقم بداية الفصول يجب أن يكون أقل من أو يساوي رقم النهاية.")
+            else:
+                with st.spinner("⏳ جاري حفظ الرواية وضخ جدول الفصول في Google Sheet..."):
+                    clean_story_id = w_story_id.strip()
+                    if "story/" in clean_story_id:
+                        clean_story_id = clean_story_id.split("story/")[-1].split("-")[0].split("/")[0].strip()
+
+                    freq_key = "daily" if wp_mode == "daily_manual" else ("interval" if wp_mode == "interval_hours" else "weekly")
+                    step_count = wp_interval_val if wp_mode == "interval_hours" else len(wp_selected_hours)
+
+                    gen_rows = syndication_db.generate_schedule_from_period_rules(
+                        novel_name=w_name.strip(),
+                        start_ch=int(w_start_ch),
+                        end_ch=int(w_stop_ch),
+                        freq_type=freq_key,
+                        times_per_day=int(step_count) if wp_mode != "interval_hours" else step_count,
+                        selected_hours=wp_selected_hours,
+                        start_date_str=wp_start_date.strftime("%Y-%m-%d"),
+                        platform="wattpad"
+                    )
+
+                    first_run_ts = gen_rows[0]["scheduled_timestamp"] if gen_rows else time.time()
+
                     syndication_db.save_or_update_syndicated_novel({
                         "novel_name": w_name.strip(),
                         "blogger_url": w_blogger_url.strip(),
@@ -700,17 +831,31 @@ def render_wattpad_tab():
                         "rewayat_novel_id": "",
                         "rewayat_novel_url": "",
                         "wattpad_enabled": 1,
-                        "wattpad_story_id": w_story_id.strip(),
+                        "wattpad_story_id": clean_story_id,
                         "wattpad_story_url": w_story_id.strip() if "wattpad.com" in w_story_id else "",
                         "start_chapter": int(w_start_ch),
                         "last_synced_chapter": int(w_last_ch),
                         "stop_chapter": int(w_stop_ch),
-                        "interval_hours": float(w_interval),
-                        "next_run_timestamp": float(init_wp_next_run),
+                        "interval_hours": float(wp_interval_val),
+                        "next_run_timestamp": float(first_run_ts),
                         "custom_cta": w_custom_cta.strip(),
                         "is_active": 1
                     })
-                    st.success(f"🎉 تم تسجيل الرواية '{w_name}' بنجاح في جدول النشر بواتباد!")
+
+                    syndication_db.save_chapter_schedules_batch(w_name.strip(), gen_rows)
+                    syndication_db.save_period_rule({
+                        "novel_name": w_name.strip(),
+                        "start_chapter": int(w_start_ch),
+                        "end_chapter": int(w_stop_ch),
+                        "frequency_type": freq_key,
+                        "times_per_day": len(wp_selected_hours),
+                        "selected_hours": json.dumps(wp_selected_hours),
+                        "start_date": wp_start_date.strftime("%Y-%m-%d"),
+                        "is_active": 1
+                    })
+
+                    st.balloons()
+                    st.success(f"🎉 تم بنجاح حفظ قصة '{w_name.strip()}' وتثبيت {len(gen_rows)} فصلاً مجدولاً في Google Sheet!")
                     st.rerun()
 
     # 3. عرض الروايات المسجلة في واتباد

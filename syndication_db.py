@@ -914,4 +914,35 @@ def generate_schedule_from_period_rules(
             ch += 1
             cur_date += datetime.timedelta(days=30)
 
+    elif freq_type == "interval":
+        h_str, m_str = valid_hours[0].split(":")
+        step_hours = float(times_per_day) if times_per_day and times_per_day > 0 else 1.0
+        cur_dt = datetime.datetime.combine(cur_date, datetime.time(int(h_str), int(m_str)), tzinfo=TZ_ARABIA)
+        while ch <= end_val:
+            res.append({
+                "chapter_num": ch,
+                "scheduled_time": cur_dt.strftime("%Y-%m-%d %H:%M"),
+                "scheduled_timestamp": cur_dt.timestamp(),
+                "status": "PENDING",
+                "platform": platform,
+                "period_range": p_tag
+            })
+            ch += 1
+            cur_dt += datetime.timedelta(hours=step_hours)
+
+    elif freq_type == "once":
+        h_str, m_str = valid_hours[0].split(":")
+        dt = datetime.datetime.combine(cur_date, datetime.time(int(h_str), int(m_str)), tzinfo=TZ_ARABIA)
+        while ch <= end_val:
+            res.append({
+                "chapter_num": ch,
+                "scheduled_time": dt.strftime("%Y-%m-%d %H:%M"),
+                "scheduled_timestamp": dt.timestamp(),
+                "status": "PENDING",
+                "platform": platform,
+                "period_range": p_tag
+            })
+            ch += 1
+
     return res
+
