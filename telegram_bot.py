@@ -2247,21 +2247,30 @@ import socket
 
 _BOT_SOCKET_LOCK = None
 
-def acquire_bot_lock() -> bool:
-    """ضمان تشغيل نسخة واحدة فقط من البوت على مستوى الجهاز لمنع تكرار Polling وخطأ 409 Conflict."""
+def acquire_bot_lock(retries: int = 5, delay: float = 2.0) -> bool:
+    """ضمان تشغيل نسخة واحدة فقط من البوت على مستوى الجهاز لمنع تكرار Polling وخطأ 409 Conflict مع دعم إعادة المحاولة وإعادة استخدام المنفذ."""
     global _BOT_SOCKET_LOCK
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.bind(('127.0.0.1', 58241))
-        _BOT_SOCKET_LOCK = s
-        return True
-    except OSError as e:
-        if getattr(e, 'winerror', None) == 10048 or getattr(e, 'errno', None) in (98, 10048):
-            print("[Telegram Bot] ⚠️ هناك نسخة أخرى من البوت تعمل بالفعل. تم تخطي التشغيل لمنع خطأ 409 Conflict.")
-            return False
-        return True
-    except Exception:
-        return True
+    for attempt in range(retries):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(('127.0.0.1', 58241))
+            s.listen(1)
+            _BOT_SOCKET_LOCK = s
+            return True
+        except OSError as e:
+            if getattr(e, 'winerror', None) == 10048 or getattr(e, 'errno', None) in (98, 10048):
+                if attempt < retries - 1:
+                    print(f"[Telegram Bot] ⏳ المنفذ 58241 مشغول حالياً (محاولة {attempt+1}/{retries}). انتظار تفريغ المنفذ...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    print("[Telegram Bot] ⚠️ هناك نسخة أخرى من البوت تعمل بالفعل. تم تخطي التشغيل لمنع خطأ 409 Conflict.")
+                    return False
+            return True
+        except Exception:
+            return True
+    return True
 
 
 def run_telegram_bot_loop():

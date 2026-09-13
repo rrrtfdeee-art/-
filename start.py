@@ -10,12 +10,17 @@ import time
 import os
 
 def run_telegram_bot():
-    """تشغيل بوت تليجرام في process مستقل."""
-    print("[Launcher] Starting Telegram Bot...")
-    subprocess.run(
-        [sys.executable, "telegram_bot.py"],
-        cwd=os.path.dirname(os.path.abspath(__file__))
-    )
+    """تشغيل بوت تليجرام في process مستقل مع إعادة التشغيل التلقائي عند أي توقف."""
+    while True:
+        try:
+            print("[Launcher] Starting Telegram Bot loop...")
+            subprocess.run(
+                [sys.executable, "telegram_bot.py"],
+                cwd=os.path.dirname(os.path.abspath(__file__))
+            )
+        except Exception as e:
+            print(f"[Launcher] Telegram Bot error: {e}")
+        time.sleep(3)
 
 def run_local_api():
     """تشغيل خادم الربط المحلي الفائق على بورت 58242."""
