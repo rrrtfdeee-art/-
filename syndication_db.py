@@ -313,13 +313,27 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
     conn.close()
     return res_id
 
-def delete_syndicated_novel(novel_id: int):
+def delete_syndicated_novel(novel_id: int, delete_from_sheet: bool = True):
     conn = _get_conn()
     cur = conn.cursor()
+    cur.execute("SELECT novel_name FROM syndicated_novels WHERE id = ?", (novel_id,))
+    row = cur.fetchone()
+    novel_name = row["novel_name"] if row else None
+    
     cur.execute("DELETE FROM syndication_logs WHERE novel_id = ?", (novel_id,))
     cur.execute("DELETE FROM syndicated_novels WHERE id = ?", (novel_id,))
+    if novel_name:
+        cur.execute("DELETE FROM syndicated_chapter_schedules WHERE novel_name = ?", (novel_name,))
+        cur.execute("DELETE FROM syndicated_period_rules WHERE novel_name = ?", (novel_name,))
     conn.commit()
     conn.close()
+
+    if delete_from_sheet and novel_name:
+        try:
+            delete_novel_schedules_from_sheet(novel_name, only_pending=False)
+        except Exception as ex_sh:
+            logger.warning(f"Failed to delete novel from Google Sheet: {ex_sh}")
+
 
 # ==================== دوال السجلات (Logs) ====================
 
@@ -624,7 +638,7 @@ def save_chapter_schedules_batch(novel_name: str, rows: List[Dict[str, Any]], sp
             tab_name = ensure_schedule_tab_exists(service, ssid)
             res = service.spreadsheets().values().get(
                 spreadsheetId=ssid,
-                range=f"{tab_name}!A:B"
+                range=f"{tab_name}!A:D"
             ).execute()
             sheet_rows = res.get("values", [])
             row_map = {}
@@ -633,7 +647,9 @@ def save_chapter_schedules_batch(novel_name: str, rows: List[Dict[str, Any]], sp
                     continue
                 if len(sr) >= 2:
                     try:
-                        row_map[(str(sr[0]).strip(), int(float(str(sr[1]).strip())))] = idx
+                        k = (str(sr[0]).strip(), int(float(str(sr[1]).strip())))
+                        st_val = str(sr[3]).strip().upper() if len(sr) >= 4 else ""
+                        row_map[k] = (idx, st_val)
                     except Exception:
                         pass
 
@@ -654,7 +670,9 @@ def save_chapter_schedules_batch(novel_name: str, rows: List[Dict[str, Any]], sp
                 ]
                 key = (novel_name, r["chapter_num"])
                 if key in row_map:
-                    row_idx = row_map[key]
+                    row_idx, cur_status = row_map[key]
+                    if cur_status == "PUBLISHED":
+                        continue  # Do not overwrite published chapter in Google Sheet
                     update_data.append({
                         "range": f"{tab_name}!A{row_idx}:I{row_idx}",
                         "values": [val_row]
@@ -798,7 +816,147 @@ def delete_chapter_schedule(novel_name: str, chapter_num: int, spreadsheet_id: O
             logger.warning(f"Could not cancel chapter in Google Sheet: {ex_d}")
     return True
 
+def delete_novel_schedules_from_sheet(novel_name: str, only_pending: bool = False, spreadsheet_id: Optional[str] = None) -> bool:
+    """حذف صفوف الرواية من شيت الجدولة السحابي في Google Sheet."""
+    ssid = spreadsheet_id or get_schedule_spreadsheet_id()
+    service = _get_sheets_service()
+    if not service:
+        return False
+    try:
+        tab_name = ensure_schedule_tab_exists(service, ssid)
+        res = service.spreadsheets().values().get(
+            spreadsheetId=ssid,
+            range=f"{tab_name}!A:I"
+        ).execute()
+        rows = res.get("values", [])
+        if not rows:
+            return True
+        header = rows[0]
+        remaining = [header]
+        for r in rows[1:]:
+            if len(r) >= 1 and str(r[0]).strip().lower() == novel_name.strip().lower():
+                if only_pending and len(r) >= 4 and str(r[3]).strip().upper() == "PUBLISHED":
+                    remaining.append(r)
+                else:
+                    continue  # يتم حذف هذا الصف
+            else:
+                remaining.append(r)
+
+        service.spreadsheets().values().clear(
+            spreadsheetId=ssid,
+            range=f"{tab_name}!A:I"
+        ).execute()
+        if remaining:
+            service.spreadsheets().values().update(
+                spreadsheetId=ssid,
+                range=f"{tab_name}!A1",
+                valueInputOption="USER_ENTERED",
+                body={"values": remaining}
+            ).execute()
+        return True
+    except Exception as ex:
+        logger.error(f"Error removing novel schedules from sheet: {ex}")
+        return False
+
+def cancel_all_pending_schedules_for_novel(novel_name: str) -> bool:
+    """إلغاء وحذف كافة الفصول المجدولة المعلقة لرواية معينة من قاعدة البيانات والشيت."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM syndicated_chapter_schedules WHERE novel_name = ? AND status != 'PUBLISHED'", (novel_name,))
+    conn.commit()
+    conn.close()
+    delete_novel_schedules_from_sheet(novel_name, only_pending=True)
+    return True
+
+def set_novel_last_published_chapter(novel_name: str, last_chapter: int):
+    """تحديد آخر فصل منشور مسبقاً لرواية وتحديث الحالات وتخطي ما قبله."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE syndicated_novels SET last_synced_chapter = ? WHERE novel_name = ?", (last_chapter, novel_name))
+    cur.execute("""
+    UPDATE syndicated_chapter_schedules SET status = 'PUBLISHED'
+    WHERE novel_name = ? AND chapter_num <= ? AND status != 'PUBLISHED'
+    """, (novel_name, last_chapter))
+    conn.commit()
+    conn.close()
+    try:
+        ssid = get_schedule_spreadsheet_id()
+        service = _get_sheets_service()
+        if service:
+            tab_name = ensure_schedule_tab_exists(service, ssid)
+            res = service.spreadsheets().values().get(spreadsheetId=ssid, range=f"{tab_name}!A:D").execute()
+            sheet_rows = res.get("values", [])
+            up_data = []
+            for idx, sr in enumerate(sheet_rows, start=1):
+                if idx == 1:
+                    continue
+                if len(sr) >= 2 and str(sr[0]).strip().lower() == novel_name.strip().lower():
+                    try:
+                        ch_n = int(float(str(sr[1]).strip()))
+                        if ch_n <= last_chapter:
+                            up_data.append({"range": f"{tab_name}!D{idx}", "values": [["PUBLISHED"]]})
+                    except Exception:
+                        pass
+            if up_data:
+                service.spreadsheets().values().batchUpdate(
+                    spreadsheetId=ssid,
+                    body={"valueInputOption": "USER_ENTERED", "data": up_data}
+                ).execute()
+    except Exception as ex_sync:
+        logger.warning(f"Failed to sync published status to sheet: {ex_sync}")
+
+def bulk_reschedule_novel_pending_chapters(
+    novel_name: str,
+    freq_type: str,
+    times_per_day: int,
+    selected_hours: List[str],
+    start_date_str: str,
+    platform: str = "all"
+) -> int:
+    """إعادة جدولة جميع الفصول المعلقة المتبقية لرواية دفعة واحدة بمواعيد وتوزيع زمني جديد."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT chapter_num FROM syndicated_chapter_schedules WHERE novel_name = ? AND status = 'PENDING' ORDER BY chapter_num ASC", (novel_name,))
+    pending_rows = cur.fetchall()
+    pending_chaps = [int(r["chapter_num"]) for r in pending_rows]
+    conn.close()
+
+    if not pending_chaps:
+        return 0
+
+    # 1. إزالة المعلق القديم من الشيت وقاعدة البيانات
+    cancel_all_pending_schedules_for_novel(novel_name)
+
+    # 2. توليد المواعيد الجديدة للفصول المتبقية وتخطي المنشور
+    start_ch = min(pending_chaps)
+    end_ch = max(pending_chaps)
+    gen_rows = generate_schedule_from_period_rules(
+        novel_name=novel_name,
+        start_ch=start_ch,
+        end_ch=end_ch,
+        freq_type=freq_type,
+        times_per_day=times_per_day,
+        selected_hours=selected_hours,
+        start_date_str=start_date_str,
+        platform=platform,
+        skip_published=True
+    )
+    target_rows = [r for r in gen_rows if r["chapter_num"] in pending_chaps]
+    save_chapter_schedules_batch(novel_name, target_rows)
+
+    # 3. تحديث موعد أول فصل للرواية
+    if target_rows:
+        all_n = get_all_syndicated_novels()
+        n_match = next((n for n in all_n if n["novel_name"] == novel_name), None)
+        if n_match:
+            n_match["next_run_timestamp"] = target_rows[0]["scheduled_timestamp"]
+            n_match["is_active"] = 1
+            save_or_update_syndicated_novel(n_match)
+
+    return len(target_rows)
+
 # ==================== قواعد الفترات المخصصة وحساب المواعيد ====================
+
 
 def save_period_rule(rule_data: Dict[str, Any]) -> int:
     """حفظ قاعدة فترة جديدة للرواية."""
@@ -841,10 +999,12 @@ def generate_schedule_from_period_rules(
     times_per_day: int,
     selected_hours: List[str],
     start_date_str: str,
-    platform: str = "all"
+    platform: str = "all",
+    skip_published: bool = True
 ) -> List[Dict[str, Any]]:
     """
     توليد جدول مواعيد الفصول بدقة استناداً إلى النطاق والتكرار والساعات المحددة يدوياً.
+    يتخطى تلقائياً أي فصل تم نشره مسبقاً ويبدأ الجدولة من الفصل التالي غير المنشور.
     """
     res = []
     ch = int(start_ch)
@@ -865,9 +1025,29 @@ def generate_schedule_from_period_rules(
         valid_hours = ["12:00"]
     valid_hours = sorted(valid_hours)
 
+    published_chaps = set()
+    if skip_published and novel_name:
+        try:
+            conn = _get_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT chapter_num FROM syndicated_chapter_schedules WHERE novel_name = ? AND status = 'PUBLISHED'", (novel_name,))
+            for pr in cur.fetchall():
+                published_chaps.add(int(pr["chapter_num"]))
+            cur.execute("SELECT last_synced_chapter FROM syndicated_novels WHERE novel_name = ?", (novel_name,))
+            nov_r = cur.fetchone()
+            if nov_r and nov_r["last_synced_chapter"]:
+                for c in range(1, int(nov_r["last_synced_chapter"]) + 1):
+                    published_chaps.add(c)
+            conn.close()
+        except Exception:
+            pass
+
     if freq_type == "daily":
         hour_idx = 0
         while ch <= end_val:
+            if ch in published_chaps:
+                ch += 1
+                continue
             h_str, m_str = valid_hours[hour_idx].split(":")
             dt = datetime.datetime.combine(cur_date, datetime.time(int(h_str), int(m_str)), tzinfo=TZ_ARABIA)
             res.append({
@@ -887,6 +1067,9 @@ def generate_schedule_from_period_rules(
     elif freq_type == "weekly":
         h_str, m_str = valid_hours[0].split(":")
         while ch <= end_val:
+            if ch in published_chaps:
+                ch += 1
+                continue
             dt = datetime.datetime.combine(cur_date, datetime.time(int(h_str), int(m_str)), tzinfo=TZ_ARABIA)
             res.append({
                 "chapter_num": ch,
@@ -902,6 +1085,9 @@ def generate_schedule_from_period_rules(
     elif freq_type == "monthly":
         h_str, m_str = valid_hours[0].split(":")
         while ch <= end_val:
+            if ch in published_chaps:
+                ch += 1
+                continue
             dt = datetime.datetime.combine(cur_date, datetime.time(int(h_str), int(m_str)), tzinfo=TZ_ARABIA)
             res.append({
                 "chapter_num": ch,
@@ -919,6 +1105,9 @@ def generate_schedule_from_period_rules(
         step_hours = float(times_per_day) if times_per_day and times_per_day > 0 else 1.0
         cur_dt = datetime.datetime.combine(cur_date, datetime.time(int(h_str), int(m_str)), tzinfo=TZ_ARABIA)
         while ch <= end_val:
+            if ch in published_chaps:
+                ch += 1
+                continue
             res.append({
                 "chapter_num": ch,
                 "scheduled_time": cur_dt.strftime("%Y-%m-%d %H:%M"),
@@ -934,6 +1123,9 @@ def generate_schedule_from_period_rules(
         h_str, m_str = valid_hours[0].split(":")
         dt = datetime.datetime.combine(cur_date, datetime.time(int(h_str), int(m_str)), tzinfo=TZ_ARABIA)
         while ch <= end_val:
+            if ch in published_chaps:
+                ch += 1
+                continue
             res.append({
                 "chapter_num": ch,
                 "scheduled_time": dt.strftime("%Y-%m-%d %H:%M"),
