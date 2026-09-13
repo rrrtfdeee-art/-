@@ -21,14 +21,170 @@ logger = logging.getLogger("SyndicationDaemon")
 _DAEMON_RUNNING = False
 _DAEMON_THREAD = None
 
+def process_scheduled_chapters_cycle(now: float):
+    """
+    فحص ونشر الفصول التي حان موعدها من جدول الجدولة المتقدمة في Google Sheet وقاعدة البيانات.
+    """
+    try:
+        due_chapters = syndication_db.get_scheduled_chapters(status="PENDING", limit=20)
+    except Exception as ex_db:
+        logger.warning(f"Could not load scheduled chapters: {ex_db}")
+        return
+
+    if not due_chapters:
+        return
+
+    rc_token = syndication_db.get_synd_setting("rewayat_token", "")
+    wp_token = syndication_db.get_synd_setting("wattpad_token", "")
+    wp_user = syndication_db.get_synd_setting("wattpad_username", "")
+    wp_pass = syndication_db.get_synd_setting("wattpad_password", "")
+
+    for item in due_chapters:
+        try:
+            sch_ts = float(item.get("scheduled_timestamp") or 0.0)
+            if sch_ts <= 0 or sch_ts > now:
+                continue
+
+            n_name = item["novel_name"]
+            target_ch = item["chapter_num"]
+            plat_target = item.get("platform", "all")
+
+            all_novs = syndication_db.get_all_syndicated_novels()
+            nov = next((n for n in all_novs if n["novel_name"] == n_name), None)
+            if not nov:
+                continue
+
+            extracted = syndication_extractor.prepare_chapter_for_publishing(
+                novel_name=n_name,
+                chapter_num=target_ch,
+                custom_cta=nov.get("custom_cta", ""),
+                blogger_url=nov.get("blogger_url", "")
+            )
+
+            if not extracted.get("success"):
+                logger.info(f"Scheduled Chapter {target_ch} for {n_name} not available in sheet yet.")
+                continue
+
+            success_rc = False
+            success_wp = False
+            rc_post_url = ""
+            wp_post_url = ""
+            err_messages = []
+
+            # 1. نادي الروايات
+            if plat_target in ("all", "rewayat_club") and nov.get("rewayat_enabled") and nov.get("rewayat_novel_id") and rc_token:
+                try:
+                    rc_client = rewayat_club_api.RewayatClubClient(token=rc_token)
+                    rc_res = rc_client.publish_chapter(
+                        novel_id=nov["rewayat_novel_id"],
+                        chapter_num=target_ch,
+                        title=extracted["title"],
+                        content=extracted["content_for_publish"]
+                    )
+                    if rc_res.get("success"):
+                        success_rc = True
+                        rc_post_url = rc_res.get("post_url", "")
+                        syndication_db.log_syndication_event(
+                            novel_id=nov["id"], chapter_num=target_ch, platform="rewayat_club",
+                            status="SUCCESS", post_url=rc_post_url
+                        )
+                    else:
+                        err_msg = rc_res.get("error", "فشل نادي الروايات")
+                        err_messages.append(err_msg)
+                        syndication_db.log_syndication_event(
+                            novel_id=nov["id"], chapter_num=target_ch, platform="rewayat_club",
+                            status="FAILED", error_msg=err_msg
+                        )
+                except Exception as e_rc:
+                    err_messages.append(str(e_rc))
+
+            # 2. واتباد
+            if plat_target in ("all", "wattpad") and nov.get("wattpad_enabled") and nov.get("wattpad_story_id"):
+                if wp_token or (wp_user and wp_pass):
+                    try:
+                        wp_client = wattpad_poster.WattpadClient(token=wp_token, username=wp_user, password=wp_pass)
+                        wp_res = wp_client.publish_chapter_to_story(
+                            story_id=nov["wattpad_story_id"],
+                            chapter_num=target_ch,
+                            title=extracted["title"],
+                            content=extracted["content_for_publish"]
+                        )
+                        if wp_res.get("success"):
+                            success_wp = True
+                            wp_post_url = wp_res.get("post_url", "")
+                            syndication_db.log_syndication_event(
+                                novel_id=nov["id"], chapter_num=target_ch, platform="wattpad",
+                                status="SUCCESS", post_url=wp_post_url
+                            )
+                        else:
+                            err_msg = wp_res.get("error", "فشل واتباد")
+                            err_messages.append(err_msg)
+                            syndication_db.log_syndication_event(
+                                novel_id=nov["id"], chapter_num=target_ch, platform="wattpad",
+                                status="FAILED", error_msg=err_msg
+                            )
+                    except Exception as e_wp:
+                        err_messages.append(str(e_wp))
+
+            if success_rc or success_wp:
+                combined_url = " | ".join(filter(None, [rc_post_url, wp_post_url]))
+                syndication_db.update_chapter_schedule_status(
+                    novel_name=n_name,
+                    chapter_num=target_ch,
+                    status="PUBLISHED",
+                    post_url=combined_url
+                )
+                if target_ch > (nov.get("last_synced_chapter") or 0):
+                    nov["last_synced_chapter"] = target_ch
+                    syndication_db.save_or_update_syndicated_novel(nov)
+
+                logger.info(f"🚀 Published scheduled chapter {target_ch} for {n_name} successfully!")
+
+                try:
+                    from nsw_healer_engine import notify_admin
+                    pub_links = []
+                    if success_rc:
+                        pub_links.append(f"• نادي الروايات: {rc_post_url or 'تم'}")
+                    if success_wp:
+                        pub_links.append(f"• واتباد: {wp_post_url or 'تم'}")
+                    links_txt = "\n".join(pub_links)
+                    msg = (
+                        f"🚀 <b>[نشر مجدول بساعات محددة — ناجح]</b>\n\n"
+                        f"📖 <b>الرواية:</b> {n_name}\n"
+                        f"📑 <b>الفصل:</b> {target_ch}\n"
+                        f"🏷️ <b>العنوان:</b> {extracted.get('title', '')}\n"
+                        f"{links_txt}\n\n"
+                        f"📊 <b>المصدر السحابي:</b> Google Sheet (SyndicationSchedule)"
+                    )
+                    notify_admin(msg)
+                except Exception as ex_notif:
+                    logger.warning(f"Could not send telegram notification: {ex_notif}")
+            else:
+                joined_err = " ; ".join(err_messages) or "تعذر النشر"
+                syndication_db.update_chapter_schedule_status(
+                    novel_name=n_name,
+                    chapter_num=target_ch,
+                    status="FAILED",
+                    error_msg=joined_err
+                )
+        except Exception as ex_item:
+            logger.error(f"Error in process_scheduled_chapters_cycle for item {item}: {ex_item}")
+
 def run_syndication_cycle():
     """تنفيذ دورة فحص واحدة لكافة الروايات النشطة في النظام."""
+    now = time.time()
+
+    # أولاً: معالجة ونشر الفصول المجدولة بساعات محددة يدوياً من جدول Google Sheet
+    try:
+        process_scheduled_chapters_cycle(now)
+    except Exception as ex_p:
+        logger.error(f"Error in process_scheduled_chapters_cycle: {ex_p}")
+
+    # ثانياً: معالجة الروايات بنظام الفترات الساعية الافتراضية (Legacy Interval Runner)
     novels = syndication_db.get_all_syndicated_novels(active_only=True)
     if not novels:
         return
 
-    now = time.time()
-    
     # جلب التوكنات العامة
     rc_token = syndication_db.get_synd_setting("rewayat_token", "")
     wp_token = syndication_db.get_synd_setting("wattpad_token", "")
@@ -37,6 +193,14 @@ def run_syndication_cycle():
 
     for nov in novels:
         try:
+            # إذا كانت الرواية تحتوي على فصول مجدولة معلقة بالجدول، نترك إدارتها لنظام الفصول لتفادي التكرار
+            try:
+                has_active_sched = syndication_db.get_scheduled_chapters(novel_name=nov["novel_name"], status="PENDING", limit=1)
+                if has_active_sched:
+                    continue
+            except Exception:
+                pass
+
             # 1. التحقق هل حان موعد النشر؟
             next_run = nov.get("next_run_timestamp", 0.0)
             # قاعدة صارمة: إذا لم يتم تحديد موعد جدولة صريح (> 0) أو لم يحن وقته بعد، نمنع النشر نهائياً

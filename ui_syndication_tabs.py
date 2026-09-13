@@ -7,7 +7,7 @@ ui_syndication_tabs.py — واجهة التبويبين لنادي الرواي
 import streamlit as st
 import syndication_db
 import syndication_extractor
-
+import json
 import time
 import datetime
 
@@ -386,6 +386,200 @@ def render_rewayat_club_tab():
             if log.get("error_msg"):
                 st.caption(f"⚠️ {log['error_msg']}")
 
+    # 6. نظام الجدولة الدقيقة متعدد الفترات (Google Sheets Cloud Persistence)
+    render_advanced_period_scheduler_section(default_platform="rewayat_club")
+
+def render_advanced_period_scheduler_section(default_platform="all"):
+    st.markdown("---")
+    st.subheader("📅 نظام الجدولة الدقيقة متعدد الفترات (Google Sheets Cloud Persistence)")
+    st.caption("جدولة دفعات الفصول بنطاقات مخصصة وتحديد ساعات النشر يدوياً لكل فترة، مع المزامنة السحابية الدائمة 24/7 لحماية البيانات من انطفاء السيرفر.")
+
+    # 1. شريط حالة الشيت والمزامنة السحابية
+    with st.expander("☁️ إعدادات مستودع الجدولة السحابي (Google Sheet Cloud Settings)", expanded=False):
+        cur_ssid = syndication_db.get_schedule_spreadsheet_id()
+        c_ss1, c_ss2 = st.columns([3, 1])
+        with c_ss1:
+            inp_ssid = st.text_input("معرف جدول الجدولة في Google Sheet (Spreadsheet ID):", value=cur_ssid, key=f"ssid_inp_{default_platform}")
+        with c_ss2:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            if st.button("💾 حفظ المعرف", key=f"save_ssid_btn_{default_platform}", use_container_width=True):
+                syndication_db.set_schedule_spreadsheet_id(inp_ssid.strip())
+                st.success("تم تحديث وحفظ معرف الشيت!")
+                st.rerun()
+
+        st.caption(f"📌 اسم التبويب المعتمد تلقائياً في الشيت: `{syndication_db.SCHEDULE_TAB_NAME}`")
+        if st.button("🔄 مزامنة فورية شاملة مع Google Sheet الآن", key=f"sync_sheet_btn_{default_platform}", use_container_width=True):
+            with st.spinner("⏳ جاري قراءة ومزامنة الفصول من Google Sheet..."):
+                sync_res = syndication_db.sync_schedule_from_sheet()
+                if sync_res.get("success"):
+                    st.success(f"🎉 تم مزامنة {sync_res.get('synced_count')} فصلاً بنجاح من الشيت السحابي!")
+                else:
+                    st.warning(f"⚠️ {sync_res.get('message')}")
+                st.rerun()
+
+    # 2. منشئ الفترات المخصصة والساعات اليدوية
+    all_novels = syndication_db.get_all_syndicated_novels()
+    if not all_novels:
+        st.info("💡 أضف رواية واحدة على الأقل أولاً لتتمكن من إنشاء فترات الجدولة لها.")
+        return
+
+    novel_names = [n["novel_name"] for n in all_novels]
+
+    with st.expander("➕ مُنشئ نطاقات الفترات والساعات اليدوية (Period & Manual Hours Builder)", expanded=True):
+        col_nov, col_plat = st.columns([2, 1])
+        with col_nov:
+            selected_novel = st.selectbox("📚 اختر الرواية:", novel_names, key=f"p_nov_sel_{default_platform}")
+        with col_plat:
+            plat_opts = ["all", "rewayat_club", "wattpad"]
+            plat_labels = {"all": "كلاهما (نادي الروايات + واتباد)", "rewayat_club": "نادي الروايات فقط", "wattpad": "واتباد فقط"}
+            def_idx = 0 if default_platform == "all" else (1 if default_platform == "rewayat_club" else 2)
+            sel_plat = st.selectbox("🎯 المنصات المستهدفة:", plat_opts, index=def_idx, format_func=lambda x: plat_labels.get(x, x), key=f"p_plat_sel_{default_platform}")
+
+        col_r1, col_r2, col_r3 = st.columns(3)
+        with col_r1:
+            p_start_ch = st.number_input("من الفصل:", min_value=1, value=1, step=1, key=f"p_start_ch_{default_platform}")
+        with col_r2:
+            p_end_ch = st.number_input("إلى الفصل:", min_value=int(p_start_ch), value=max(int(p_start_ch), 10), step=1, key=f"p_end_ch_{default_platform}")
+        with col_r3:
+            p_freq_type = st.selectbox(
+                "🔁 وتيرة التكرار:",
+                ["daily", "weekly", "monthly", "once"],
+                format_func=lambda x: {
+                    "daily": "يومي (ساعات محددة يدوياً)",
+                    "weekly": "أسبوعي (مرة كل أسبوع)",
+                    "monthly": "شهري (مرة كل شهر)",
+                    "once": "مرة واحدة (فصل محدد)"
+                }.get(x, x),
+                key=f"p_freq_type_{default_platform}"
+            )
+
+        col_d1, col_d2 = st.columns([1, 2])
+        with col_d1:
+            p_start_date = st.date_input("📅 تاريخ بدء الفترة:", value=datetime.date.today(), key=f"p_start_d_{default_platform}")
+
+        selected_hours = []
+        if p_freq_type == "daily":
+            with col_d2:
+                p_times_count = st.number_input("🔢 كم مرة في اليوم؟", min_value=1, max_value=12, value=3, step=1, key=f"p_times_cnt_{default_platform}")
+
+            st.markdown(f"**⏰ حدد ساعات النشر اليدوية ({p_times_count} أوقات يومياً بتوقيت مكة والعراق):**")
+            cols_hours = st.columns(min(int(p_times_count), 4))
+            def_hours = ["10:00", "14:00", "18:00", "21:30", "23:00", "01:00", "08:00", "12:00"]
+            for i in range(int(p_times_count)):
+                c_idx = i % len(cols_hours)
+                with cols_hours[c_idx]:
+                    def_t_str = def_hours[i] if i < len(def_hours) else "12:00"
+                    dh_parts = def_t_str.split(":")
+                    def_time_val = datetime.time(int(dh_parts[0]), int(dh_parts[1]))
+                    t_val = st.time_input(f"الموعد {i+1}:", value=def_time_val, key=f"p_time_inp_{default_platform}_{i}")
+                    selected_hours.append(t_val.strftime("%H:%M"))
+
+        elif p_freq_type == "weekly":
+            with col_d2:
+                w_time = st.time_input("⏰ وقت النشر الأسبوعي:", value=datetime.time(20, 0), key=f"w_time_inp_{default_platform}")
+                selected_hours.append(w_time.strftime("%H:%M"))
+
+        elif p_freq_type == "monthly":
+            with col_d2:
+                m_time = st.time_input("⏰ وقت النشر الشهري:", value=datetime.time(20, 0), key=f"m_time_inp_{default_platform}")
+                selected_hours.append(m_time.strftime("%H:%M"))
+
+        elif p_freq_type == "once":
+            with col_d2:
+                o_time = st.time_input("⏰ وقت النشر:", value=datetime.datetime.now().time().replace(second=0, microsecond=0), key=f"o_time_inp_{default_platform}")
+                selected_hours.append(o_time.strftime("%H:%M"))
+
+        if st.button("⚡ توليد وتثبيت جدول الفصول في Google Sheet", key=f"btn_gen_sched_{default_platform}", type="primary", use_container_width=True):
+            if int(p_start_ch) > int(p_end_ch):
+                st.error("رقم بداية النطاق يجب أن يكون أقل من أو يساوي رقم النهاية.")
+            else:
+                with st.spinner("⏳ جاري حساب التواريخ وضخ الفصول في Google Sheet وقاعدة البيانات..."):
+                    gen_rows = syndication_db.generate_schedule_from_period_rules(
+                        novel_name=selected_novel,
+                        start_ch=int(p_start_ch),
+                        end_ch=int(p_end_ch),
+                        freq_type=p_freq_type,
+                        times_per_day=len(selected_hours),
+                        selected_hours=selected_hours,
+                        start_date_str=p_start_date.strftime("%Y-%m-%d"),
+                        platform=sel_plat
+                    )
+                    syndication_db.save_chapter_schedules_batch(selected_novel, gen_rows)
+                    syndication_db.save_period_rule({
+                        "novel_name": selected_novel,
+                        "start_chapter": int(p_start_ch),
+                        "end_chapter": int(p_end_ch),
+                        "frequency_type": p_freq_type,
+                        "times_per_day": len(selected_hours),
+                        "selected_hours": json.dumps(selected_hours),
+                        "start_date": p_start_date.strftime("%Y-%m-%d"),
+                        "is_active": 1
+                    })
+                    nov_obj = next((n for n in all_novels if n["novel_name"] == selected_novel), None)
+                    if nov_obj:
+                        nov_obj["is_active"] = 1
+                        syndication_db.save_or_update_syndicated_novel(nov_obj)
+
+                    st.balloons()
+                    st.success(f"🎉 تم بنجاح توليد وجدولة {len(gen_rows)} فصلاً لرواية '{selected_novel}' وحفظها في Google Sheet!")
+                    st.rerun()
+
+    # 3. جدول مواعيد الفصول التفاعلي
+    st.markdown("### 📋 جدول الفصول المجدولة التفاعلي")
+    c_f1, c_f2 = st.columns([2, 1])
+    with c_f1:
+        tbl_novel = st.selectbox("🔍 تصفية حسب الرواية:", ["الكل"] + novel_names, key=f"tbl_nov_sel_{default_platform}")
+    with c_f2:
+        tbl_stat = st.selectbox("🔍 تصفية حسب الحالة:", ["الكل", "PENDING", "PUBLISHED", "FAILED"], format_func=lambda x: {"الكل": "الكل", "PENDING": "⏳ قيد الانتظار", "PUBLISHED": "🟢 تم النشر", "FAILED": "🔴 تعذر النشر"}.get(x, x), key=f"tbl_stat_sel_{default_platform}")
+
+    filter_nov = None if tbl_novel == "الكل" else tbl_novel
+    filter_st = None if tbl_stat == "الكل" else tbl_stat
+    sched_items = syndication_db.get_scheduled_chapters(novel_name=filter_nov, status=filter_st, limit=100)
+
+    if not sched_items:
+        st.info("لا توجد فصول مجدولة مطابقة للشروط الحالية.")
+    else:
+        st.caption(f"تم العثور على {len(sched_items)} فصلاً مجدولاً.")
+        for item in sched_items:
+            with st.container():
+                ci1, ci2, ci3, ci4 = st.columns([1.5, 2.5, 1.5, 1.5])
+                with ci1:
+                    st.markdown(f"**📖 {item['novel_name']}**")
+                    st.caption(f"الفصل: **{item['chapter_num']}** | نطاق: `{item.get('period_range') or '-'}`")
+                with ci2:
+                    st.markdown(f"⏰ **الموعد:** `{item['scheduled_time']}`")
+                    if item.get("post_url"):
+                        st.caption(f"🔗 [رابط النشر]({item['post_url']})")
+                    if item.get("last_error"):
+                        st.caption(f"⚠️ `{item['last_error'][:60]}`")
+                with ci3:
+                    st_val = item.get("status", "PENDING")
+                    if st_val == "PUBLISHED":
+                        st.markdown("🟢 **تم النشر بنجاح**")
+                        st.caption(f"نشر في: {item.get('published_at','')}")
+                    elif st_val == "PENDING":
+                        st.markdown("⏳ **مجدول بانتظار موعده**")
+                        st.caption(f"المنصة: `{item.get('platform','all')}`")
+                    else:
+                        st.markdown("🔴 **تعذر النشر**")
+                with ci4:
+                    if st_val == "PENDING":
+                        if st.button("⚡ نشر الآن", key=f"pub_now_btn_{item['novel_name']}_{item['chapter_num']}_{default_platform}"):
+                            item["scheduled_timestamp"] = time.time() - 10
+                            syndication_db.save_chapter_schedules_batch(item["novel_name"], [item])
+                            try:
+                                import syndication_daemon
+                                syndication_daemon.run_syndication_cycle()
+                                st.success("تم إطلاق النشر فوراً!")
+                                st.rerun()
+                            except Exception as ex_p:
+                                st.error(f"خطأ: {ex_p}")
+                    if st.button("🗑️ إلغاء", key=f"del_ch_btn_{item['novel_name']}_{item['chapter_num']}_{default_platform}"):
+                        syndication_db.delete_chapter_schedule(item["novel_name"], item["chapter_num"])
+                        st.success(f"تم إلغاء جدولة الفصل {item['chapter_num']}")
+                        st.rerun()
+                st.markdown("<hr style='margin:4px 0; border:0; border-top:1px solid #334155;'>", unsafe_allow_html=True)
+
 def render_wattpad_tab():
     # التأكد من تشغيل المشغل الذاتي المجدول 24/7 في الخلفية
     try:
@@ -750,3 +944,6 @@ def render_wattpad_tab():
                 st.caption(f"🔗 {log['post_url']}")
             if log.get("error_msg"):
                 st.caption(f"⚠️ {log['error_msg']}")
+
+    # 6. نظام الجدولة الدقيقة متعدد الفترات (Google Sheets Cloud Persistence)
+    render_advanced_period_scheduler_section(default_platform="wattpad")
