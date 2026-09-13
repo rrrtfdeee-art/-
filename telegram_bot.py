@@ -34,9 +34,9 @@ import nsw_healer_engine
 from gemini_analyzer import DEFAULT_GAS_URL
 
 # اسم مستخدم البوت الافتراضي وتوكن التحكم
-DEFAULT_BOT_USERNAME = "@SmartNovelMediaBot"
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or database.get_setting("telegram_bot_token") or os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8527477822:AAG2dkvwdkkhHR_NyzAsfIWwlLBIdPk2Woc")
-ADMIN_CHAT_ID = os.getenv("TELEGRAM_ALLOWED_USER") or database.get_setting("telegram_allowed_user") or os.getenv("NSW_TELEGRAM_CHAT_ID", "1974483260")
+DEFAULT_BOT_USERNAME = "@Nsw_monitorbot"
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or database.get_setting("telegram_bot_token") or os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4")
+ADMIN_CHAT_ID = os.getenv("TELEGRAM_ALLOWED_USER") or database.get_setting("telegram_allowed_user") or os.getenv("NSW_TELEGRAM_CHAT_ID", "8883556949")
 
 # جلسات المستخدمين المؤقتة لاختيار الخيارات
 USER_SESSIONS: Dict[int, Dict[str, Any]] = {}
@@ -109,8 +109,8 @@ def get_novel_from_catalog_idx(idx_str: str) -> Optional[str]:
 
 def notify_admin(message: str, parse_mode: str = "HTML"):
     """إرسال إشعار تليجرام فوري للمشرف الأساسي."""
-    admin_id = ADMIN_CHAT_ID or os.getenv("NSW_TELEGRAM_CHAT_ID", "1974483260")
-    token = BOT_TOKEN or os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8527477822:AAG2dkvwdkkhHR_NyzAsfIWwlLBIdPk2Woc")
+    admin_id = ADMIN_CHAT_ID or os.getenv("NSW_TELEGRAM_CHAT_ID", "8883556949")
+    token = BOT_TOKEN or os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4")
     if not token or not admin_id:
         return
     try:
@@ -329,8 +329,8 @@ def create_bot_app():
 
         threading.Thread(target=_cdp_worker, daemon=True).start()
 
-    @bot.message_handler(commands=['start', 'help'])
-    @bot.message_handler(func=lambda msg: msg.text and msg.text.strip() in ['ابدأ', 'ابدا', 'مرحبا', 'start', 'help'])
+    @bot.message_handler(commands=['start', 'help', 'menu'])
+    @bot.message_handler(func=lambda msg: msg.text and msg.text.strip().lower() in ['ابدأ', 'ابدا', 'مرحبا', 'start', 'help', 'menu', '/menu', 'القائمة', 'قائمة'])
     def send_welcome(message):
         if not is_user_authorized(message):
             bot.reply_to(message, "⛔ <b>عذراً، هذا البوت خاص وغير متاح للعامة.</b>\nتواصل مع مالك البوت للحصول على إذن الاستخدام.")

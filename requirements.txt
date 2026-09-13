@@ -16,3 +16,5 @@ urllib3>=2.2.0
 cssselect>=1.2.0
 yt-dlp>=2024.8.6
 pyTelegramBotAPI>=4.20.0
+google-api-python-client>=2.100.0
+google-auth>=2.20.0
