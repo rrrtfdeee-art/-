@@ -35,8 +35,8 @@ from gemini_analyzer import DEFAULT_GAS_URL
 
 # اسم مستخدم البوت الافتراضي وتوكن التحكم
 DEFAULT_BOT_USERNAME = "@Nsw_monitorbot"
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or database.get_setting("telegram_bot_token") or os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4")
-ADMIN_CHAT_ID = os.getenv("TELEGRAM_ALLOWED_USER") or database.get_setting("telegram_allowed_user") or os.getenv("NSW_TELEGRAM_CHAT_ID", "8883556949")
+BOT_TOKEN = "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4"
+ADMIN_CHAT_ID = "8883556949"
 
 # جلسات المستخدمين المؤقتة لاختيار الخيارات
 USER_SESSIONS: Dict[int, Dict[str, Any]] = {}
