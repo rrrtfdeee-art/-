@@ -65,15 +65,8 @@ if __name__ == "__main__":
     except Exception as e_daemon:
         print(f"[Launcher] ⚠️ Could not start syndication daemon: {e_daemon}")
 
-    # إشعار الإقلاع التلقائي في الخلفية
-    def _startup_notify():
-        try:
-            time.sleep(5)
-            from nsw_healer_engine import notify_admin
-            notify_admin("🖥️ <b>[إقلاع خط الإنتاج]:</b>\nتم تشغيل المنظومة بنجاح.\n• المزامنة المزدوجة للشيتين: <b>مفعلة</b>.\n• ربط أزرار التنقل التلقائي: <b>مفعل</b>.\n• كشف الفجوات المفردة: <b>مفعل</b>.\n• خادم النشر التلقائي (نادي الروايات + واتباد 24/7): <b>نشط</b>.")
-        except Exception:
-            pass
-    threading.Thread(target=_startup_notify, daemon=True).start()
+    # تم إلغاء إشعار الإقلاع التلقائي لمنع الإزعاج عند إعادة إقلاع سيرفر Render الدوري
+    # Notification is disabled to ensure 100% silent startup
 
     # انتظار ثانيتين ثم تشغيل Streamlit
     time.sleep(2)

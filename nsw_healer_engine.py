@@ -207,10 +207,13 @@ def notify_admin(message: str, parse_mode: str = "HTML", force_push: bool = Fals
         live_open = False
 
     # 1. إرسال إلى تليجرام فقط إذا كانت الدردشة مفتوحة أو إشعار إجباري (force_push)
-    if (live_open or force_push) and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID:
+    if (live_open or force_push) and TELEGRAM_BOT_TOKEN:
         try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": parse_mode}, timeout=15)
+            import database
+            admins = database.get_authorized_admins()
+            for adm in admins:
+                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                requests.post(url, json={"chat_id": str(adm), "text": message, "parse_mode": parse_mode}, timeout=15)
         except Exception as e:
             logger.error(f"خطأ إرسال إشعار تليجرام: {e}")
 

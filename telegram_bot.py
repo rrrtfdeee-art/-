@@ -56,27 +56,20 @@ def get_whitelisted_users() -> set:
 
 
 def is_user_authorized(message_or_call) -> bool:
-    """التحقق من أن المستخدم إما الأدمن أو موجود في القائمة البيضاء."""
-    chat_id = str(message_or_call.from_user.id)
-    username = (message_or_call.from_user.username or "").lower().strip()
-
-    # إذا كان وضع البوت عاماً للجميع مؤقتاً
-    if database.get_setting("telegram_public_mode", "false") == "true":
-        return True
-
-    allowed = get_whitelisted_users()
-    if not allowed:
-        return True  # متاح للجميع في حال لم يحدد الأدمن أحداً بعد
-
-    return (chat_id in allowed) or (username in allowed)
+    """التحقق من اعتماد المستخدم كمشرف عبر الرمز السري nsw262311."""
+    user = getattr(message_or_call, "from_user", None)
+    if not user:
+        user_id = getattr(getattr(message_or_call, "chat", None), "id", None)
+    else:
+        user_id = user.id
+    if not user_id:
+        return False
+    return database.is_authorized_admin(user_id)
 
 
 def is_admin(user_id: int) -> bool:
-    """التحقق مما إذا كان المستخدم هو المشرف الأساسي (مفعل بالكامل للمالك)."""
-    if not ADMIN_CHAT_ID or str(ADMIN_CHAT_ID).strip() in ["", "0"]:
-        return True
-    # السماح للمشرف المسجل أو في حالة الاستخدام المباشر
-    return True
+    """التحقق مما إذا كان المستخدم معتمداً كمشرف بالرمز السري nsw262311."""
+    return database.is_authorized_admin(user_id)
 
 
 def make_novel_selection_markup(prefix: str, include_all: bool = True) -> types.InlineKeyboardMarkup:
@@ -108,7 +101,7 @@ def get_novel_from_catalog_idx(idx_str: str) -> Optional[str]:
 
 
 def notify_admin(message: str, parse_mode: str = "HTML", force_push: bool = False):
-    """إرسال إشعار للمشرف مع دعم الوضع الصامت التلقائي وتسجيل النشاطات في السجل."""
+    """إرسال إشعار للمشرفين المعتمدين بالرمز السري nsw262311 فقط عند فتح الدردشة."""
     # 1. تسجيل النشاط دائماً في قاعدة البيانات للتقارير الدورية
     try:
         import re
@@ -122,19 +115,24 @@ def notify_admin(message: str, parse_mode: str = "HTML", force_push: bool = Fals
     except Exception:
         pass
 
-    # 2. إرسال الرسالة المنبثقة للمشرف فقط إذا كانت الدردشة مفتوحة بـ /chat_on أو force_push
+    # 2. إرسال الرسالة للمشرفين فقط إذا كانت الدردشة مفتوحة بـ /chat_on أو force_push
     if not force_push and not database.is_live_chat_open():
         return  # الوضع الصامت مفعل، لا ترسل إشعارات عشوائية منبثقة
 
-    admin_id = ADMIN_CHAT_ID or os.getenv("NSW_TELEGRAM_CHAT_ID", "8883556949")
     token = BOT_TOKEN or os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4")
-    if not token or not admin_id:
+    if not token:
         return
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        requests.post(url, json={"chat_id": str(admin_id), "text": message, "parse_mode": parse_mode}, timeout=15)
-    except Exception as e:
-        print(f"[Telegram Alert Error] {e}")
+
+    admins = database.get_authorized_admins()
+    if not admins:
+        return  # لا يوجد مشرف معتمد بالرمز السري، منع الإرسال العشوائي
+
+    for admin_id in admins:
+        try:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            requests.post(url, json={"chat_id": str(admin_id), "text": message, "parse_mode": parse_mode}, timeout=15)
+        except Exception as e:
+            print(f"[Telegram Alert Error] {e}")
 
 
 def notify_scraping_blocked(novel_name: str, failed_count: int, source_url: str):
@@ -281,6 +279,83 @@ def create_bot_app():
                 bot.send_message(chat_id, text, reply_markup=markup)
         except Exception:
             bot.send_message(chat_id, text, reply_markup=markup)
+
+    SECRET_PASSCODE = "nsw262311"
+
+    def _send_admin_welcome(chat_id: int, reply_to_msg=None):
+        """إرسال لوحة التحكم والأزرار التفاعلية للمشرف المعتمد بالرمز السري."""
+        text = (
+            "👋 <b>مرحباً بك في مركز تحكم Novelskyworld & Media AI!</b>\n\n"
+            "هذا البوت مجهز لإدارة منظومة النشر والترجمة وسحب الوسائط بأعلى دقة:\n"
+            "🛡️ <b>منظومة NSW:</b> فحص وسد الفجوات، واستصلاح المبتورات، وصيانة أزرار التنقل.\n"
+            "📚 <b>سحب الروايات:</b> أرسل رابط فهرس أي رواية لسحب فصولها وتصديرها بملف TXT كامل.\n"
+            "🎬 <b>تحميل الوسائط:</b> أرسل رابط فيديو (يوتيوب/تيك توك/تويتر) أو اطلب كشف الأفلام.\n"
+            "👑 <b>أنت في وضع المشرف المعتمد (Admin Mode).</b>\n\n"
+            "👇 <b>استخدم الأزرار التفاعلية أدناه للتحكم السريع:</b>"
+        )
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        btn_repair = types.InlineKeyboardButton("🛡️ الإصلاح الشامل الفائق", callback_data="cb_nsw_repair")
+        btn_dates = types.InlineKeyboardButton("🗓️ إصلاح تواريخ النشر", callback_data="cb_fix_dates_start")
+        btn_nav = types.InlineKeyboardButton("🔗 صيانة أزرار التنقل", callback_data="cb_nsw_nav")
+        btn_sync = types.InlineKeyboardButton("🔄 مطابقة الشيت مع بلوجر", callback_data="cb_sync_blogger_start")
+        btn_dups = types.InlineKeyboardButton("🧹 تطهير الفصول المكررة", callback_data="cb_purge_dups_start")
+        btn_time = types.InlineKeyboardButton("⏱️ فحص تسلسل الجدولة", callback_data="cb_check_timeline_start")
+        btn_gaps = types.InlineKeyboardButton("🧩 سد الفجوات الترقيمية", callback_data="cb_nsw_gaps")
+        btn_heal = types.InlineKeyboardButton("🩹 استصلاح المبتورات", callback_data="cb_nsw_heal")
+        btn_export = types.InlineKeyboardButton("📥 تصدير فصول TXT", callback_data="cb_export_chapters_start")
+        btn_stage = types.InlineKeyboardButton("🎭 صقل أوبس (Opus)", callback_data="cb_nsw_stage")
+        btn_status = types.InlineKeyboardButton("📊 حالة المنظومة", callback_data="cb_nsw_status")
+        btn_stop = types.InlineKeyboardButton("🛑 إيقاف فوري", callback_data="cb_nsw_stop")
+        btn_help = types.InlineKeyboardButton("📋 دليل الأوامر", callback_data="cb_nsw_help")
+        markup.add(btn_repair)
+        markup.add(btn_dates, btn_nav)
+        markup.add(btn_sync, btn_dups)
+        markup.add(btn_time)
+        markup.add(btn_gaps, btn_heal)
+        btn_titles = types.InlineKeyboardButton("🏷️ توحيد صيغة العناوين", callback_data="cb_fix_titles_start")
+        markup.add(btn_export, btn_titles)
+        markup.add(btn_stage, btn_status)
+        markup.add(btn_help, btn_stop)
+
+        if reply_to_msg:
+            bot.reply_to(reply_to_msg, text, reply_markup=markup)
+        else:
+            bot.send_message(chat_id, text, reply_markup=markup)
+
+    # ----------------------------------------------------
+    # صمام الأمان الفائق: حظر وتجاهل الترافيك غير الموثق بالرمز السري nsw262311
+    # ----------------------------------------------------
+    @bot.message_handler(func=lambda msg: not database.is_authorized_admin(msg.chat.id), content_types=['text', 'photo', 'video', 'document', 'audio', 'voice', 'sticker', 'location', 'contact'])
+    def intercept_unauthorized_traffic(message):
+        raw_text = (message.text or "").strip()
+        # التحقق الحصري من الرمز السري
+        if raw_text == SECRET_PASSCODE or raw_text.lower() == SECRET_PASSCODE.lower():
+            database.authorize_admin(message.chat.id)
+            database.set_live_chat_open(True)
+            bot.reply_to(
+                message,
+                "👑 <b>تم التحقق بنجاح واعتمادك كمشرف رسمي للنظام!</b>\n\n"
+                "• لتلقي الإشعارات الحية: <code>/chat_on</code>\n"
+                "• للوضع الصامت وكتم الإشعارات: <code>/chat_off</code>\n"
+                "• لتسجيل الخروج والقفل: <code>/logout</code>"
+            )
+            _send_admin_welcome(message.chat.id, message)
+            return
+        # في حال أرسل أي أمر آخر كـ /start أو كلام عادي: صمت مطبق 100% كأنه معطل تماماً
+        return
+
+    @bot.callback_query_handler(func=lambda call: not database.is_authorized_admin(call.message.chat.id))
+    def intercept_unauthorized_callback(call):
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
+        return
+
+    @bot.message_handler(commands=['logout'])
+    def handle_logout_cmd(message):
+        database.deauthorize_admin(message.chat.id)
+        bot.reply_to(message, "🔒 <b>تم تسجيل الخروج بنجاح.</b>\nتم قفل البوت، ولن يستجيب لأي رسائل حتى إعادة إدخال الرمز السري.")
 
     @bot.message_handler(commands=['chat_on', 'open_chat'])
     def handle_chat_on(message):
@@ -506,52 +581,12 @@ def create_bot_app():
     @bot.message_handler(func=lambda msg: msg.text and msg.text.strip().lower() in ['ابدأ', 'ابدا', 'مرحبا', 'start', 'help', 'menu', '/menu', 'القائمة', 'قائمة'])
     def send_welcome(message):
         if not is_user_authorized(message):
-            bot.reply_to(message, "⛔ <b>عذراً، هذا البوت خاص وغير متاح للعامة.</b>\nتواصل مع مالك البوت للحصول على إذن الاستخدام.")
             return
-
-        is_adm = is_admin(message.from_user.id)
-        admin_hint = "\n👑 <b>أنت في وضع المشرف (Admin Mode).</b>" if is_adm else ""
-        text = (
-            "👋 <b>مرحباً بك في مركز تحكم Novelskyworld & Media AI!</b>\n\n"
-            "هذا البوت مجهز لإدارة منظومة النشر والترجمة وسحب الوسائط بأعلى دقة:\n"
-            "🛡️ <b>منظومة NSW:</b> فحص وسد الفجوات، واستصلاح المبتورات، وصيانة أزرار التنقل.\n"
-            "📚 <b>سحب الروايات:</b> أرسل رابط فهرس أي رواية لسحب فصولها وتصديرها بملف TXT كامل.\n"
-            "🎬 <b>تحميل الوسائط:</b> أرسل رابط فيديو (يوتيوب/تيك توك/تويتر) أو اطلب كشف الأفلام."
-            f"{admin_hint}\n\n"
-            "👇 <b>استخدم الأزرار التفاعلية أدناه للتحكم السريع:</b>"
-        )
-        markup = None
-        if is_adm:
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            btn_repair = types.InlineKeyboardButton("🛡️ الإصلاح الشامل الفائق", callback_data="cb_nsw_repair")
-            btn_dates = types.InlineKeyboardButton("🗓️ إصلاح تواريخ النشر", callback_data="cb_fix_dates_start")
-            btn_nav = types.InlineKeyboardButton("🔗 صيانة أزرار التنقل", callback_data="cb_nsw_nav")
-            btn_sync = types.InlineKeyboardButton("🔄 مطابقة الشيت مع بلوجر", callback_data="cb_sync_blogger_start")
-            btn_dups = types.InlineKeyboardButton("🧹 تطهير الفصول المكررة", callback_data="cb_purge_dups_start")
-            btn_time = types.InlineKeyboardButton("⏱️ فحص تسلسل الجدولة", callback_data="cb_check_timeline_start")
-            btn_gaps = types.InlineKeyboardButton("🧩 سد الفجوات الترقيمية", callback_data="cb_nsw_gaps")
-            btn_heal = types.InlineKeyboardButton("🩹 استصلاح المبتورات", callback_data="cb_nsw_heal")
-            btn_export = types.InlineKeyboardButton("📥 تصدير فصول TXT", callback_data="cb_export_chapters_start")
-            btn_stage = types.InlineKeyboardButton("🎭 صقل أوبس (Opus)", callback_data="cb_nsw_stage")
-            btn_status = types.InlineKeyboardButton("📊 حالة المنظومة", callback_data="cb_nsw_status")
-            btn_stop = types.InlineKeyboardButton("🛑 إيقاف فوري", callback_data="cb_nsw_stop")
-            btn_help = types.InlineKeyboardButton("📋 دليل الأوامر", callback_data="cb_nsw_help")
-            markup.add(btn_repair)
-            markup.add(btn_dates, btn_nav)
-            markup.add(btn_sync, btn_dups)
-            markup.add(btn_time)
-            markup.add(btn_gaps, btn_heal)
-            btn_titles = types.InlineKeyboardButton("🏷️ توحيد صيغة العناوين", callback_data="cb_fix_titles_start")
-            markup.add(btn_export, btn_titles)
-            markup.add(btn_stage, btn_status)
-            markup.add(btn_help, btn_stop)
-
-        bot.reply_to(message, text, reply_markup=markup)
+        _send_admin_welcome(message.chat.id, message)
 
     @bot.message_handler(content_types=['photo', 'video'])
     def handle_incoming_media(message):
         if not is_user_authorized(message):
-            bot.reply_to(message, "⛔ <b>غير مصرح لك بالاستخدام.</b>")
             return
 
         chat_id = message.chat.id

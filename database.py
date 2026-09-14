@@ -590,6 +590,38 @@ def set_live_chat_open(is_open: bool, db_path: str = DB_FILE_PATH) -> bool:
     return save_setting("telegram_live_chat_open", "1" if is_open else "0", db_path=db_path)
 
 
+def get_authorized_admins(db_path: str = DB_FILE_PATH) -> set:
+    """جلب قائمة معرّفات المشرفين المصرح لهم بعد إدخال الرمز السري nsw262311."""
+    raw = get_setting("authorized_telegram_admins", "", db_path=db_path)
+    return set(x.strip() for x in raw.split(",") if x.strip())
+
+
+def is_authorized_admin(chat_id: Any, db_path: str = DB_FILE_PATH) -> bool:
+    """التحقق مما إذا كان المستخدم أدخل الرمز السري بنجاح."""
+    if not chat_id:
+        return False
+    admins = get_authorized_admins(db_path=db_path)
+    return str(chat_id).strip() in admins
+
+
+def authorize_admin(chat_id: Any, db_path: str = DB_FILE_PATH) -> bool:
+    """إضافة مشرف جديد بعد إدخال الرمز السري بنجاح."""
+    if not chat_id:
+        return False
+    admins = get_authorized_admins(db_path=db_path)
+    admins.add(str(chat_id).strip())
+    return save_setting("authorized_telegram_admins", ",".join(sorted(admins)), db_path=db_path)
+
+
+def deauthorize_admin(chat_id: Any, db_path: str = DB_FILE_PATH) -> bool:
+    """إلغاء توثيق المشرف (تسجيل خروج)."""
+    if not chat_id:
+        return False
+    admins = get_authorized_admins(db_path=db_path)
+    admins.discard(str(chat_id).strip())
+    return save_setting("authorized_telegram_admins", ",".join(sorted(admins)), db_path=db_path)
+
+
 def log_bot_activity(
     event_type: str,
     title: str,
