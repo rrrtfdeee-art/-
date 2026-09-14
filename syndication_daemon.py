@@ -198,10 +198,16 @@ def run_syndication_cycle():
 
     for nov in novels:
         try:
-            # إذا كانت الرواية تحتوي على فصول مجدولة معلقة بالجدول، نترك إدارتها لنظام الفصول لتفادي التكرار
+            # إذا كان الفصل القادم مباشرة (last_synced + 1) مجدولاً بموعد محدد بالجدول لنفس المنصة، نترك إدارته لمجدول الفصول
             try:
-                has_active_sched = syndication_db.get_scheduled_chapters(novel_name=nov["novel_name"], status="PENDING", limit=1)
-                if has_active_sched:
+                curr_plat = "wattpad" if nov.get("wattpad_enabled") else "rewayat_club"
+                pending_items = syndication_db.get_scheduled_chapters(novel_name=nov["novel_name"], status="PENDING", limit=50)
+                has_next_scheduled = any(
+                    s.get("chapter_num") == (nov.get("last_synced_chapter", 0) + 1)
+                    and s.get("platform", "all") in ("all", curr_plat)
+                    for s in pending_items
+                )
+                if has_next_scheduled:
                     continue
             except Exception:
                 pass
