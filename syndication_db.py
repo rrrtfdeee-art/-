@@ -173,8 +173,8 @@ def _seed_default_syndication_data(conn):
                 'only-at-the-mahayana-stage-does-the-reversal-system-appear',
                 'https://rewayat.club/novel/only-at-the-mahayana-stage-does-the-reversal-system-appear',
                 0, '', '',
-                1, 24, 100,
-                8.0, 0.0,
+                1, 69, 100,
+                24.0, 0.0,
                 '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها زوروا موقعنا الأصلي: https://www.novelskyworld.com ✨',
                 1
             )
@@ -629,14 +629,19 @@ def sync_novels_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, An
         except Exception:
             is_active = 1
             
-        # فحص هل الرواية موجودة بالفعل بنفس المنصة والمعرف
+        # فحص هل الرواية موجودة بالفعل — المطابقة الصارمة بالمعرف + الاسم لمنع التداخل بين سجلات نفس الرواية على منصات مختلفة
+        existing = None
         if r_id:
             cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND rewayat_novel_id = ?", (n_name, r_id))
-        elif w_id:
+            existing = cur.fetchone()
+        if not existing and w_id:
             cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND wattpad_story_id = ?", (n_name, w_id))
-        else:
-            cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ?", (n_name,))
-        existing = cur.fetchone()
+            existing = cur.fetchone()
+        # تعطيل الفرع الاحتياطي بالاسم فقط لأنه يسبب تداخل سجلات المنصات المختلفة
+        # (مثال: After Severing Ties لها سجلان منفصلان — أحدهما لنادي الروايات والآخر لواتباد)
+        # if not existing and not r_id and not w_id:
+        #     cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ?", (n_name,))
+        #     existing = cur.fetchone()
         
         if existing:
             cur.execute("""
@@ -688,10 +693,10 @@ def sync_novel_to_sheet(novel_dict: Dict[str, Any], spreadsheet_id: Optional[str
         r_id = str(novel_dict.get("rewayat_novel_id", "")).strip()
         w_id = str(novel_dict.get("wattpad_story_id", "")).strip()
         
-        # قراءة الصفوف الحالية لمعرفة موقع السطر
+        # قراءة الصفوف الحالية لمعرفة موقع السطر — نقرأ النطاق الكامل A:P لضمان توفر جميع المعرفات (rewayat_novel_id, wattpad_story_id)
         res = service.spreadsheets().values().get(
             spreadsheetId=ssid,
-            range=f"{NOVELS_TAB_NAME}!A:H"
+            range=f"{NOVELS_TAB_NAME}!A:P"
         ).execute()
         sheet_rows = res.get("values", [])
         
@@ -774,7 +779,7 @@ def delete_novel_from_sheet(novel_name: str, rewayat_novel_id: str = "", wattpad
     try:
         res = service.spreadsheets().values().get(
             spreadsheetId=ssid,
-            range=f"{NOVELS_TAB_NAME}!A:H"
+            range=f"{NOVELS_TAB_NAME}!A:P"
         ).execute()
         sheet_rows = res.get("values", [])
         for idx, sr in enumerate(sheet_rows, start=1):

@@ -134,6 +134,7 @@ class WattpadClient:
     def publish_chapter_to_story(self, story_id: str, chapter_num: int, title: str, content: str) -> Dict[str, Any]:
         """
         إضافة جزء/فصل جديد داخل قصة واتباد ونشره عبر نقطة النهاية الرسمية apiv2/newstory.
+        تأكد: draft=0, publish=1 لنشر فوري (وليس مسودة).
         """
         if not self.token and (self.username or self.password):
             self.auto_login()
@@ -148,47 +149,69 @@ class WattpadClient:
             clean_story_id = part.split("-")[0].split("/")[0].split("?")[0]
 
         part_title = title.strip() or f"الفصل {chapter_num}"
-        formatted_content = "<p>" + content.strip().replace("\n\n", "</p><p>").replace("\n", "<br/>") + "</p>"
+        # تنسيق المحتوى بـ HTML صحيح
+        raw_text = content.strip()
+        if not raw_text.startswith("<p>"):
+            paras = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
+            if not paras:
+                paras = [raw_text]
+            formatted_content = "".join([f"<p>{p}</p>" for p in paras])
+        else:
+            formatted_content = raw_text
 
-        def _do_post():
-            url = "https://www.wattpad.com/apiv2/newstory"
-            headers = {
+        def _build_headers():
+            return {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Cookie": f"token={self.token}; wp_token={self.token};",
                 "Authorization": f"token {self.token}",
-                "X-Requested-With": "XMLHttpRequest"
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": f"https://www.wattpad.com/myworks/{clean_story_id}/write/",
             }
+
+        def _do_post():
             data = {
                 "groupid": clean_story_id,
                 "title": part_title,
                 "text": formatted_content,
-                "draft": 0,
-                "publish": 1,
-                "language": 16,
-                "copyright": 1,
-                "category1": 4
+                "draft": "0",
+                "publish": "1",
+                "language": "16",
+                "copyright": "1",
+                "category1": "4",
             }
-            return requests.post(url, data=data, headers=headers, timeout=25)
+            return requests.post(
+                "https://www.wattpad.com/apiv2/newstory",
+                data=data,
+                headers=_build_headers(),
+                timeout=30
+            )
 
         try:
             res = _do_post()
+
+            # تجديد الجلسة تلقائياً عند انتهاء صلاحية التوكن
             if res.status_code in [401, 403]:
-                # محاولة تجديد الجلسة تلقائياً ببيانات الاعتماد وإعادة الطلب
                 login_res = self.auto_login()
                 if login_res.get("success"):
                     res = _do_post()
 
             if res.status_code in [200, 201]:
-                data = res.json()
-                if data.get("errors") and len(data.get("errors")) > 0:
+                try:
+                    data = res.json()
+                except Exception:
+                    return {"success": False, "error": f"استجابة غير صالحة من واتباد: {res.text[:200]}"}
+
+                errors = data.get("errors", [])
+                if errors and len(errors) > 0:
                     return {
                         "success": False,
-                        "error": f"أخطاء من واتباد: {data.get('errors')}"
+                        "error": f"أخطاء من واتباد: {errors}"
                     }
+
                 part_id = data.get("id")
-                story_url = data.get("story_url", "")
-                if story_url:
-                    part_url = f"https://www.wattpad.com/{story_url}"
+                story_url_raw = data.get("story_url", "")
+                if story_url_raw:
+                    part_url = f"https://www.wattpad.com/{story_url_raw}"
                 elif part_id:
                     part_url = f"https://www.wattpad.com/{part_id}"
                 else:
@@ -204,7 +227,8 @@ class WattpadClient:
             else:
                 return {
                     "success": False,
-                    "error": f"خطأ من واتباد ({res.status_code}): {res.text[:200]}"
+                    "error": f"خطأ من واتباد ({res.status_code}): {res.text[:300]}"
                 }
         except Exception as e:
             return {"success": False, "error": f"استثناء أثناء نشر الفصل على واتباد: {str(e)}"}
+
