@@ -128,7 +128,13 @@ def init_syndication_tables():
     # مزامنة هادئة وفورية مع Google Sheet في خيط خلفي عند إقلاع السيرفر
     def _deferred_init_sync():
         try:
-            time.sleep(1)
+            time.sleep(2)
+            # 1. استعادة إعدادات الروايات وتكوينها بالكامل من Google Sheet لحمايتها من مسح الحاوية السحابية
+            res_novs = sync_novels_from_sheet()
+            if not res_novs.get("success") or res_novs.get("count", 0) == 0:
+                # إذا كان شيت الروايات لا يزال فارغاً، نرفع الروايات المحلية المعتمدة إليه
+                sync_all_novels_to_sheet()
+            # 2. مزامنة جدول الفصول المجدولة
             sync_schedule_from_sheet()
         except Exception as ex_sync:
             logger.warning(f"Initial sheet sync notice: {ex_sync}")
@@ -149,7 +155,32 @@ def _seed_default_syndication_data(conn):
             cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", 
                         ("rewayat_token", os.environ.get("REWAYAT_TOKEN", "4e3379691bd8dcf3025308a2c677318ed4383f31")))
         
-        # 2. رواية After Severing Ties لنادي الروايات
+        # 2. رواية نظام الانعكاس لنادي الروايات (افتراضية نشطة)
+        cur.execute("SELECT COUNT(*) FROM syndicated_novels WHERE rewayat_novel_id = 'only-at-the-mahayana-stage-does-the-reversal-system-appear'")
+        if cur.fetchone()[0] == 0:
+            cur.execute("""
+            INSERT INTO syndicated_novels (
+                novel_name, blogger_url, blogger_label,
+                rewayat_enabled, rewayat_novel_id, rewayat_novel_url,
+                wattpad_enabled, wattpad_story_id, wattpad_story_url,
+                start_chapter, last_synced_chapter, stop_chapter,
+                interval_hours, next_run_timestamp, custom_cta, is_active
+            ) VALUES (
+                'نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا',
+                'https://www.novelskyworld.com/p/blog-page_14.html',
+                'نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا',
+                1,
+                'only-at-the-mahayana-stage-does-the-reversal-system-appear',
+                'https://rewayat.club/novel/only-at-the-mahayana-stage-does-the-reversal-system-appear',
+                0, '', '',
+                1, 24, 100,
+                8.0, 0.0,
+                '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها زوروا موقعنا الأصلي: https://www.novelskyworld.com ✨',
+                1
+            )
+            """)
+
+        # 3. رواية After Severing Ties لنادي الروايات
         cur.execute("SELECT COUNT(*) FROM syndicated_novels WHERE rewayat_novel_id = 'after-severing-ties-the-prince-s-family-regrets-it-for-life'")
         if cur.fetchone()[0] == 0:
             cur.execute("""
@@ -167,14 +198,14 @@ def _seed_default_syndication_data(conn):
                 'after-severing-ties-the-prince-s-family-regrets-it-for-life',
                 'https://rewayat.club/novel/after-severing-ties-the-prince-s-family-regrets-it-for-life',
                 0, '', '',
-                1, 68, 5000,
-                1.0, 0.0,
+                1, 101, 150,
+                12.0, 0.0,
                 '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها زوروا موقعنا الأصلي: [رابط الرواية] ✨',
-                0
+                1
             )
             """)
 
-        # 3. إعدادات وقصة واتباد الافتراضية
+        # 4. إعدادات وقصة واتباد الافتراضية
         cur.execute("SELECT COUNT(*) FROM syndication_settings WHERE key = 'wattpad_username'")
         if cur.fetchone()[0] == 0:
             cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", 
@@ -205,10 +236,10 @@ def _seed_default_syndication_data(conn):
                 1,
                 '405774700',
                 'https://wattpad.com/story/405774700',
-                1, 13, 5000,
-                1.0, 0.0,
+                1, 14, 50,
+                12.0, 0.0,
                 '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها تفضلوا بزيارة موقعنا: [رابط الرواية] ✨',
-                0
+                1
             )
             """)
         conn.commit()
@@ -311,14 +342,25 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
         
     conn.commit()
     conn.close()
+
+    # مزامنة سحابية فورية للرواية مع Google Sheet لضمان استمراريتها بعد أي إعادة بناء لسيرفر Render
+    try:
+        novel_full = get_syndicated_novel_by_id(res_id)
+        if novel_full:
+            threading.Thread(target=sync_novel_to_sheet, args=(novel_full,), daemon=True).start()
+    except Exception as ex_th:
+        logger.warning(f"Could not launch novel sync thread: {ex_th}")
+
     return res_id
 
 def delete_syndicated_novel(novel_id: int, delete_from_sheet: bool = True):
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT novel_name FROM syndicated_novels WHERE id = ?", (novel_id,))
+    cur.execute("SELECT novel_name, rewayat_novel_id, wattpad_story_id FROM syndicated_novels WHERE id = ?", (novel_id,))
     row = cur.fetchone()
     novel_name = row["novel_name"] if row else None
+    r_id = row["rewayat_novel_id"] if row else ""
+    w_id = row["wattpad_story_id"] if row else ""
     
     cur.execute("DELETE FROM syndication_logs WHERE novel_id = ?", (novel_id,))
     cur.execute("DELETE FROM syndicated_novels WHERE id = ?", (novel_id,))
@@ -332,7 +374,11 @@ def delete_syndicated_novel(novel_id: int, delete_from_sheet: bool = True):
         try:
             delete_novel_schedules_from_sheet(novel_name, only_pending=False)
         except Exception as ex_sh:
-            logger.warning(f"Failed to delete novel from Google Sheet: {ex_sh}")
+            logger.warning(f"Failed to delete novel schedules from Google Sheet: {ex_sh}")
+        try:
+            delete_novel_from_sheet(novel_name, rewayat_novel_id=r_id, wattpad_story_id=w_id)
+        except Exception as ex_sh_nov:
+            logger.warning(f"Failed to delete novel from SyndicatedNovels tab: {ex_sh_nov}")
 
 
 # ==================== دوال السجلات (Logs) ====================
@@ -458,6 +504,296 @@ def ensure_schedule_tab_exists(service=None, spreadsheet_id: Optional[str] = Non
     except Exception as e_tab:
         logger.warning(f"ensure_schedule_tab_exists notice: {e_tab}")
         return "الورقة1"
+
+NOVELS_TAB_NAME = "SyndicatedNovels"
+NOVELS_HEADERS = [
+    "novel_name", "blogger_url", "blogger_label",
+    "rewayat_enabled", "rewayat_novel_id", "rewayat_novel_url",
+    "wattpad_enabled", "wattpad_story_id", "wattpad_story_url",
+    "start_chapter", "last_synced_chapter", "stop_chapter",
+    "interval_hours", "next_run_timestamp", "custom_cta", "is_active"
+]
+
+def ensure_novels_tab_exists(service=None, spreadsheet_id: Optional[str] = None) -> str:
+    """التأكد من وجود ورقة إعدادات الروايات SyndicatedNovels برؤوس الأعمدة المطلوبة."""
+    ssid = spreadsheet_id or get_schedule_spreadsheet_id()
+    srv = service or _get_sheets_service()
+    if not srv:
+        return NOVELS_TAB_NAME
+    try:
+        meta = srv.spreadsheets().get(spreadsheetId=ssid).execute()
+        existing_tabs = [s["properties"]["title"] for s in meta.get("sheets", [])]
+        if NOVELS_TAB_NAME not in existing_tabs:
+            body = {"requests": [{"addSheet": {"properties": {"title": NOVELS_TAB_NAME}}}]}
+            srv.spreadsheets().batchUpdate(spreadsheetId=ssid, body=body).execute()
+            logger.info(f"Created tab '{NOVELS_TAB_NAME}' in Google Sheet")
+        
+        check_head = srv.spreadsheets().values().get(spreadsheetId=ssid, range=f"{NOVELS_TAB_NAME}!A1:P1").execute().get("values", [])
+        if not check_head or not check_head[0]:
+            srv.spreadsheets().values().update(
+                spreadsheetId=ssid,
+                range=f"{NOVELS_TAB_NAME}!A1:P1",
+                valueInputOption="RAW",
+                body={"values": [NOVELS_HEADERS]}
+            ).execute()
+            logger.info(f"Initialized headers in tab '{NOVELS_TAB_NAME}'")
+        return NOVELS_TAB_NAME
+    except Exception as e_tab:
+        logger.warning(f"ensure_novels_tab_exists notice: {e_tab}")
+        return NOVELS_TAB_NAME
+
+def sync_novels_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    استرجاع ومزامنة إعدادات وتكوين الروايات من Google Sheet إلى قاعدة البيانات المحلية.
+    يضمن عدم فقدان إعدادات الروايات أو تصفيرها عند إعادة بناء السيرفر على Render.
+    """
+    ssid = spreadsheet_id or get_schedule_spreadsheet_id()
+    service = _get_sheets_service()
+    rows = []
+    
+    if service:
+        try:
+            ensure_novels_tab_exists(service, ssid)
+            res = service.spreadsheets().values().get(
+                spreadsheetId=ssid,
+                range=f"{NOVELS_TAB_NAME}!A2:P"
+            ).execute()
+            rows = res.get("values", [])
+        except Exception as ex_api:
+            logger.warning(f"Google Sheets API fetch novels error: {ex_api}, trying GViz fallback...")
+            rows = []
+            
+    if not rows:
+        try:
+            gviz_url = f"https://docs.google.com/spreadsheets/d/{ssid}/gviz/tq?tqx=out:json&sheet={requests.utils.quote(NOVELS_TAB_NAME)}"
+            resp = requests.get(gviz_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+            text = resp.text
+            json_str = text[text.find('{'):text.rfind('}') + 1]
+            data = json.loads(json_str)
+            raw_rows = data.get("table", {}).get("rows", [])
+            if raw_rows:
+                for rr in raw_rows:
+                    c_vals = []
+                    for cell in rr.get("c", []):
+                        c_vals.append(str(cell.get("v", "")) if cell and cell.get("v") is not None else "")
+                    if any(c_vals):
+                        rows.append(c_vals)
+        except Exception as ex_gv:
+            logger.debug(f"GViz fallback novels fetch error: {ex_gv}")
+            
+    if not rows:
+        return {"success": False, "count": 0, "message": "لا توجد روايات محفوظة في الشيت"}
+        
+    conn = _get_conn()
+    cur = conn.cursor()
+    restored = 0
+    for r in rows:
+        if len(r) < 1:
+            continue
+        n_name = str(r[0]).strip()
+        if not n_name or n_name == "novel_name":
+            continue
+            
+        b_url = str(r[1]).strip() if len(r) > 1 else ""
+        b_label = str(r[2]).strip() if len(r) > 2 else n_name
+        r_enabled = int(float(str(r[3]).strip() or "0")) if len(r) > 3 else 1
+        r_id = str(r[4]).strip() if len(r) > 4 else ""
+        r_url = str(r[5]).strip() if len(r) > 5 else ""
+        w_enabled = int(float(str(r[6]).strip() or "0")) if len(r) > 6 else 0
+        w_id = str(r[7]).strip() if len(r) > 7 else ""
+        w_url = str(r[8]).strip() if len(r) > 8 else ""
+        
+        try:
+            start_ch = int(float(str(r[9]).strip() or "1")) if len(r) > 9 else 1
+        except Exception:
+            start_ch = 1
+        try:
+            last_ch = int(float(str(r[10]).strip() or "0")) if len(r) > 10 else 0
+        except Exception:
+            last_ch = 0
+        try:
+            stop_ch = int(float(str(r[11]).strip() or "9999")) if len(r) > 11 else 9999
+        except Exception:
+            stop_ch = 9999
+        try:
+            interval_h = float(str(r[12]).strip() or "12.0") if len(r) > 12 else 12.0
+        except Exception:
+            interval_h = 12.0
+        try:
+            next_run = float(str(r[13]).strip() or "0.0") if len(r) > 13 else 0.0
+        except Exception:
+            next_run = 0.0
+        custom_cta = str(r[14]).strip() if len(r) > 14 else ""
+        try:
+            is_active = int(float(str(r[15]).strip() or "1")) if len(r) > 15 else 1
+        except Exception:
+            is_active = 1
+            
+        # فحص هل الرواية موجودة بالفعل بنفس المنصة والمعرف
+        if r_id:
+            cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND rewayat_novel_id = ?", (n_name, r_id))
+        elif w_id:
+            cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND wattpad_story_id = ?", (n_name, w_id))
+        else:
+            cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ?", (n_name,))
+        existing = cur.fetchone()
+        
+        if existing:
+            cur.execute("""
+            UPDATE syndicated_novels SET
+                blogger_url = ?, blogger_label = ?,
+                rewayat_enabled = ?, rewayat_novel_id = ?, rewayat_novel_url = ?,
+                wattpad_enabled = ?, wattpad_story_id = ?, wattpad_story_url = ?,
+                start_chapter = ?, last_synced_chapter = ?, stop_chapter = ?,
+                interval_hours = ?, next_run_timestamp = ?, custom_cta = ?, is_active = ?
+            WHERE id = ?
+            """, (
+                b_url, b_label, r_enabled, r_id, r_url,
+                w_enabled, w_id, w_url, start_ch, last_ch, stop_ch,
+                interval_h, next_run, custom_cta, is_active, existing["id"]
+            ))
+        else:
+            cur.execute("""
+            INSERT INTO syndicated_novels (
+                novel_name, blogger_url, blogger_label,
+                rewayat_enabled, rewayat_novel_id, rewayat_novel_url,
+                wattpad_enabled, wattpad_story_id, wattpad_story_url,
+                start_chapter, last_synced_chapter, stop_chapter,
+                interval_hours, next_run_timestamp, custom_cta, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                n_name, b_url, b_label, r_enabled, r_id, r_url,
+                w_enabled, w_id, w_url, start_ch, last_ch, stop_ch,
+                interval_h, next_run, custom_cta, is_active
+            ))
+        restored += 1
+        
+    conn.commit()
+    conn.close()
+    logger.info(f"Restored {restored} novels configuration from Google Sheet.")
+    return {"success": True, "count": restored}
+
+def sync_novel_to_sheet(novel_dict: Dict[str, Any], spreadsheet_id: Optional[str] = None) -> bool:
+    """مزامنة أو تحديث رواية فردية في تبويب SyndicatedNovels في Google Sheet."""
+    service = _get_sheets_service()
+    if not service:
+        return False
+    ssid = spreadsheet_id or get_schedule_spreadsheet_id()
+    try:
+        ensure_novels_tab_exists(service, ssid)
+        n_name = str(novel_dict.get("novel_name", "")).strip()
+        if not n_name:
+            return False
+            
+        r_id = str(novel_dict.get("rewayat_novel_id", "")).strip()
+        w_id = str(novel_dict.get("wattpad_story_id", "")).strip()
+        
+        # قراءة الصفوف الحالية لمعرفة موقع السطر
+        res = service.spreadsheets().values().get(
+            spreadsheetId=ssid,
+            range=f"{NOVELS_TAB_NAME}!A:H"
+        ).execute()
+        sheet_rows = res.get("values", [])
+        
+        row_idx = None
+        for idx, sr in enumerate(sheet_rows, start=1):
+            if idx == 1:
+                continue
+            curr_name = str(sr[0]).strip() if len(sr) > 0 else ""
+            curr_rid = str(sr[4]).strip() if len(sr) > 4 else ""
+            curr_wid = str(sr[7]).strip() if len(sr) > 7 else ""
+            
+            if curr_name == n_name:
+                if r_id and curr_rid == r_id:
+                    row_idx = idx
+                    break
+                elif w_id and curr_wid == w_id:
+                    row_idx = idx
+                    break
+                elif not r_id and not w_id:
+                    row_idx = idx
+                    break
+                    
+        row_vals = [
+            n_name,
+            str(novel_dict.get("blogger_url", "")),
+            str(novel_dict.get("blogger_label", "")),
+            int(novel_dict.get("rewayat_enabled", 1)),
+            r_id,
+            str(novel_dict.get("rewayat_novel_url", "")),
+            int(novel_dict.get("wattpad_enabled", 0)),
+            w_id,
+            str(novel_dict.get("wattpad_story_url", "")),
+            int(novel_dict.get("start_chapter", 1)),
+            int(novel_dict.get("last_synced_chapter", 0)),
+            int(novel_dict.get("stop_chapter", 9999)),
+            float(novel_dict.get("interval_hours", 12.0)),
+            float(novel_dict.get("next_run_timestamp", 0.0)),
+            str(novel_dict.get("custom_cta", "")),
+            int(novel_dict.get("is_active", 1))
+        ]
+        
+        if row_idx:
+            service.spreadsheets().values().update(
+                spreadsheetId=ssid,
+                range=f"{NOVELS_TAB_NAME}!A{row_idx}:P{row_idx}",
+                valueInputOption="USER_ENTERED",
+                body={"values": [row_vals]}
+            ).execute()
+        else:
+            service.spreadsheets().values().append(
+                spreadsheetId=ssid,
+                range=f"{NOVELS_TAB_NAME}!A:P",
+                valueInputOption="USER_ENTERED",
+                insertDataOption="INSERT_ROWS",
+                body={"values": [row_vals]}
+            ).execute()
+        return True
+    except Exception as ex_sync:
+        logger.warning(f"Failed to sync novel {novel_dict.get('novel_name')} to sheet: {ex_sync}")
+        return False
+
+def sync_all_novels_to_sheet(spreadsheet_id: Optional[str] = None) -> bool:
+    """رفع ومزامنة كافة الروايات الحالية في قاعدة البيانات إلى Google Sheet."""
+    novs = get_all_syndicated_novels()
+    if not novs:
+        return True
+    success = True
+    for n in novs:
+        ok = sync_novel_to_sheet(n, spreadsheet_id)
+        if not ok:
+            success = False
+    return success
+
+def delete_novel_from_sheet(novel_name: str, rewayat_novel_id: str = "", wattpad_story_id: str = "", spreadsheet_id: Optional[str] = None) -> bool:
+    """حذف سطر الرواية من تبويب SyndicatedNovels في Google Sheet."""
+    service = _get_sheets_service()
+    if not service:
+        return False
+    ssid = spreadsheet_id or get_schedule_spreadsheet_id()
+    try:
+        res = service.spreadsheets().values().get(
+            spreadsheetId=ssid,
+            range=f"{NOVELS_TAB_NAME}!A:H"
+        ).execute()
+        sheet_rows = res.get("values", [])
+        for idx, sr in enumerate(sheet_rows, start=1):
+            if idx == 1:
+                continue
+            curr_name = str(sr[0]).strip() if len(sr) > 0 else ""
+            curr_rid = str(sr[4]).strip() if len(sr) > 4 else ""
+            curr_wid = str(sr[7]).strip() if len(sr) > 7 else ""
+            if curr_name == novel_name:
+                if (rewayat_novel_id and curr_rid == rewayat_novel_id) or (wattpad_story_id and curr_wid == wattpad_story_id) or (not rewayat_novel_id and not wattpad_story_id):
+                    service.spreadsheets().values().clear(
+                        spreadsheetId=ssid,
+                        range=f"{NOVELS_TAB_NAME}!A{idx}:P{idx}"
+                    ).execute()
+                    break
+        return True
+    except Exception as ex_del:
+        logger.warning(f"Failed to delete novel row from sheet: {ex_del}")
+        return False
 
 def sync_schedule_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, Any]:
     """

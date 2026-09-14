@@ -50,9 +50,10 @@ def render_rewayat_club_tab():
         if st.button("🔄 مزامنة وفحص الآن", key="rc_trigger_now", use_container_width=True):
             try:
                 import syndication_daemon
+                syndication_db.sync_novels_from_sheet()
                 syndication_db.sync_schedule_from_sheet()
                 syndication_daemon.run_syndication_cycle()
-                st.success("تمت المزامنة من Google Sheet وتشغيل دورة الفحص!")
+                st.success("تمت استعادة إعدادات الروايات والفصول من Google Sheet وتشغيل دورة الفحص!")
                 st.rerun()
             except Exception as ex_trig:
                 st.error(f"خطأ: {ex_trig}")
@@ -268,6 +269,45 @@ def render_rewayat_club_tab():
 
                 # لوحة التحكم والإدارة الشاملة للرواية
                 with st.expander(f"🎮 لوحة التحكم والإدارة الشاملة ({nov['novel_name']})", expanded=False):
+                    st.markdown("##### ⚙️ إعدادات الرواية ومحرك النشر (تعديل مباشر وحفظ سحابي):")
+                    st.caption("تعديل فوري لإعدادات هذه الرواية مع التثبيت السحابي في Google Sheet لمنع فقدان البيانات عند إعادة تشغيل السيرفر.")
+                    c_cfg1, c_cfg2, c_cfg3 = st.columns([2, 2, 2])
+                    with c_cfg1:
+                        new_stop = st.number_input(
+                            "🛑 التوقف عند الفصل (Stop Chapter):",
+                            min_value=1,
+                            value=int(nov.get("stop_chapter", 100)),
+                            step=1,
+                            key=f"rc_cfg_stop_{nov['id']}",
+                            help="رقم الفصل الذي سيتوقف عنده المحرك نهائياً ولا ينشر بعده"
+                        )
+                    with c_cfg2:
+                        new_interval = st.number_input(
+                            "⏱️ معدل النشر (ساعات بين الفصول):",
+                            min_value=0.5,
+                            max_value=168.0,
+                            value=float(nov.get("interval_hours", 12.0)),
+                            step=0.5,
+                            key=f"rc_cfg_interval_{nov['id']}",
+                            help="الفارق الزمني بالساعات بين نشر كل فصل والفصل الذي يليه"
+                        )
+                    with c_cfg3:
+                        new_active_val = st.selectbox(
+                            "🚦 وضع النشر التلقائي:",
+                            [1, 0],
+                            index=0 if nov.get("is_active", 1) == 1 else 1,
+                            format_func=lambda x: "🟢 نشط (يعمل تلقائياً)" if x == 1 else "🔴 متوقف مؤقتاً",
+                            key=f"rc_cfg_active_{nov['id']}"
+                        )
+                    if st.button("💾 حفظ الإعدادات وتثبيتها سحابياً فوراً", key=f"rc_save_cfg_btn_{nov['id']}", type="primary", use_container_width=True):
+                        nov["stop_chapter"] = int(new_stop)
+                        nov["interval_hours"] = float(new_interval)
+                        nov["is_active"] = int(new_active_val)
+                        syndication_db.save_or_update_syndicated_novel(nov)
+                        st.success("✅ تم حفظ الإعدادات بنجاح وتحديثها سحابياً في Google Sheet!")
+                        st.rerun()
+
+                    st.markdown("---")
                     st.markdown("##### 🔁 التحكم الجماعي بكامل الفصول المتبقية في Google Sheet:")
                     st.caption("تعديل مواعيد وتوقيت جميع الفصول المتبقية لهذه الرواية دفعة واحدة في الشيت، دون الحاجة لتعديل كل فصل على حدة.")
                     
@@ -791,9 +831,10 @@ def render_wattpad_tab():
         if st.button("🔄 مزامنة وفحص الآن", key="wp_trigger_now", use_container_width=True):
             try:
                 import syndication_daemon
+                syndication_db.sync_novels_from_sheet()
                 syndication_db.sync_schedule_from_sheet()
                 syndication_daemon.run_syndication_cycle()
-                st.success("تمت المزامنة من Google Sheet وتشغيل دورة الفحص!")
+                st.success("تمت استعادة إعدادات الروايات والفصول من Google Sheet وتشغيل دورة الفحص!")
                 st.rerun()
             except Exception as ex_trig:
                 st.error(f"خطأ: {ex_trig}")
@@ -1024,6 +1065,45 @@ def render_wattpad_tab():
 
                 # لوحة التحكم والإدارة الشاملة لقصة واتباد
                 with st.expander(f"🎮 لوحة التحكم والإدارة الشاملة ({nov['novel_name']})", expanded=False):
+                    st.markdown("##### ⚙️ إعدادات قصة واتباد ومحرك النشر (تعديل مباشر وحفظ سحابي):")
+                    st.caption("تعديل فوري لإعدادات هذه القصة مع التثبيت السحابي في Google Sheet لمنع فقدان البيانات عند إعادة تشغيل السيرفر.")
+                    c_wcfg1, c_wcfg2, c_wcfg3 = st.columns([2, 2, 2])
+                    with c_wcfg1:
+                        wnew_stop = st.number_input(
+                            "🛑 التوقف عند الفصل (Stop Chapter):",
+                            min_value=1,
+                            value=int(nov.get("stop_chapter", 50)),
+                            step=1,
+                            key=f"wp_cfg_stop_{nov['id']}",
+                            help="رقم الفصل الذي سيتوقف عنده المحرك نهائياً ولا ينشر بعده"
+                        )
+                    with c_wcfg2:
+                        wnew_interval = st.number_input(
+                            "⏱️ معدل النشر (ساعات بين الفصول):",
+                            min_value=0.5,
+                            max_value=168.0,
+                            value=float(nov.get("interval_hours", 12.0)),
+                            step=0.5,
+                            key=f"wp_cfg_interval_{nov['id']}",
+                            help="الفارق الزمني بالساعات بين نشر كل فصل والفصل الذي يليه"
+                        )
+                    with c_wcfg3:
+                        wnew_active_val = st.selectbox(
+                            "🚦 وضع النشر التلقائي:",
+                            [1, 0],
+                            index=0 if nov.get("is_active", 1) == 1 else 1,
+                            format_func=lambda x: "🟢 نشط (يعمل تلقائياً)" if x == 1 else "🔴 متوقف مؤقتاً",
+                            key=f"wp_cfg_active_{nov['id']}"
+                        )
+                    if st.button("💾 حفظ الإعدادات وتثبيتها سحابياً فوراً", key=f"wp_save_cfg_btn_{nov['id']}", type="primary", use_container_width=True):
+                        nov["stop_chapter"] = int(wnew_stop)
+                        nov["interval_hours"] = float(wnew_interval)
+                        nov["is_active"] = int(wnew_active_val)
+                        syndication_db.save_or_update_syndicated_novel(nov)
+                        st.success("✅ تم حفظ الإعدادات بنجاح وتحديثها سحابياً في Google Sheet!")
+                        st.rerun()
+
+                    st.markdown("---")
                     st.markdown("##### 🔁 التحكم الجماعي بكامل فصول القصة المتبقية في Google Sheet:")
                     st.caption("تعديل مواعيد وتوقيت جميع الفصول المتبقية لهذه القصة دفعة واحدة في الشيت، دون الحاجة لتعديل كل فصل على حدة.")
                     
