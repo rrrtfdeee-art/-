@@ -869,13 +869,27 @@ def sync_schedule_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, 
 
         sch_ts = 0.0
         try:
-            for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M"):
+            if "Date(" in sch_time_str:
                 try:
-                    dt = datetime.datetime.strptime(sch_time_str, fmt).replace(tzinfo=TZ_ARABIA)
+                    parts = [int(p.strip()) for p in sch_time_str.replace("Date(", "").replace(")", "").split(",")]
+                    y = parts[0]
+                    m = parts[1] + 1  # JS 0-11 -> Python 1-12
+                    d = parts[2]
+                    h = parts[3] if len(parts) > 3 else 0
+                    mi = parts[4] if len(parts) > 4 else 0
+                    s = parts[5] if len(parts) > 5 else 0
+                    dt = datetime.datetime(y, m, d, h, mi, s, tzinfo=TZ_ARABIA)
                     sch_ts = dt.timestamp()
-                    break
                 except Exception:
                     pass
+            if sch_ts == 0.0:
+                for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M"):
+                    try:
+                        dt = datetime.datetime.strptime(sch_time_str, fmt).replace(tzinfo=TZ_ARABIA)
+                        sch_ts = dt.timestamp()
+                        break
+                    except Exception:
+                        pass
         except Exception:
             sch_ts = 0.0
 
