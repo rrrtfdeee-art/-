@@ -173,7 +173,7 @@ def _seed_default_syndication_data(conn):
                 'only-at-the-mahayana-stage-does-the-reversal-system-appear',
                 'https://rewayat.club/novel/only-at-the-mahayana-stage-does-the-reversal-system-appear',
                 0, '', '',
-                1, 69, 100,
+                1, 103, 500,
                 24.0, 0.0,
                 '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها زوروا موقعنا الأصلي: https://www.novelskyworld.com ✨',
                 1
@@ -198,8 +198,8 @@ def _seed_default_syndication_data(conn):
                 'after-severing-ties-the-prince-s-family-regrets-it-for-life',
                 'https://rewayat.club/novel/after-severing-ties-the-prince-s-family-regrets-it-for-life',
                 0, '', '',
-                1, 101, 150,
-                12.0, 0.0,
+                1, 70, 120,
+                24.0, 0.0,
                 '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها زوروا موقعنا الأصلي: [رابط الرواية] ✨',
                 1
             )
@@ -237,7 +237,7 @@ def _seed_default_syndication_data(conn):
                 '405774700',
                 'https://wattpad.com/story/405774700',
                 1, 14, 50,
-                12.0, 0.0,
+                24.0, 0.0,
                 '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها تفضلوا بزيارة موقعنا: [رابط الرواية] ✨',
                 1
             )
@@ -343,13 +343,13 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
     conn.commit()
     conn.close()
 
-    # مزامنة سحابية فورية للرواية مع Google Sheet لضمان استمراريتها بعد أي إعادة بناء لسيرفر Render
+    # مزامنة سحابية فورية ومؤكدة للرواية مع Google Sheet لضمان استمراريتها بعد أي إعادة بناء لسيرفر Render
     try:
         novel_full = get_syndicated_novel_by_id(res_id)
         if novel_full:
-            threading.Thread(target=sync_novel_to_sheet, args=(novel_full,), daemon=True).start()
+            sync_novel_to_sheet(novel_full)
     except Exception as ex_th:
-        logger.warning(f"Could not launch novel sync thread: {ex_th}")
+        logger.warning(f"Could not sync novel to sheet: {ex_th}")
 
     return res_id
 
@@ -1223,11 +1223,19 @@ def cancel_all_pending_schedules_for_novel(novel_name: str) -> bool:
     delete_novel_schedules_from_sheet(novel_name, only_pending=True)
     return True
 
-def set_novel_last_published_chapter(novel_name: str, last_chapter: int):
-    """تحديد آخر فصل منشور مسبقاً لرواية وتحديث الحالات وتخطي ما قبله."""
+def set_novel_last_published_chapter(novel_name: str, last_chapter: int, novel_id: Optional[int] = None, platform: Optional[str] = None):
+    """تحديد آخر فصل منشور مسبقاً لرواية وتحديث الحالات وتخطي ما قبله مع حماية كاملة للفصل بين المنصات."""
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("UPDATE syndicated_novels SET last_synced_chapter = ? WHERE novel_name = ?", (last_chapter, novel_name))
+    if novel_id:
+        cur.execute("UPDATE syndicated_novels SET last_synced_chapter = ? WHERE id = ?", (last_chapter, novel_id))
+    elif platform == "rewayat_club":
+        cur.execute("UPDATE syndicated_novels SET last_synced_chapter = ? WHERE novel_name = ? AND rewayat_enabled = 1", (last_chapter, novel_name))
+    elif platform == "wattpad":
+        cur.execute("UPDATE syndicated_novels SET last_synced_chapter = ? WHERE novel_name = ? AND wattpad_enabled = 1", (last_chapter, novel_name))
+    else:
+        cur.execute("UPDATE syndicated_novels SET last_synced_chapter = ? WHERE novel_name = ?", (last_chapter, novel_name))
+
     cur.execute("""
     UPDATE syndicated_chapter_schedules SET status = 'PUBLISHED'
     WHERE novel_name = ? AND chapter_num <= ? AND status != 'PUBLISHED'

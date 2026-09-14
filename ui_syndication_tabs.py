@@ -376,7 +376,7 @@ def render_rewayat_club_tab():
                     with c_sk2:
                         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                         if st.button("✅ تعيين وتخطي الفصول السابقة", key=f"rc_sk_btn_{nov['id']}", use_container_width=True):
-                            syndication_db.set_novel_last_published_chapter(nov["novel_name"], int(sync_target))
+                            syndication_db.set_novel_last_published_chapter(nov["novel_name"], int(sync_target), novel_id=nov["id"], platform="rewayat_club")
                             nov["last_synced_chapter"] = int(sync_target)
                             syndication_db.save_or_update_syndicated_novel(nov)
                             st.success(f"تم تعيين الفصول حتى الفصل {sync_target} كمنشورة وتخطيها تلقائياً!")
@@ -1172,7 +1172,7 @@ def render_wattpad_tab():
                     with c_wsk2:
                         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                         if st.button("✅ تعيين وتخطي الفصول السابقة", key=f"wp_sk_btn_{nov['id']}", use_container_width=True):
-                            syndication_db.set_novel_last_published_chapter(nov["novel_name"], int(wsync_target))
+                            syndication_db.set_novel_last_published_chapter(nov["novel_name"], int(wsync_target), novel_id=nov["id"], platform="wattpad")
                             nov["last_synced_chapter"] = int(wsync_target)
                             syndication_db.save_or_update_syndicated_novel(nov)
                             st.success(f"تم تعيين الفصول حتى الفصل {wsync_target} كمنشورة وتخطيها تلقائياً!")

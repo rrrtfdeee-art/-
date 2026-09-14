@@ -208,21 +208,38 @@ def run_syndication_cycle():
 
             # 1. التحقق هل حان موعد النشر؟
             next_run = nov.get("next_run_timestamp", 0.0)
-            # قاعدة صارمة: إذا لم يتم تحديد موعد جدولة صريح (> 0) أو لم يحن وقته بعد، نمنع النشر نهائياً
-            if not next_run or next_run <= 0.0 or now < next_run:
+            if not next_run or next_run <= 0.0:
+                # إذا كانت الرواية نشطة ولم يُحدد موعد بعد، ننطلق فوراً لبدء النشر المتتابع
+                next_run = now
+                nov["next_run_timestamp"] = next_run
+            elif now < next_run:
                 continue
 
-            # مزامنة العداد تلقائياً مع الواقع الفعلي في نادي الروايات لتفادي التكرار
+            # 2. الاستعلام الحي التلقائي عن آخر فصل منشور على المنصة (Live Autonomous Chapter Sync)
+            # بدلاً من الثقة بقيمة محلية قد تتغير أو تتصفر، نسأل المنصة مباشرة: ما هو آخر فصل نُشر؟
+            live_ch = None
             if nov.get("rewayat_enabled") and nov.get("rewayat_novel_id") and rc_token:
                 try:
                     rc_temp = rewayat_club_api.RewayatClubClient(token=rc_token)
-                    live_num = rc_temp.get_latest_chapter_number(nov["rewayat_novel_id"])
-                    if live_num and live_num > nov.get("last_synced_chapter", 0):
-                        logger.info(f"Auto-synced last_synced_chapter for {nov['novel_name']}: {nov.get('last_synced_chapter')} -> {live_num}")
-                        nov["last_synced_chapter"] = live_num
-                        syndication_db.save_or_update_syndicated_novel(nov)
+                    live_rc = rc_temp.get_latest_chapter_number(nov["rewayat_novel_id"])
+                    if live_rc is not None and live_rc > 0:
+                        live_ch = live_rc
                 except Exception as e_sync:
-                    logger.warning(f"Could not auto-sync chapter count: {e_sync}")
+                    logger.warning(f"Could not live query Rewayat Club chapter count: {e_sync}")
+
+            if nov.get("wattpad_enabled") and nov.get("wattpad_story_id"):
+                try:
+                    wp_temp = wattpad_poster.WattpadClient(token=wp_token, username=wp_user, password=wp_pass)
+                    live_wp = wp_temp.get_latest_chapter_number(nov["wattpad_story_id"])
+                    if live_wp is not None and live_wp > 0:
+                        live_ch = live_wp
+                except Exception as e_wp_sync:
+                    logger.warning(f"Could not live query Wattpad chapter count: {e_wp_sync}")
+
+            if live_ch is not None and live_ch != nov.get("last_synced_chapter"):
+                logger.info(f"Auto-synced last_synced_chapter for {nov['novel_name']} from live platform: {nov.get('last_synced_chapter')} -> {live_ch}")
+                nov["last_synced_chapter"] = live_ch
+                syndication_db.save_or_update_syndicated_novel(nov)
 
             last_ch = nov.get("last_synced_chapter", 0)
             stop_ch = nov.get("stop_chapter", 9999)

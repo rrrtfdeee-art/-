@@ -131,6 +131,24 @@ class WattpadClient:
 
         return {"success": False, "message": "تعذر التحقق من حساب واتباد."}
 
+    def get_latest_chapter_number(self, story_id: str) -> Optional[int]:
+        """استعلام عدد الأجزاء/الفصول المنشورة حالياً في قصة واتباد عبر API المباشر."""
+        clean_id = str(story_id).strip()
+        if "wattpad.com/story/" in clean_id:
+            part = clean_id.split("wattpad.com/story/")[-1]
+            clean_id = part.split("-")[0].split("/")[0].split("?")[0]
+        if not clean_id:
+            return None
+        url = f"{BASE_WATTPAD_API}/stories/{clean_id}?fields=id,title,parts(id,title)"
+        try:
+            res = self.session.get(url, timeout=12)
+            if res.status_code == 200:
+                parts = res.json().get("parts", [])
+                return len(parts)
+        except Exception as e:
+            logger.warning(f"Error fetching latest chapter count for Wattpad story {clean_id}: {e}")
+        return None
+
     def publish_chapter_to_story(self, story_id: str, chapter_num: int, title: str, content: str) -> Dict[str, Any]:
         """
         إضافة جزء/فصل جديد داخل قصة واتباد ونشره عبر نقطة النهاية الرسمية apiv2/newstory.
