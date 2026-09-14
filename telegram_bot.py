@@ -170,20 +170,26 @@ def create_bot_app():
     try:
         bot.set_my_commands([
             types.BotCommand("menu", "📑 القائمة الرئيسية وأزرار التحكم"),
-            types.BotCommand("chat_on", "🟢 فتح الدردشة المباشرة (تلقي الإشعارات)"),
-            types.BotCommand("chat_off", "🔕 الوضع الصامت (تخفيف الرسائل)"),
-            types.BotCommand("report", "📊 طلب تقرير مجمع للعمليات"),
+            types.BotCommand("status", "📊 حالة المنظومة والمهام اللحظية"),
             types.BotCommand("repair", "🛡️ الإصلاح الشامل (فجوات + مبتورات + تنقل)"),
             types.BotCommand("fix_dates", "🗓️ إصلاح وتنسيق تواريخ نشر الفصول"),
             types.BotCommand("fix_titles", "🏷️ توحيد صيغة العناوين (الفصل X: العنوان)"),
             types.BotCommand("nav", "🔗 صيانة وربط أزرار التنقل (السابق/التالي/الفهرس)"),
-            types.BotCommand("status", "📊 حالة المنظومة والمهام اللحظية"),
+            types.BotCommand("sync", "🔄 مطابقة وفحص فصول الشيت مع بلوجر"),
+            types.BotCommand("timeline", "⏱️ فحص تسلسل وتوقيتات الجدولة الزمنية"),
+            types.BotCommand("dups", "🧹 فحص وتطهير الفصول والصفوف المكررة"),
             types.BotCommand("gaps", "🧩 فحص وسد الفصول المفقودة والمسودات"),
             types.BotCommand("heal", "🩹 استصلاح الفصول المبتورة أو الناقصة"),
             types.BotCommand("stage", "🎭 تجهيز دفعة الـ 20 فصلاً لـ Claude Opus"),
-            types.BotCommand("fix", "🎯 إصلاح أو ترجمة فصل فردي محدد"),
-            types.BotCommand("publish", "🚀 نشر فصول مخصصة"),
+            types.BotCommand("export", "📥 تصدير فصول الرواية كملف نصي TXT"),
+            types.BotCommand("fix", "🎯 تشخيص وإصلاح فصل أو خلل محدد"),
+            types.BotCommand("publish", "🚀 إطلاق النشر الفوري للفصول المعتمدة"),
+            types.BotCommand("report", "📊 طلب تقرير مجمع لعمليات المنظومة"),
+            types.BotCommand("chat_on", "🟢 فتح الدردشة المباشرة (تلقي الإشعارات)"),
+            types.BotCommand("chat_off", "🔕 الوضع الصامت (كتم الإشعارات)"),
             types.BotCommand("stop", "🛑 إيقاف فوري طارئ للمحرك"),
+            types.BotCommand("logout", "🔒 تسجيل الخروج وقفل البوت"),
+            types.BotCommand("ping", "⚡ فحص سرعة الاستجابة والاتصال"),
             types.BotCommand("help", "📋 عرض دليل الأوامر والمساعدة"),
         ])
     except Exception as cmd_err:
@@ -300,21 +306,28 @@ def create_bot_app():
         btn_sync = types.InlineKeyboardButton("🔄 مطابقة الشيت مع بلوجر", callback_data="cb_sync_blogger_start")
         btn_dups = types.InlineKeyboardButton("🧹 تطهير الفصول المكررة", callback_data="cb_purge_dups_start")
         btn_time = types.InlineKeyboardButton("⏱️ فحص تسلسل الجدولة", callback_data="cb_check_timeline_start")
+        btn_titles = types.InlineKeyboardButton("🏷️ توحيد صيغة العناوين", callback_data="cb_fix_titles_start")
         btn_gaps = types.InlineKeyboardButton("🧩 سد الفجوات الترقيمية", callback_data="cb_nsw_gaps")
         btn_heal = types.InlineKeyboardButton("🩹 استصلاح المبتورات", callback_data="cb_nsw_heal")
         btn_export = types.InlineKeyboardButton("📥 تصدير فصول TXT", callback_data="cb_export_chapters_start")
         btn_stage = types.InlineKeyboardButton("🎭 صقل أوبس (Opus)", callback_data="cb_nsw_stage")
         btn_status = types.InlineKeyboardButton("📊 حالة المنظومة", callback_data="cb_nsw_status")
-        btn_stop = types.InlineKeyboardButton("🛑 إيقاف فوري", callback_data="cb_nsw_stop")
+        btn_rep = types.InlineKeyboardButton("📈 تقرير العمليات", callback_data="rep_3h")
+
+        is_live = database.is_live_chat_open()
+        btn_chat = types.InlineKeyboardButton("🔕 كتم الإشعارات" if is_live else "🟢 فتح الإشعارات", callback_data="act_chat_off" if is_live else "act_chat_on")
+        btn_logout = types.InlineKeyboardButton("🔒 قفل / خروج", callback_data="act_logout")
         btn_help = types.InlineKeyboardButton("📋 دليل الأوامر", callback_data="cb_nsw_help")
+        btn_stop = types.InlineKeyboardButton("🛑 إيقاف فوري", callback_data="cb_nsw_stop")
+
         markup.add(btn_repair)
         markup.add(btn_dates, btn_nav)
         markup.add(btn_sync, btn_dups)
-        markup.add(btn_time)
+        markup.add(btn_time, btn_titles)
         markup.add(btn_gaps, btn_heal)
-        btn_titles = types.InlineKeyboardButton("🏷️ توحيد صيغة العناوين", callback_data="cb_fix_titles_start")
-        markup.add(btn_export, btn_titles)
-        markup.add(btn_stage, btn_status)
+        markup.add(btn_export, btn_stage)
+        markup.add(btn_status, btn_rep)
+        markup.add(btn_chat, btn_logout)
         markup.add(btn_help, btn_stop)
 
         if reply_to_msg:
@@ -394,7 +407,7 @@ def create_bot_app():
     def handle_ping(message):
         bot.reply_to(message, "⚡ <b>Pong! السيرفر يعمل واستجابة البوت فورية ومباشرة.</b>")
 
-    @bot.callback_query_handler(func=lambda call: call.data in ['rep_3h', 'rep_24h', 'rep_168h', 'rep_720h', 'act_chat_on', 'act_chat_off'])
+    @bot.callback_query_handler(func=lambda call: call.data in ['rep_3h', 'rep_24h', 'rep_168h', 'rep_720h', 'act_chat_on', 'act_chat_off', 'act_logout'])
     def handle_report_callbacks(call):
         if call.data == 'rep_3h':
             _send_operations_report(call.message.chat.id, hours=3.0, title_label="آخر 3 ساعات", message_id=call.message.message_id)
@@ -418,6 +431,13 @@ def create_bot_app():
             except Exception:
                 pass
             _send_operations_report(call.message.chat.id, hours=3.0, title_label="آخر 3 ساعات", message_id=call.message.message_id)
+        elif call.data == 'act_logout':
+            database.deauthorize_admin(call.message.chat.id)
+            try:
+                bot.answer_callback_query(call.id, "🔒 تم تسجيل الخروج بنجاح")
+            except Exception:
+                pass
+            bot.send_message(call.message.chat.id, "🔒 <b>تم تسجيل الخروج وقفل البوت بنجاح.</b>\nلن يستجيب البوت لأي أوامر حتى إعادة إدخال الرمز السري.")
 
     # ----------------------------------------------------
     # أوامر المشرف ومعلومات الحساب (Admin & Account Info)
@@ -1225,7 +1245,7 @@ def create_bot_app():
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    @bot.message_handler(commands=['sync_blogger', 'sync_sheet', 'match_blogger'])
+    @bot.message_handler(commands=['sync_blogger', 'sync_sheet', 'match_blogger', 'sync'])
     def nsw_sync_blogger_cmd(message):
         """مطابقة وإصلاح بيانات Google Sheets من Blogger مباشرة (أمر ➔ تقرير ➔ اتخاذ قرار)."""
         if not is_admin(message.from_user.id):
@@ -1245,7 +1265,7 @@ def create_bot_app():
                 reply_markup=markup
             )
 
-    @bot.message_handler(commands=['check_timeline', 'timeline_anomalies', 'audit_timeline'])
+    @bot.message_handler(commands=['check_timeline', 'timeline_anomalies', 'audit_timeline', 'timeline'])
     def nsw_check_timeline_cmd(message):
         """كشف الاضطراب الزمني والتضارب في ترتيب تواريخ النشر."""
         if not is_admin(message.from_user.id):
@@ -1348,7 +1368,7 @@ def create_bot_app():
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    @bot.message_handler(commands=['purge_duplicates', 'check_duplicates', 'clean_duplicates'])
+    @bot.message_handler(commands=['purge_duplicates', 'check_duplicates', 'clean_duplicates', 'dups'])
     def nsw_purge_duplicates_cmd(message):
         """كشف وتطهير الفصول المكررة على بلوجر والشيت (أمر ➔ تقرير ➔ اتخاذ قرار)."""
         if not is_admin(message.from_user.id):
