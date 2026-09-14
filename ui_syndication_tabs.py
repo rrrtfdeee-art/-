@@ -154,8 +154,8 @@ def render_rewayat_club_tab():
                 n_blogger_url = st.text_input("🔗 رابط صفحة الرواية في المدونة (Blogger):", placeholder="https://novelskyworld.blogspot.com/p/...", key="rc_uni_burl")
             with rc_opt2:
                 n_blogger_label = st.text_input("🏷️ تصنيف الرواية في بلوجر (Label):", placeholder="Shadow Slave", key="rc_uni_blbl")
-            cta_default = "✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها زوروا موقعنا الأصلي: [رابط الرواية] ✨"
-            custom_cta = st.text_area("💬 التعليق التحفيزي الثابت لنهاية كل فصل:", value=cta_default, height=70, key="rc_uni_cta")
+            cta_default = "✨ استمتعتم بالفصل؟ لدعم استمرار الترجمة ومتابعة الفصول المتقدمة فور صدورها، تفضلوا بزيارة موقعنا الأصلي عبر الرابط في خانة الدعم/بطاقة الرواية ✨"
+            custom_cta = st.text_area("💬 التعليق التحفيزي الثابت لنهاية كل فصل (التوجيه لخانة الدعم):", value=cta_default, height=70, key="rc_uni_cta")
 
         if st.button("🚀 حفظ الرواية وتثبيت جدولتها فوراً في Google Sheet", key="rc_uni_save_btn", type="primary", use_container_width=True):
             if not n_name.strip():
@@ -951,8 +951,8 @@ def render_wattpad_tab():
                 w_blogger_url = st.text_input("🔗 رابط صفحة الرواية في المدونة (Blogger):", placeholder="https://novelskyworld.blogspot.com/p/...", key="wp_uni_burl")
             with wp_opt2:
                 w_blogger_label = st.text_input("🏷️ تصنيف الرواية في بلوجر (Label):", placeholder="Shadow Slave", key="wp_uni_blbl")
-            w_cta_default = "✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها تفضلوا بزيارة موقعنا: [رابط الرواية] ✨"
-            w_custom_cta = st.text_area("💬 التعليق التحفيزي لنهاية كل فصل في واتباد:", value=w_cta_default, height=70, key="wp_uni_cta")
+            w_cta_default = "✨ استمتعتم بالفصل؟ لمتابعة أحدث الفصول الحصرية والمتقدمة فور صدورها، تفضلوا بزيارة موقعنا الأصلي عبر الرابط في بايو الحساب (Bio) 🔗 ✨"
+            w_custom_cta = st.text_area("💬 التعليق التحفيزي لنهاية كل فصل في واتباد (التوجيه للبايو):", value=w_cta_default, height=70, key="wp_uni_cta")
 
         if st.button("🚀 حفظ الرواية وتثبيت جدولتها فوراً في Google Sheet", key="wp_uni_save_btn", type="primary", use_container_width=True):
             if not w_name.strip():

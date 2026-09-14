@@ -482,26 +482,66 @@ def prepare_chapter_for_publishing(
     # === 4. تنظيف وتنسيق المتن وحذف الترويسات والإعلانات وفصل الفقرات ===
     content_clean = clean_chapter_paragraphs(data["content"], novel_name, chapter_num)
     
-    # === 5. دمج الخاتمة التحفيزية ===
-    cta = _build_cta(custom_cta, novel_name, blogger_url)
-    content_for_publish = f"{content_clean}\n\n{cta}" if cta else content_clean
+    # === 5. دمج الخاتمة التحفيزية الذكية المخصصة لكل منصة لمنع بصمة السبام ===
+    cta_general = _build_cta(custom_cta, novel_name, blogger_url, platform="all")
+    cta_rewayat = _build_cta(custom_cta, novel_name, blogger_url, platform="rewayat_club")
+    cta_wattpad = _build_cta(custom_cta, novel_name, blogger_url, platform="wattpad")
+
+    content_for_publish = f"{content_clean}\n\n{cta_general}" if cta_general else content_clean
+    content_rewayat = f"{content_clean}\n\n{cta_rewayat}" if cta_rewayat else content_clean
+    content_wattpad = f"{content_clean}\n\n{cta_wattpad}" if cta_wattpad else content_clean
 
     result.update({
         "success": True,
         "title": title_clean,
         "content_clean": content_clean,
         "content_for_publish": content_for_publish,
+        "content_rewayat_club": content_rewayat,
+        "content_wattpad": content_wattpad,
         "source": data["source"]
     })
     return result
 
 
-def _build_cta(custom_cta: str, novel_name: str, blogger_url: str = "") -> str:
-    """يبني نص الخاتمة التحفيزية مع استبدال المتغيرات الديناميكية."""
-    if not custom_cta:
-        return ""
-    
-    cta = custom_cta
+REWAYAT_CTA_VARIANTS = [
+    "✨ استمتعتم بالفصل؟ لدعم استمرار الترجمة ومتابعة الفصول المتقدمة فور صدورها، تفضلوا بزيارة موقعنا الأصلي عبر الرابط في خانة الدعم/بطاقة الرواية ✨",
+    "🌟 لمتابعة الفصول المتقدمة والحصرية فور نزولها ودعم استمرار العمل، تفقدوا رابط الموقع في خانة الدعم والوصف 📖 ✨",
+    "💫 قراءة ممتعة! لمتابعة الفصول الحصرية فور صدورها بجودة عالية، يمكنكم زيارة موقعنا عبر الرابط الموجود في بطاقة الرواية وخانة الدعم 🚀",
+    "💎 دعمكم المستمر هو سر استمرارنا! لمتابعة الفصول الحصرية فور توفرها، زوروا موقعنا الأصلي عبر الرابط في خانة الدعم ✨"
+]
+
+WATTPAD_CTA_VARIANTS = [
+    "✨ استمتعتم بالفصل؟ لمتابعة أحدث الفصول الحصرية والمتقدمة فور صدورها، تفضلوا بزيارة موقعنا الأصلي عبر الرابط في بايو الحساب (Bio) 🔗 ✨",
+    "📚 لقراءة الفصول المتقدمة والحصرية فور نزولها، يمكنكم زيارة موقعنا عبر الرابط المباشر في بايو الملف الشخصي 🌟",
+    "⚡ هل ترغبون بقراءة الفصول القادمة قبل الجميع؟ تفقدوا الرابط المباشر لموقعنا في بايو الحساب (Bio) 📖 ✨",
+    "💫 لمتابعة بقية أحداث الرواية والفصول الحصرية بأعلى جودة، زوروا موقعنا الأصلي عبر الرابط في بايو الحساب 🚀"
+]
+
+def _build_cta(custom_cta: str, novel_name: str, blogger_url: str = "", platform: str = "all") -> str:
+    """
+    يبني نص الخاتمة التحفيزية مع التوجيه الذكي والآمن لكل منصة:
+    - لواتباد: التوجيه لبايو الحساب (Bio) لتفادي حظر الروابط الخارجية وخوارزميات السبام.
+    - لنادي الروايات: التوجيه لخانة الدعم وبطاقة الرواية.
+    - يدعم التناوب العشوائي بين القوالب لكسر بصمة التكرار الآلي (Anti-Spam Fingerprint).
+    """
+    import random
+
+    if platform == "wattpad":
+        if custom_cta and ("بايو" in custom_cta or "bio" in custom_cta.lower()):
+            cta = custom_cta
+        else:
+            cta = random.choice(WATTPAD_CTA_VARIANTS)
+    elif platform == "rewayat_club":
+        if custom_cta and ("الدعم" in custom_cta or "بطاقة" in custom_cta):
+            cta = custom_cta
+        else:
+            cta = random.choice(REWAYAT_CTA_VARIANTS)
+    else:
+        if custom_cta:
+            cta = custom_cta
+        else:
+            cta = random.choice(REWAYAT_CTA_VARIANTS)
+
     cta = cta.replace("{novel_name}", novel_name)
     cta = cta.replace("{novel_link}", blogger_url if blogger_url else "[رابط الرواية]")
     cta = cta.replace("[رابط الرواية]", blogger_url if blogger_url else "[رابط الرواية]")

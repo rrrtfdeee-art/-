@@ -9,6 +9,7 @@ syndication_daemon.py — المشغل الذاتي المجدول 24/7 (Autonom
 """
 
 import time
+import random
 import threading
 import logging
 import syndication_db
@@ -74,12 +75,14 @@ def process_scheduled_chapters_cycle(now: float):
             # 1. نادي الروايات
             if plat_target in ("all", "rewayat_club") and nov.get("rewayat_enabled") and nov.get("rewayat_novel_id") and rc_token:
                 try:
+                    time.sleep(random.uniform(2.0, 5.0))  # محاكاة سلوك وتأخير التصفح البشري
                     rc_client = rewayat_club_api.RewayatClubClient(token=rc_token)
+                    rc_content = extracted.get("content_rewayat_club") or extracted["content_for_publish"]
                     rc_res = rc_client.publish_chapter(
                         novel_id=nov["rewayat_novel_id"],
                         chapter_num=target_ch,
                         title=extracted["title"],
-                        content=extracted["content_for_publish"]
+                        content=rc_content
                     )
                     if rc_res.get("success"):
                         success_rc = True
@@ -102,12 +105,14 @@ def process_scheduled_chapters_cycle(now: float):
             if plat_target in ("all", "wattpad") and nov.get("wattpad_enabled") and nov.get("wattpad_story_id"):
                 if wp_token or (wp_user and wp_pass):
                     try:
+                        time.sleep(random.uniform(3.0, 7.0))  # محاكاة سلوك وتأخير التصفح البشري
                         wp_client = wattpad_poster.WattpadClient(token=wp_token, username=wp_user, password=wp_pass)
+                        wp_content = extracted.get("content_wattpad") or extracted["content_for_publish"]
                         wp_res = wp_client.publish_chapter_to_story(
                             story_id=nov["wattpad_story_id"],
                             chapter_num=target_ch,
                             title=extracted["title"],
-                            content=extracted["content_for_publish"]
+                            content=wp_content
                         )
                         if wp_res.get("success"):
                             success_wp = True
@@ -247,12 +252,14 @@ def run_syndication_cycle():
             # 3. النشر في نادي الروايات (إذا كان مفعلاً)
             if nov.get("rewayat_enabled") and nov.get("rewayat_novel_id") and rc_token:
                 try:
+                    time.sleep(random.uniform(2.5, 6.0))  # محاكاة السلوك البشري
                     rc_client = rewayat_club_api.RewayatClubClient(token=rc_token)
+                    rc_content = extracted.get("content_rewayat_club") or extracted["content_for_publish"]
                     rc_res = rc_client.publish_chapter(
                         novel_id=nov["rewayat_novel_id"],
                         chapter_num=target_ch,
                         title=extracted["title"],
-                        content=extracted["content_for_publish"]
+                        content=rc_content
                     )
                     if rc_res.get("success"):
                         success_rc = True
@@ -287,12 +294,14 @@ def run_syndication_cycle():
                     )
                 else:
                     try:
+                        time.sleep(random.uniform(3.5, 8.0))  # محاكاة السلوك البشري
                         wp_client = wattpad_poster.WattpadClient(token=wp_token, username=wp_user, password=wp_pass)
+                        wp_content = extracted.get("content_wattpad") or extracted["content_for_publish"]
                         wp_res = wp_client.publish_chapter_to_story(
                             story_id=nov["wattpad_story_id"],
                             chapter_num=target_ch,
                             title=extracted["title"],
-                            content=extracted["content_for_publish"]
+                            content=wp_content
                         )
                         if wp_res.get("success"):
                             success_wp = True
@@ -318,10 +327,14 @@ def run_syndication_cycle():
             # 5. إذا تم النشر بنجاح على منصة واحدة على الأقل
             if success_rc or success_wp:
                 nov["last_synced_chapter"] = target_ch
-                interval_secs = max(0.1, float(nov.get("interval_hours", 1.0))) * 3600
+                base_hours = max(0.1, float(nov.get("interval_hours", 1.0)))
+                # تشتيت زمني عشوائي بشري (Jitter من -8 إلى +15 دقيقة) لكسر أي نمط آلي ثابت
+                jitter_secs = random.randint(-480, 900)
+                interval_secs = max(300, int(base_hours * 3600) + jitter_secs)
                 nov["next_run_timestamp"] = time.time() + interval_secs
                 syndication_db.save_or_update_syndicated_novel(nov)
-                logger.info(f"Published Ch.{target_ch} for {nov['novel_name']}. Next in {nov['interval_hours']}h")
+                next_diff_m = interval_secs / 60.0
+                logger.info(f"Published Ch.{target_ch} for {nov['novel_name']}. Next in {next_diff_m:.1f} mins (with anti-bot jitter)")
 
                 # إرسال إشعار تليجرام فوري للمشرف (إذا كان فصلاً جديداً)
                 is_already = (success_rc and rc_res.get("already_exists")) or (success_wp and wp_res.get("already_exists"))
