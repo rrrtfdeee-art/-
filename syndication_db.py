@@ -173,7 +173,7 @@ def _seed_default_syndication_data(conn):
                 'only-at-the-mahayana-stage-does-the-reversal-system-appear',
                 'https://rewayat.club/novel/only-at-the-mahayana-stage-does-the-reversal-system-appear',
                 0, '', '',
-                1, 103, 500,
+                1, 27, 100,
                 24.0, 0.0,
                 '✨ استمتعتم بالفصل؟ لمتابعة الفصول الحصرية والمتقدمة فور صدورها زوروا موقعنا الأصلي: https://www.novelskyworld.com ✨',
                 1

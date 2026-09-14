@@ -133,23 +133,43 @@ class RewayatClubClient:
         except Exception as e:
             return {"success": False, "error": f"استثناء أثناء محاولة النشر: {str(e)}"}
 
-    def get_latest_chapter_number(self, novel_id: str) -> Optional[int]:
-        """استعلام أحدث رقم فصل منشور على نادي الروايات مباشرة عبر API."""
+    def get_latest_chapter_number(self, novel_id: str, baseline_hint: int = 0) -> Optional[int]:
+        """استعلام أحدث رقم فصل منشور على نادي الروايات في السلسلة المتصلة الحقيقية مع تجاهل أي فصول شاذة."""
         clean_slug = novel_id.strip()
         if "rewayat.club/novel/" in clean_slug:
             clean_slug = clean_slug.split("rewayat.club/novel/")[-1].split("/")[0].split("?")[0]
         clean_slug = clean_slug.rstrip("/")
 
-        endpoint = f"{BASE_API_URL}/chapters/{clean_slug}/"
+        endpoint = f"{BASE_API_URL}/chapters/{clean_slug}/?limit=100"
         try:
-            res = self.session.get(endpoint, timeout=10)
+            res = self.session.get(endpoint, timeout=12)
             if res.status_code == 200:
                 data = res.json()
                 results = data.get("results", [])
-                if results and "number" in results[0]:
-                    return int(results[0]["number"])
-                if "count" in data:
-                    return int(data["count"])
+                if results:
+                    valid_nums = []
+                    for item in results:
+                        try:
+                            n = int(item.get("number"))
+                            if n > 0:
+                                valid_nums.append(n)
+                        except Exception:
+                            pass
+                    if valid_nums:
+                        sorted_nums = sorted(set(valid_nums))
+                        valid_max = sorted_nums[0]
+                        for i in range(1, len(sorted_nums)):
+                            curr = sorted_nums[i]
+                            prev = sorted_nums[i-1]
+                            if curr - prev <= 5:
+                                valid_max = curr
+                            else:
+                                # قفزة شاذة غير متصلة (مثل القفزة الفجائية من 27 إلى 103)
+                                if baseline_hint > 0 and curr <= baseline_hint:
+                                    valid_max = curr
+                                    continue
+                                break
+                        return valid_max
         except Exception as e:
             logger.warning(f"Error fetching latest chapter for {clean_slug}: {e}")
         return None
