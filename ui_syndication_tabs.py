@@ -107,46 +107,12 @@ def render_rewayat_club_tab():
         
         st.info("💡 **توضيح أرقام الفصول:** 'من الفصل' و 'إلى الفصل' يحددان نطاق الفصول المراد جدولتها في الشيت. أما **'آخر فصل نُشر مسبقاً'** فهو الأهم لتحديد نقطة انطلاق النشر الفعلي: إذا وضعت فيه `23`، سيتخطى السيرفر تلقائياً كافة الفصول حتى 23 ويبدأ فوراً بنشر الفصل **24**!")
 
-        st.markdown("##### 2️⃣ خطة النشر والجدولة في Google Sheet (بتوقيت مكة والعراق):")
-        rc_m1, rc_m2 = st.columns([1.5, 2.5])
-        with rc_m1:
-            rc_mode = st.radio(
-                "اختر طريقة تحديد مواعيد الفصول:",
-                ["daily_manual", "interval_hours", "weekly"],
-                format_func=lambda x: {
-                    "daily_manual": "⏰ ساعات يومية محددة يدوياً (موصى بها)",
-                    "interval_hours": "⏱️ معدل زمني ثابت (فصل كل N ساعة)",
-                    "weekly": "📅 موعد أسبوعي محدد"
-                }.get(x, x),
-                key="rc_uni_mode"
-            )
-            rc_start_date = st.date_input("📅 تاريخ بدء النشر:", value=datetime.date.today(), key="rc_uni_date")
-
-        rc_selected_hours = []
-        rc_interval_val = 1.0
-
-        with rc_m2:
-            if rc_mode == "daily_manual":
-                rc_daily_times = st.number_input("🔢 كم فصلاً يومياً؟", min_value=1, max_value=12, value=3, step=1, key="rc_uni_cnt")
-                st.markdown(f"**⏰ حدد ساعات النشر اليدوية ({rc_daily_times} مواعيد يومياً):**")
-                cols_rc_h = st.columns(min(int(rc_daily_times), 4))
-                def_hours = ["10:00", "14:00", "18:00", "21:30", "23:00", "01:00", "08:00", "12:00"]
-                for i in range(int(rc_daily_times)):
-                    c_idx = i % len(cols_rc_h)
-                    with cols_rc_h[c_idx]:
-                        def_t_str = def_hours[i] if i < len(def_hours) else "12:00"
-                        dh_p = def_t_str.split(":")
-                        t_val = st.time_input(f"الموعد {i+1}:", value=datetime.time(int(dh_p[0]), int(dh_p[1])), key=f"rc_uni_h_{i}")
-                        rc_selected_hours.append(t_val.strftime("%H:%M"))
-                rc_interval_val = round(24.0 / max(len(rc_selected_hours), 1), 2)
-            elif rc_mode == "interval_hours":
-                rc_interval_val = st.number_input("⏱️ فصل جديد كل كم ساعة؟", min_value=0.25, value=1.0, step=0.25, key="rc_uni_int")
-                t_start = st.time_input("⏰ وقت انطلاق أول فصل:", value=datetime.datetime.now(TZ_ARABIA).time().replace(second=0, microsecond=0), key="rc_uni_tstart")
-                rc_selected_hours.append(t_start.strftime("%H:%M"))
-            elif rc_mode == "weekly":
-                w_time = st.time_input("⏰ وقت النشر الأسبوعي:", value=datetime.time(20, 0), key="rc_uni_wtime")
-                rc_selected_hours.append(w_time.strftime("%H:%M"))
-                rc_interval_val = 168.0
+        st.markdown("##### 2️⃣ معدل النشر التلقائي وموعد الانطلاق:")
+        rc_c_rate1, rc_c_rate2 = st.columns(2)
+        with rc_c_rate1:
+            rc_interval_val = st.number_input("⏱️ معدل النشر (ساعات بين كل فصل):", min_value=0.25, max_value=168.0, value=24.0, step=0.5, help="مثال: 24 = فصل كل يوم، 12 = فصلين يومياً، 1 = فصل كل ساعة", key="rc_uni_int")
+        with rc_c_rate2:
+            rc_start_now = st.radio("⏰ موعد انطلاق أول فصل:", ["start_after_interval", "start_now"], format_func=lambda x: "⏳ بعد انتهاء المعدل الزمني المحدد" if x == "start_after_interval" else "⚡ النشر فوراً عند الحفظ", key="rc_uni_start_mode")
 
         with st.expander("⚙️ خيارات إضافية متقدمة (اختيارية)", expanded=False):
             rc_opt1, rc_opt2 = st.columns(2)
@@ -157,7 +123,7 @@ def render_rewayat_club_tab():
             cta_default = "✨ استمتعتم بالفصل؟ لدعم استمرار الترجمة ومتابعة الفصول المتقدمة فور صدورها، تفضلوا بزيارة موقعنا الأصلي عبر الرابط في خانة الدعم/بطاقة الرواية ✨"
             custom_cta = st.text_area("💬 التعليق التحفيزي الثابت لنهاية كل فصل (التوجيه لخانة الدعم):", value=cta_default, height=70, key="rc_uni_cta")
 
-        if st.button("🚀 حفظ الرواية وتثبيت جدولتها فوراً في Google Sheet", key="rc_uni_save_btn", type="primary", use_container_width=True):
+        if st.button("🚀 حفظ الرواية وتفعيل النشر التلقائي", key="rc_uni_save_btn", type="primary", use_container_width=True):
             if not n_name.strip():
                 st.error("❌ يرجى إدخال اسم الرواية.")
             elif not n_rewayat_id.strip():
@@ -165,26 +131,12 @@ def render_rewayat_club_tab():
             elif int(n_start_ch) > int(n_stop_ch):
                 st.error("❌ رقم بداية الفصول يجب أن يكون أقل من أو يساوي رقم النهاية.")
             else:
-                with st.spinner("⏳ جاري حفظ الرواية وضخ جدول الفصول في Google Sheet..."):
+                with st.spinner("⏳ جاري حفظ الرواية في المنظومة وGoogle Sheet..."):
                     clean_rc_id = n_rewayat_id.strip()
                     if "novel/" in clean_rc_id:
                         clean_rc_id = clean_rc_id.split("novel/")[-1].split("/")[0].strip()
 
-                    freq_key = "daily" if rc_mode == "daily_manual" else ("interval" if rc_mode == "interval_hours" else "weekly")
-                    step_count = rc_interval_val if rc_mode == "interval_hours" else len(rc_selected_hours)
-
-                    gen_rows = syndication_db.generate_schedule_from_period_rules(
-                        novel_name=n_name.strip(),
-                        start_ch=int(n_start_ch),
-                        end_ch=int(n_stop_ch),
-                        freq_type=freq_key,
-                        times_per_day=int(step_count) if rc_mode != "interval_hours" else step_count,
-                        selected_hours=rc_selected_hours,
-                        start_date_str=rc_start_date.strftime("%Y-%m-%d"),
-                        platform="rewayat_club"
-                    )
-
-                    first_run_ts = gen_rows[0]["scheduled_timestamp"] if gen_rows else time.time()
+                    first_run_ts = time.time() if rc_start_now == "start_now" else (time.time() + float(rc_interval_val) * 3600.0)
 
                     syndication_db.save_or_update_syndicated_novel({
                         "novel_name": n_name.strip(),
@@ -205,20 +157,8 @@ def render_rewayat_club_tab():
                         "is_active": 1
                     })
 
-                    syndication_db.save_chapter_schedules_batch(n_name.strip(), gen_rows)
-                    syndication_db.save_period_rule({
-                        "novel_name": n_name.strip(),
-                        "start_chapter": int(n_start_ch),
-                        "end_chapter": int(n_stop_ch),
-                        "frequency_type": freq_key,
-                        "times_per_day": len(rc_selected_hours),
-                        "selected_hours": json.dumps(rc_selected_hours),
-                        "start_date": rc_start_date.strftime("%Y-%m-%d"),
-                        "is_active": 1
-                    })
-
                     st.balloons()
-                    st.success(f"🎉 تم بنجاح حفظ رواية '{n_name.strip()}' وتثبيت {len(gen_rows)} فصلاً مجدولاً في Google Sheet!")
+                    st.success(f"🎉 تم بنجاح حفظ رواية '{n_name.strip()}' وتفعيل النشر التلقائي بمعدل فصل كل {rc_interval_val} ساعة!")
                     st.rerun()
 
 
@@ -305,186 +245,6 @@ def render_rewayat_club_tab():
                         nov["is_active"] = int(new_active_val)
                         syndication_db.save_or_update_syndicated_novel(nov)
                         st.success("✅ تم حفظ الإعدادات بنجاح وتحديثها سحابياً في Google Sheet!")
-                        st.rerun()
-
-                    st.markdown("---")
-                    st.markdown("##### 🔁 التحكم الجماعي بكامل الفصول المتبقية في Google Sheet:")
-                    st.caption("تعديل مواعيد وتوقيت جميع الفصول المتبقية لهذه الرواية دفعة واحدة في الشيت، دون الحاجة لتعديل كل فصل على حدة.")
-                    
-                    c_res1, c_res2 = st.columns([1.5, 2])
-                    with c_res1:
-                        res_mode = st.radio(
-                            "طريقة المواعيد الجديدة:",
-                            ["daily", "interval", "weekly"],
-                            format_func=lambda x: {"daily": "⏰ ساعات يومية محددة يدوياً", "interval": "⏱️ معدل ثابت (كل N ساعة)", "weekly": "📅 أسبوعي"}.get(x, x),
-                            key=f"rc_res_m_{nov['id']}"
-                        )
-                        res_date = st.date_input("📅 تاريخ بدء المواعيد الجديدة:", value=datetime.date.today(), key=f"rc_res_d_{nov['id']}")
-
-                    res_hours = []
-                    res_step = 1.0
-                    with c_res2:
-                        if res_mode == "daily":
-                            res_cnt = st.number_input("🔢 كم فصلاً يومياً؟", min_value=1, max_value=12, value=3, step=1, key=f"rc_res_cnt_{nov['id']}")
-                            st.caption(f"حدد ساعات النشر الجديدة ({res_cnt} أوقات يومياً):")
-                            res_cols = st.columns(min(int(res_cnt), 4))
-                            def_h = ["10:00", "14:00", "18:00", "21:30", "23:00", "01:00", "08:00", "12:00"]
-                            for ri in range(int(res_cnt)):
-                                rc_idx = ri % len(res_cols)
-                                with res_cols[rc_idx]:
-                                    d_str = def_h[ri] if ri < len(def_h) else "12:00"
-                                    dp = d_str.split(":")
-                                    rt_val = st.time_input(f"وقت {ri+1}:", value=datetime.time(int(dp[0]), int(dp[1])), key=f"rc_res_t_{nov['id']}_{ri}")
-                                    res_hours.append(rt_val.strftime("%H:%M"))
-                            res_step = round(24.0 / max(len(res_hours), 1), 2)
-                        elif res_mode == "interval":
-                            res_step = st.number_input("⏱️ فصل جديد كل كم ساعة؟", min_value=0.25, value=1.0, step=0.25, key=f"rc_res_step_{nov['id']}")
-                            rt_start = st.time_input("⏰ وقت أول فصل:", value=datetime.datetime.now(TZ_ARABIA).time().replace(second=0, microsecond=0), key=f"rc_res_tstart_{nov['id']}")
-                            res_hours.append(rt_start.strftime("%H:%M"))
-                        elif res_mode == "weekly":
-                            rw_time = st.time_input("⏰ وقت النشر الأسبوعي:", value=datetime.time(20, 0), key=f"rc_res_wtime_{nov['id']}")
-                            res_hours.append(rw_time.strftime("%H:%M"))
-
-                    c_act1, c_act2 = st.columns(2)
-                    with c_act1:
-                        if st.button("🔄 تطبيق وإعادة جدولة جميع الفصول المتبقية في Google Sheet", key=f"rc_apply_res_{nov['id']}", type="primary", use_container_width=True):
-                            with st.spinner("⏳ جاري إعادة توزيع المواعيد وضخها في Google Sheet..."):
-                                cnt = syndication_db.bulk_reschedule_novel_pending_chapters(
-                                    novel_name=nov["novel_name"],
-                                    freq_type=res_mode,
-                                    times_per_day=int(res_step) if res_mode == "interval" else len(res_hours),
-                                    selected_hours=res_hours,
-                                    start_date_str=res_date.strftime("%Y-%m-%d"),
-                                    platform="rewayat_club"
-                                )
-                                if cnt > 0:
-                                    st.success(f"🎉 تم بنجاح إعادة جدولة {cnt} فصلاً متبقياً في Google Sheet!")
-                                else:
-                                    st.info("لا توجد فصول معلقة حالياً لإعادة جدولتها.")
-                                st.rerun()
-                    with c_act2:
-                        if st.button("🗑️ مسح كافة الفصول المجدولة لهذه الرواية", key=f"rc_clr_pend_{nov['id']}", use_container_width=True, help="يلغي كافة الفصول المعلقة من Google Sheet وقاعدة البيانات دون حذف الرواية"):
-                            syndication_db.cancel_all_pending_schedules_for_novel(nov["novel_name"])
-                            st.warning(f"تم مسح كافة الفصول المجدولة المعلقة لرواية '{nov['novel_name']}' من الشيت.")
-                            st.rerun()
-
-                    st.markdown("---")
-                    st.markdown("##### 📌 تعيين الفصول المنشورة مسبقاً (تخطي تلقائي):")
-                    c_sk1, c_sk2 = st.columns([2, 1])
-                    with c_sk1:
-                        sync_target = st.number_input("آخر فصل نُشر مسبقاً (لتخطيه وما قبله):", min_value=0, value=int(nov['last_synced_chapter']), step=1, key=f"rc_sk_inp_{nov['id']}")
-                    with c_sk2:
-                        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                        if st.button("✅ تعيين وتخطي الفصول السابقة", key=f"rc_sk_btn_{nov['id']}", use_container_width=True):
-                            syndication_db.set_novel_last_published_chapter(nov["novel_name"], int(sync_target), novel_id=nov["id"], platform="rewayat_club")
-                            nov["last_synced_chapter"] = int(sync_target)
-                            syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success(f"تم تعيين الفصول حتى الفصل {sync_target} كمنشورة وتخطيها تلقائياً!")
-                            st.rerun()
-
-                    st.markdown("---")
-                    st.markdown("##### ➕ جدولة دفعة فصول جديدة لهذه الرواية في Google Sheet:")
-                    next_suggested_start = max(nov['stop_chapter'] + 1, nov['last_synced_chapter'] + 1)
-                    b_c1, b_c2, b_c3 = st.columns(3)
-                    with b_c1:
-                        b_start = st.number_input("من الفصل:", min_value=1, value=int(next_suggested_start), step=1, key=f"rc_b_start_{nov['id']}")
-                    with b_c2:
-                        b_stop = st.number_input("إلى الفصل:", min_value=1, value=int(next_suggested_start + 19), step=1, key=f"rc_b_stop_{nov['id']}")
-                    with b_c3:
-                        b_cnt = st.number_input("مرات النشر يومياً:", min_value=1, max_value=12, value=3, step=1, key=f"rc_b_cnt_{nov['id']}")
-                    
-                    b_d1, b_d2 = st.columns([1, 2])
-                    with b_d1:
-                        b_sdate = st.date_input("تاريخ البدء:", value=datetime.date.today(), key=f"rc_b_sdate_{nov['id']}")
-                    b_hours = []
-                    with b_d2:
-                        st.caption(f"ساعات النشر اليدوية ({b_cnt} أوقات):")
-                        b_cols_h = st.columns(min(int(b_cnt), 4))
-                        def_hours = ["10:00", "14:00", "18:00", "21:30", "23:00", "01:00", "08:00", "12:00"]
-                        for hi in range(int(b_cnt)):
-                            hc_idx = hi % len(b_cols_h)
-                            with b_cols_h[hc_idx]:
-                                def_t_str = def_hours[hi] if hi < len(def_hours) else "12:00"
-                                dh_p = def_t_str.split(":")
-                                bt_val = st.time_input(f"وقت {hi+1}:", value=datetime.time(int(dh_p[0]), int(dh_p[1])), key=f"rc_b_time_{nov['id']}_{hi}")
-                                b_hours.append(bt_val.strftime("%H:%M"))
-                    
-                    if st.button("🚀 تثبيت الدفعة في Google Sheet", key=f"rc_b_save_btn_{nov['id']}", type="primary", use_container_width=True):
-                        if int(b_start) > int(b_stop):
-                            st.error("رقم بداية الفصول يجب أن يكون أقل من أو يساوي النهاية.")
-                        else:
-                            with st.spinner("⏳ جاري إضافة الفصول للشيت مع تخطي المنشور مسبقاً..."):
-                                b_rows = syndication_db.generate_schedule_from_period_rules(
-                                    novel_name=nov['novel_name'],
-                                    start_ch=int(b_start),
-                                    end_ch=int(b_stop),
-                                    freq_type="daily",
-                                    times_per_day=len(b_hours),
-                                    selected_hours=b_hours,
-                                    start_date_str=b_sdate.strftime("%Y-%m-%d"),
-                                    platform="rewayat_club",
-                                    skip_published=True
-                                )
-                                syndication_db.save_chapter_schedules_batch(nov['novel_name'], b_rows)
-                                if int(b_stop) > nov['stop_chapter']:
-                                    nov['stop_chapter'] = int(b_stop)
-                                    nov['is_active'] = 1
-                                    syndication_db.save_or_update_syndicated_novel(nov)
-                                st.balloons()
-                                st.success(f"🎉 تم بنجاح إضافة {len(b_rows)} فصلاً مجدولاً لرواية {nov['novel_name']} في Google Sheet!")
-                                st.rerun()
-
-                    st.markdown("---")
-                    st.markdown("##### 🚀 الجدولة السريعة والإيقاف المؤقت:")
-                    c_b1, c_b2, c_b3, c_b4 = st.columns(4)
-                    now_ar = datetime.datetime.now(TZ_ARABIA)
-                    today_ar = now_ar.date()
-                    tmrw_ar = today_ar + datetime.timedelta(days=1)
-                    t_10am = datetime.datetime.combine(tmrw_ar, datetime.time(10, 0), tzinfo=TZ_ARABIA).timestamp()
-                    t_6pm = datetime.datetime.combine(tmrw_ar, datetime.time(18, 0), tzinfo=TZ_ARABIA).timestamp()
-                    t_midnight = datetime.datetime.combine(tmrw_ar, datetime.time(0, 0), tzinfo=TZ_ARABIA).timestamp()
-
-                    with c_b1:
-                        if st.button("🚀 البدء الآن (20 فصل)", key=f"quick_now_{nov['id']}", use_container_width=True):
-                            nov["interval_hours"] = 1.0
-                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
-                            nov["next_run_timestamp"] = time.time()
-                            nov["is_active"] = 1
-                            syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success(f"تم الضبط! سينطلق النشر فوراً لـ 20 فصلاً.")
-                            st.rerun()
-                    with c_b2:
-                        if st.button("🌅 غداً 10:00 ص (20 فصل)", key=f"quick_tmrw10_{nov['id']}", use_container_width=True):
-                            nov["interval_hours"] = 1.0
-                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
-                            nov["next_run_timestamp"] = t_10am
-                            nov["is_active"] = 1
-                            syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success(f"تمت الجدولة! سيبدأ أول فصل غداً 10:00 صباحاً.")
-                            st.rerun()
-                    with c_b3:
-                        if st.button("🌆 غداً 06:00 م (20 فصل)", key=f"quick_tmrw18_{nov['id']}", use_container_width=True):
-                            nov["interval_hours"] = 1.0
-                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
-                            nov["next_run_timestamp"] = t_6pm
-                            nov["is_active"] = 1
-                            syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success(f"تمت الجدولة! سيبدأ أول فصل غداً 06:00 مساءً.")
-                            st.rerun()
-                    with c_b4:
-                        if st.button("🌙 غداً 12:00 ليلاً (20 فصل)", key=f"quick_tmrw00_{nov['id']}", use_container_width=True):
-                            nov["interval_hours"] = 1.0
-                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
-                            nov["next_run_timestamp"] = t_midnight
-                            nov["is_active"] = 1
-                            syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success(f"تمت الجدولة! سيبدأ أول فصل غداً 12:00 ليلاً.")
-                            st.rerun()
-
-                    if st.button("⏸️ إيقاف / استئناف النشر التلقائي للرواية", key=f"toggle_act_{nov['id']}", use_container_width=True):
-                        nov["is_active"] = 0 if nov["is_active"] else 1
-                        syndication_db.save_or_update_syndicated_novel(nov)
-                        st.info(f"تم تغيير الحالة إلى: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
                         st.rerun()
 
                     st.markdown("---")
@@ -618,8 +378,7 @@ def render_rewayat_club_tab():
             if log.get("error_msg"):
                 st.caption(f"⚠️ {log['error_msg']}")
 
-    # 6. نظام الجدولة الدقيقة متعدد الفترات (Google Sheets Cloud Persistence)
-    render_advanced_period_scheduler_section(default_platform="rewayat_club")
+
 
 def render_advanced_period_scheduler_section(default_platform="all"):
     st.markdown("---")
@@ -904,46 +663,12 @@ def render_wattpad_tab():
             with wp_ch3:
                 w_last_ch = st.number_input("آخر فصل نُشر مسبقاً:", min_value=0, value=0, step=1, help="اتركه 0 إذا كانت رواية جديدة تماماً", key="wp_uni_last")
 
-        st.markdown("##### 2️⃣ خطة النشر والجدولة في Google Sheet (بتوقيت مكة والعراق):")
-        wp_m1, wp_m2 = st.columns([1.5, 2.5])
-        with wp_m1:
-            wp_mode = st.radio(
-                "اختر طريقة تحديد مواعيد الفصول:",
-                ["daily_manual", "interval_hours", "weekly"],
-                format_func=lambda x: {
-                    "daily_manual": "⏰ ساعات يومية محددة يدوياً (موصى بها)",
-                    "interval_hours": "⏱️ معدل زمني ثابت (فصل كل N ساعة)",
-                    "weekly": "📅 موعد أسبوعي محدد"
-                }.get(x, x),
-                key="wp_uni_mode"
-            )
-            wp_start_date = st.date_input("📅 تاريخ بدء النشر:", value=datetime.date.today(), key="wp_uni_date")
-
-        wp_selected_hours = []
-        wp_interval_val = 1.0
-
-        with wp_m2:
-            if wp_mode == "daily_manual":
-                wp_daily_times = st.number_input("🔢 كم فصلاً يومياً؟", min_value=1, max_value=12, value=3, step=1, key="wp_uni_cnt")
-                st.markdown(f"**⏰ حدد ساعات النشر اليدوية ({wp_daily_times} مواعيد يومياً):**")
-                cols_wp_h = st.columns(min(int(wp_daily_times), 4))
-                def_hours = ["10:00", "14:00", "18:00", "21:30", "23:00", "01:00", "08:00", "12:00"]
-                for i in range(int(wp_daily_times)):
-                    c_idx = i % len(cols_wp_h)
-                    with cols_wp_h[c_idx]:
-                        def_t_str = def_hours[i] if i < len(def_hours) else "12:00"
-                        dh_p = def_t_str.split(":")
-                        t_val = st.time_input(f"الموعد {i+1}:", value=datetime.time(int(dh_p[0]), int(dh_p[1])), key=f"wp_uni_h_{i}")
-                        wp_selected_hours.append(t_val.strftime("%H:%M"))
-                wp_interval_val = round(24.0 / max(len(wp_selected_hours), 1), 2)
-            elif wp_mode == "interval_hours":
-                wp_interval_val = st.number_input("⏱️ فصل جديد كل كم ساعة؟", min_value=0.25, value=1.0, step=0.25, key="wp_uni_int")
-                t_start = st.time_input("⏰ وقت انطلاق أول فصل:", value=datetime.datetime.now(TZ_ARABIA).time().replace(second=0, microsecond=0), key="wp_uni_tstart")
-                wp_selected_hours.append(t_start.strftime("%H:%M"))
-            elif wp_mode == "weekly":
-                w_time = st.time_input("⏰ وقت النشر الأسبوعي:", value=datetime.time(20, 0), key="wp_uni_wtime")
-                wp_selected_hours.append(w_time.strftime("%H:%M"))
-                wp_interval_val = 168.0
+        st.markdown("##### 2️⃣ معدل النشر التلقائي وموعد الانطلاق:")
+        wp_c_rate1, wp_c_rate2 = st.columns(2)
+        with wp_c_rate1:
+            wp_interval_val = st.number_input("⏱️ معدل النشر (ساعات بين كل فصل):", min_value=0.25, max_value=168.0, value=24.0, step=0.5, help="مثال: 24 = فصل كل يوم، 12 = فصلين يومياً، 1 = فصل كل ساعة", key="wp_uni_int")
+        with wp_c_rate2:
+            wp_start_now = st.radio("⏰ موعد انطلاق أول فصل:", ["start_after_interval", "start_now"], format_func=lambda x: "⏳ بعد انتهاء المعدل الزمني المحدد" if x == "start_after_interval" else "⚡ النشر فوراً عند الحفظ", key="wp_uni_start_mode")
 
         with st.expander("⚙️ خيارات إضافية متقدمة (اختيارية)", expanded=False):
             wp_opt1, wp_opt2 = st.columns(2)
@@ -954,7 +679,7 @@ def render_wattpad_tab():
             w_cta_default = "✨ استمتعتم بالفصل؟ لمتابعة أحدث الفصول الحصرية والمتقدمة فور صدورها، تفضلوا بزيارة موقعنا الأصلي عبر الرابط في بايو الحساب (Bio) 🔗 ✨"
             w_custom_cta = st.text_area("💬 التعليق التحفيزي لنهاية كل فصل في واتباد (التوجيه للبايو):", value=w_cta_default, height=70, key="wp_uni_cta")
 
-        if st.button("🚀 حفظ الرواية وتثبيت جدولتها فوراً في Google Sheet", key="wp_uni_save_btn", type="primary", use_container_width=True):
+        if st.button("🚀 حفظ الرواية وتفعيل النشر التلقائي لواتباد", key="wp_uni_save_btn", type="primary", use_container_width=True):
             if not w_name.strip():
                 st.error("❌ يرجى إدخال اسم الرواية.")
             elif not w_story_id.strip():
@@ -962,26 +687,12 @@ def render_wattpad_tab():
             elif int(w_start_ch) > int(w_stop_ch):
                 st.error("❌ رقم بداية الفصول يجب أن يكون أقل من أو يساوي رقم النهاية.")
             else:
-                with st.spinner("⏳ جاري حفظ الرواية وضخ جدول الفصول في Google Sheet..."):
+                with st.spinner("⏳ جاري حفظ قصة واتباد في المنظومة وGoogle Sheet..."):
                     clean_story_id = w_story_id.strip()
                     if "story/" in clean_story_id:
                         clean_story_id = clean_story_id.split("story/")[-1].split("-")[0].split("/")[0].strip()
 
-                    freq_key = "daily" if wp_mode == "daily_manual" else ("interval" if wp_mode == "interval_hours" else "weekly")
-                    step_count = wp_interval_val if wp_mode == "interval_hours" else len(wp_selected_hours)
-
-                    gen_rows = syndication_db.generate_schedule_from_period_rules(
-                        novel_name=w_name.strip(),
-                        start_ch=int(w_start_ch),
-                        end_ch=int(w_stop_ch),
-                        freq_type=freq_key,
-                        times_per_day=int(step_count) if wp_mode != "interval_hours" else step_count,
-                        selected_hours=wp_selected_hours,
-                        start_date_str=wp_start_date.strftime("%Y-%m-%d"),
-                        platform="wattpad"
-                    )
-
-                    first_run_ts = gen_rows[0]["scheduled_timestamp"] if gen_rows else time.time()
+                    first_run_ts = time.time() if wp_start_now == "start_now" else (time.time() + float(wp_interval_val) * 3600.0)
 
                     syndication_db.save_or_update_syndicated_novel({
                         "novel_name": w_name.strip(),
@@ -1002,20 +713,8 @@ def render_wattpad_tab():
                         "is_active": 1
                     })
 
-                    syndication_db.save_chapter_schedules_batch(w_name.strip(), gen_rows)
-                    syndication_db.save_period_rule({
-                        "novel_name": w_name.strip(),
-                        "start_chapter": int(w_start_ch),
-                        "end_chapter": int(w_stop_ch),
-                        "frequency_type": freq_key,
-                        "times_per_day": len(wp_selected_hours),
-                        "selected_hours": json.dumps(wp_selected_hours),
-                        "start_date": wp_start_date.strftime("%Y-%m-%d"),
-                        "is_active": 1
-                    })
-
                     st.balloons()
-                    st.success(f"🎉 تم بنجاح حفظ قصة '{w_name.strip()}' وتثبيت {len(gen_rows)} فصلاً مجدولاً في Google Sheet!")
+                    st.success(f"🎉 تم بنجاح حفظ قصة '{w_name.strip()}' وتفعيل النشر التلقائي بمعدل فصل كل {wp_interval_val} ساعة!")
                     st.rerun()
 
     # 3. عرض الروايات المسجلة في واتباد
@@ -1101,186 +800,6 @@ def render_wattpad_tab():
                         nov["is_active"] = int(wnew_active_val)
                         syndication_db.save_or_update_syndicated_novel(nov)
                         st.success("✅ تم حفظ الإعدادات بنجاح وتحديثها سحابياً في Google Sheet!")
-                        st.rerun()
-
-                    st.markdown("---")
-                    st.markdown("##### 🔁 التحكم الجماعي بكامل فصول القصة المتبقية في Google Sheet:")
-                    st.caption("تعديل مواعيد وتوقيت جميع الفصول المتبقية لهذه القصة دفعة واحدة في الشيت، دون الحاجة لتعديل كل فصل على حدة.")
-                    
-                    c_wres1, c_wres2 = st.columns([1.5, 2])
-                    with c_wres1:
-                        wres_mode = st.radio(
-                            "طريقة المواعيد الجديدة:",
-                            ["daily", "interval", "weekly"],
-                            format_func=lambda x: {"daily": "⏰ ساعات يومية محددة يدوياً", "interval": "⏱️ معدل ثابت (كل N ساعة)", "weekly": "📅 أسبوعي"}.get(x, x),
-                            key=f"wp_res_m_{nov['id']}"
-                        )
-                        wres_date = st.date_input("📅 تاريخ بدء المواعيد الجديدة:", value=datetime.date.today(), key=f"wp_res_d_{nov['id']}")
-
-                    wres_hours = []
-                    wres_step = 1.0
-                    with c_wres2:
-                        if wres_mode == "daily":
-                            wres_cnt = st.number_input("🔢 كم فصلاً يومياً؟", min_value=1, max_value=12, value=3, step=1, key=f"wp_res_cnt_{nov['id']}")
-                            st.caption(f"حدد ساعات النشر الجديدة ({wres_cnt} أوقات يومياً):")
-                            wres_cols = st.columns(min(int(wres_cnt), 4))
-                            def_wh = ["10:00", "14:00", "18:00", "21:30", "23:00", "01:00", "08:00", "12:00"]
-                            for wri in range(int(wres_cnt)):
-                                wrc_idx = wri % len(wres_cols)
-                                with wres_cols[wrc_idx]:
-                                    wd_str = def_wh[wri] if wri < len(def_wh) else "12:00"
-                                    wdp = wd_str.split(":")
-                                    wrt_val = st.time_input(f"وقت {wri+1}:", value=datetime.time(int(wdp[0]), int(wdp[1])), key=f"wp_res_t_{nov['id']}_{wri}")
-                                    wres_hours.append(wrt_val.strftime("%H:%M"))
-                            wres_step = round(24.0 / max(len(wres_hours), 1), 2)
-                        elif wres_mode == "interval":
-                            wres_step = st.number_input("⏱️ فصل جديد كل كم ساعة؟", min_value=0.25, value=1.0, step=0.25, key=f"wp_res_step_{nov['id']}")
-                            wrt_start = st.time_input("⏰ وقت أول فصل:", value=datetime.datetime.now(TZ_ARABIA).time().replace(second=0, microsecond=0), key=f"wp_res_tstart_{nov['id']}")
-                            wres_hours.append(wrt_start.strftime("%H:%M"))
-                        elif wres_mode == "weekly":
-                            wrw_time = st.time_input("⏰ وقت النشر الأسبوعي:", value=datetime.time(20, 0), key=f"wp_res_wtime_{nov['id']}")
-                            wres_hours.append(wrw_time.strftime("%H:%M"))
-
-                    c_wact1, c_wact2 = st.columns(2)
-                    with c_wact1:
-                        if st.button("🔄 تطبيق وإعادة جدولة جميع الفصول المتبقية في Google Sheet", key=f"wp_apply_res_{nov['id']}", type="primary", use_container_width=True):
-                            with st.spinner("⏳ جاري إعادة توزيع المواعيد وضخها في Google Sheet..."):
-                                wcnt = syndication_db.bulk_reschedule_novel_pending_chapters(
-                                    novel_name=nov["novel_name"],
-                                    freq_type=wres_mode,
-                                    times_per_day=int(wres_step) if wres_mode == "interval" else len(wres_hours),
-                                    selected_hours=wres_hours,
-                                    start_date_str=wres_date.strftime("%Y-%m-%d"),
-                                    platform="wattpad"
-                                )
-                                if wcnt > 0:
-                                    st.success(f"🎉 تم بنجاح إعادة جدولة {wcnt} فصلاً متبقياً في Google Sheet!")
-                                else:
-                                    st.info("لا توجد فصول معلقة حالياً لإعادة جدولتها.")
-                                st.rerun()
-                    with c_wact2:
-                        if st.button("🗑️ مسح كافة الفصول المجدولة لهذه الرواية", key=f"wp_clr_pend_{nov['id']}", use_container_width=True, help="يلغي كافة الفصول المعلقة من Google Sheet وقاعدة البيانات دون حذف الرواية"):
-                            syndication_db.cancel_all_pending_schedules_for_novel(nov["novel_name"])
-                            st.warning(f"تم مسح كافة الفصول المجدولة المعلقة لرواية '{nov['novel_name']}' من الشيت.")
-                            st.rerun()
-
-                    st.markdown("---")
-                    st.markdown("##### 📌 تعيين الفصول المنشورة مسبقاً (تخطي تلقائي):")
-                    c_wsk1, c_wsk2 = st.columns([2, 1])
-                    with c_wsk1:
-                        wsync_target = st.number_input("آخر فصل نُشر مسبقاً (لتخطيه وما قبله):", min_value=0, value=int(nov['last_synced_chapter']), step=1, key=f"wp_sk_inp_{nov['id']}")
-                    with c_wsk2:
-                        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                        if st.button("✅ تعيين وتخطي الفصول السابقة", key=f"wp_sk_btn_{nov['id']}", use_container_width=True):
-                            syndication_db.set_novel_last_published_chapter(nov["novel_name"], int(wsync_target), novel_id=nov["id"], platform="wattpad")
-                            nov["last_synced_chapter"] = int(wsync_target)
-                            syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success(f"تم تعيين الفصول حتى الفصل {wsync_target} كمنشورة وتخطيها تلقائياً!")
-                            st.rerun()
-
-                    st.markdown("---")
-                    st.markdown("##### ➕ جدولة دفعة فصول جديدة لهذه الرواية في Google Sheet:")
-                    wnext_suggested_start = max(nov['stop_chapter'] + 1, nov['last_synced_chapter'] + 1)
-                    wb_c1, wb_c2, wb_c3 = st.columns(3)
-                    with wb_c1:
-                        wb_start = st.number_input("من الفصل:", min_value=1, value=int(wnext_suggested_start), step=1, key=f"wp_b_start_{nov['id']}")
-                    with wb_c2:
-                        wb_stop = st.number_input("إلى الفصل:", min_value=1, value=int(wnext_suggested_start + 19), step=1, key=f"wp_b_stop_{nov['id']}")
-                    with wb_c3:
-                        wb_cnt = st.number_input("مرات النشر يومياً:", min_value=1, max_value=12, value=3, step=1, key=f"wp_b_cnt_{nov['id']}")
-                    
-                    wb_d1, wb_d2 = st.columns([1, 2])
-                    with wb_d1:
-                        wb_sdate = st.date_input("تاريخ البدء:", value=datetime.date.today(), key=f"wp_b_sdate_{nov['id']}")
-                    wb_hours = []
-                    with wb_d2:
-                        st.caption(f"ساعات النشر اليدوية ({wb_cnt} أوقات):")
-                        wb_cols_h = st.columns(min(int(wb_cnt), 4))
-                        def_hours = ["10:00", "14:00", "18:00", "21:30", "23:00", "01:00", "08:00", "12:00"]
-                        for hi in range(int(wb_cnt)):
-                            hc_idx = hi % len(wb_cols_h)
-                            with wb_cols_h[hc_idx]:
-                                def_t_str = def_hours[hi] if hi < len(def_hours) else "12:00"
-                                dh_p = def_t_str.split(":")
-                                bt_val = st.time_input(f"وقت {hi+1}:", value=datetime.time(int(dh_p[0]), int(dh_p[1])), key=f"wp_b_time_{nov['id']}_{hi}")
-                                wb_hours.append(bt_val.strftime("%H:%M"))
-                    
-                    if st.button("🚀 تثبيت الدفعة في Google Sheet", key=f"wp_b_save_btn_{nov['id']}", type="primary", use_container_width=True):
-                        if int(wb_start) > int(wb_stop):
-                            st.error("رقم بداية الفصول يجب أن يكون أقل من أو يساوي النهاية.")
-                        else:
-                            with st.spinner("⏳ جاري إضافة الفصول للشيت مع تخطي المنشور مسبقاً..."):
-                                wb_rows = syndication_db.generate_schedule_from_period_rules(
-                                    novel_name=nov['novel_name'],
-                                    start_ch=int(wb_start),
-                                    end_ch=int(wb_stop),
-                                    freq_type="daily",
-                                    times_per_day=len(wb_hours),
-                                    selected_hours=wb_hours,
-                                    start_date_str=wb_sdate.strftime("%Y-%m-%d"),
-                                    platform="wattpad",
-                                    skip_published=True
-                                )
-                                syndication_db.save_chapter_schedules_batch(nov['novel_name'], wb_rows)
-                                if int(wb_stop) > nov['stop_chapter']:
-                                    nov['stop_chapter'] = int(wb_stop)
-                                    nov['is_active'] = 1
-                                    syndication_db.save_or_update_syndicated_novel(nov)
-                                st.balloons()
-                                st.success(f"🎉 تم بنجاح إضافة {len(wb_rows)} فصلاً مجدولاً لرواية {nov['novel_name']} في Google Sheet!")
-                                st.rerun()
-
-                    st.markdown("---")
-                    st.markdown("##### 🚀 الجدولة السريعة والإيقاف المؤقت لواتباد:")
-                    c_wb1, c_wb2, c_wb3, c_wb4 = st.columns(4)
-                    now_ar = datetime.datetime.now(TZ_ARABIA)
-                    today_ar = now_ar.date()
-                    tmrw_ar = today_ar + datetime.timedelta(days=1)
-                    t_10am = datetime.datetime.combine(tmrw_ar, datetime.time(10, 0), tzinfo=TZ_ARABIA).timestamp()
-                    t_6pm = datetime.datetime.combine(tmrw_ar, datetime.time(18, 0), tzinfo=TZ_ARABIA).timestamp()
-                    t_midnight = datetime.datetime.combine(tmrw_ar, datetime.time(0, 0), tzinfo=TZ_ARABIA).timestamp()
-
-                    with c_wb1:
-                        if st.button("🚀 البدء الآن (20 فصل)", key=f"wp_quick_now_{nov['id']}", use_container_width=True):
-                            nov["interval_hours"] = 1.0
-                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
-                            nov["next_run_timestamp"] = time.time()
-                            nov["is_active"] = 1
-                            syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success(f"تم الضبط! سينطلق النشر فوراً لـ 20 فصلاً على واتباد.")
-                            st.rerun()
-                    with c_wb2:
-                        if st.button("🌅 غداً 10:00 ص (20 فصل)", key=f"wp_quick_tmrw10_{nov['id']}", use_container_width=True):
-                            nov["interval_hours"] = 1.0
-                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
-                            nov["next_run_timestamp"] = t_10am
-                            nov["is_active"] = 1
-                            syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success(f"تمت الجدولة! سيبدأ أول فصل على واتباد غداً 10:00 صباحاً.")
-                            st.rerun()
-                    with c_wb3:
-                        if st.button("🌆 غداً 06:00 م (20 فصل)", key=f"wp_quick_tmrw18_{nov['id']}", use_container_width=True):
-                            nov["interval_hours"] = 1.0
-                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
-                            nov["next_run_timestamp"] = t_6pm
-                            nov["is_active"] = 1
-                            syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success(f"تمت الجدولة! سيبدأ أول فصل على واتباد غداً 06:00 مساءً.")
-                            st.rerun()
-                    with c_wb4:
-                        if st.button("🌙 غداً 12:00 ليلاً (20 فصل)", key=f"wp_quick_tmrw00_{nov['id']}", use_container_width=True):
-                            nov["interval_hours"] = 1.0
-                            nov["stop_chapter"] = nov["last_synced_chapter"] + 20
-                            nov["next_run_timestamp"] = t_midnight
-                            nov["is_active"] = 1
-                            syndication_db.save_or_update_syndicated_novel(nov)
-                            st.success(f"تمت الجدولة! سيبدأ أول فصل على واتباد غداً 12:00 ليلاً.")
-                            st.rerun()
-
-                    if st.button("⏸️ إيقاف / استئناف النشر التلقائي لواتباد", key=f"wp_toggle_act_{nov['id']}", use_container_width=True):
-                        nov["is_active"] = 0 if nov["is_active"] else 1
-                        syndication_db.save_or_update_syndicated_novel(nov)
-                        st.info(f"تم تغيير الحالة إلى: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
                         st.rerun()
 
                     st.markdown("---")
@@ -1407,5 +926,4 @@ def render_wattpad_tab():
             if log.get("error_msg"):
                 st.caption(f"⚠️ {log['error_msg']}")
 
-    # 6. نظام الجدولة الدقيقة متعدد الفترات (Google Sheets Cloud Persistence)
-    render_advanced_period_scheduler_section(default_platform="wattpad")
+
