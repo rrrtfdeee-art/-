@@ -30,6 +30,22 @@ def run_local_api():
         cwd=os.path.dirname(os.path.abspath(__file__))
     )
 
+def run_keep_alive():
+    """Keep-Alive: يرسل طلب ويب دوري كل 8 دقائق لمنع سيرفر Render المجاني من السكون (Inactivity Spin-down)."""
+    import urllib.request
+    url = os.getenv("RENDER_EXTERNAL_URL", "https://2-yqmt.onrender.com").rstrip("/")
+    time.sleep(45)
+    print(f"[Keep-Alive] Heartbeat daemon active. Pinging {url} every 8 minutes...")
+    while True:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "NSW-KeepAlive/1.0"})
+            with urllib.request.urlopen(req, timeout=25) as response:
+                code = response.getcode()
+                print(f"[Keep-Alive] Heartbeat ping {url} -> HTTP {code}")
+        except Exception as e:
+            print(f"[Keep-Alive] Heartbeat ping warning: {e}")
+        time.sleep(480)
+
 def run_streamlit():
     """تشغيل واجهة Streamlit."""
     print("[Launcher] Starting Streamlit App on port 8501...")
@@ -46,6 +62,11 @@ if __name__ == "__main__":
     print("  NSW System Launcher v2.0")
     print("  Telegram Bot + Streamlit UI")
     print("=" * 50)
+
+    # تشغيل خيط إبقاء السيرفر حياً ومنع النوم في رندر
+    keep_alive_thread = threading.Thread(target=run_keep_alive, daemon=True, name="KeepAlive")
+    keep_alive_thread.start()
+    print("[Launcher] Keep-Alive heartbeat thread started.")
 
     # تشغيل البوت في خيط خلفي مع وسم منع الازدواجية
     os.environ["NSW_BOT_RUNNER"] = "start_py"
