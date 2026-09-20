@@ -177,22 +177,31 @@ class WattpadClient:
         else:
             formatted_content = raw_text
 
+        # تنظيف رمز التوكن المجرد
+        pure_token = self.token
+        if pure_token.lower().startswith("bearer "):
+            pure_token = pure_token[7:].strip()
+        elif pure_token.lower().startswith("token "):
+            pure_token = pure_token[6:].strip()
+
         def _build_headers():
             return {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Cookie": f"token={self.token}; wp_token={self.token};",
-                "Authorization": f"token {self.token}",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Cookie": f"token={pure_token}; wp_token={pure_token};",
+                "Authorization": f"token {pure_token}",
                 "X-Requested-With": "XMLHttpRequest",
                 "Referer": f"https://www.wattpad.com/myworks/{clean_story_id}/write/",
+                "Origin": "https://www.wattpad.com",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
             }
 
-        def _do_post():
+        def _do_post(publish_flag="1", draft_flag="0"):
             data = {
-                "groupid": clean_story_id,
+                "groupid": str(clean_story_id),
                 "title": part_title,
                 "text": formatted_content,
-                "draft": "0",
-                "publish": "1",
+                "draft": str(draft_flag),
+                "publish": str(publish_flag),
                 "language": "16",
                 "copyright": "1",
                 "category1": "4",
@@ -201,17 +210,34 @@ class WattpadClient:
                 "https://www.wattpad.com/apiv2/newstory",
                 data=data,
                 headers=_build_headers(),
-                timeout=30
+                timeout=35
             )
 
         try:
-            res = _do_post()
+            res = _do_post(publish_flag="1", draft_flag="0")
 
             # تجديد الجلسة تلقائياً عند انتهاء صلاحية التوكن
             if res.status_code in [401, 403]:
                 login_res = self.auto_login()
                 if login_res.get("success"):
-                    res = _do_post()
+                    pure_token = self.token.replace("Bearer ", "").replace("token ", "").strip()
+                    res = _do_post(publish_flag="1", draft_flag="0")
+
+            # إذا أرجع سيرفر واتباد خطأ 500 في النشر الفوري، نحاول الإنشاء كمسودة ثم نشرها
+            if res.status_code == 500:
+                logger.warning("[wattpad] 500 on direct publish, retrying draft then publish fallback...")
+                res_draft = _do_post(publish_flag="0", draft_flag="1")
+                if res_draft.status_code in [200, 201]:
+                    try:
+                        d_data = res_draft.json()
+                        p_id = d_data.get("id")
+                        if p_id:
+                            # طلب تفعيل ونشر المسودة
+                            pub_url = f"https://www.wattpad.com/apiv2/storypart/{p_id}/publish"
+                            requests.post(pub_url, headers=_build_headers(), timeout=20)
+                            res = res_draft
+                    except Exception:
+                        pass
 
             if res.status_code in [200, 201]:
                 try:

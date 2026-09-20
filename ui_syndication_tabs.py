@@ -89,9 +89,54 @@ def render_rewayat_club_tab():
                 else:
                     st.warning(f"⚠️ {chk.get('message')}")
 
-    # 2. إضافة رواية جديدة وجدولة فصولها (سلسة ومباشرة في خطوة واحدة)
+    # 2. إضافة رواية جديدة وجدولة فصولها (بالروابط فقط أو بالتخصيص الكامل)
     with st.expander("➕ إضافة رواية جديدة وجدولة فصولها في Google Sheet", expanded=True):
-        st.markdown("##### 1️⃣ البيانات الأساسية للرواية:")
+        st.markdown("##### 🔗 1️⃣ الإضافة السريعة بالروابط (رابط نادي الروايات + رابط الموقع):")
+        st.caption("أدخل الرابطين فقط واضغط 'فحص وتعبئة البيانات' ليقوم السيرفر باستنتاج اسم الرواية، المعرف، والتصنيف، وآخر فصل منشور تلقائياً!")
+
+        col_url1, col_url2 = st.columns(2)
+        with col_url1:
+            rc_quick_novel_url = st.text_input(
+                "🆔 رابط أو معرّف الرواية في نادي الروايات:",
+                placeholder="https://rewayat.club/novel/reverend-insanity أو المعرف فقط",
+                key="rc_quick_novel_url"
+            )
+        with col_url2:
+            rc_quick_blogger_url = st.text_input(
+                "🌐 رابط صفحة الرواية في الموقع (المدونة / Novelskyworld):",
+                placeholder="https://www.novelskyworld.com/p/... أو رابط بلوجر",
+                key="rc_quick_blogger_url"
+            )
+
+        col_btn_auto, col_btn_direct = st.columns([2, 2])
+        with col_btn_auto:
+            if st.button("🔍 فحص واستيراد البيانات تلقائياً", key="rc_auto_fill_btn", use_container_width=True):
+                if not rc_quick_novel_url.strip() and not rc_quick_blogger_url.strip():
+                    st.error("❌ يرجى إدخال رابط نادي الروايات أو رابط الموقع أولاً.")
+                else:
+                    with st.spinner("⏳ جاري فحص الروابط واستخراج البيانات تلقائياً..."):
+                        ins_res = syndication_extractor.inspect_novel_links(
+                            platform="rewayat_club",
+                            platform_url=rc_quick_novel_url.strip(),
+                            blogger_url=rc_quick_blogger_url.strip()
+                        )
+                        if ins_res.get("novel_name"):
+                            st.session_state["rc_uni_name"] = ins_res["novel_name"]
+                        if ins_res.get("clean_id"):
+                            st.session_state["rc_uni_id"] = ins_res["clean_id"]
+                        if ins_res.get("blogger_url"):
+                            st.session_state["rc_uni_burl"] = ins_res["blogger_url"]
+                        if ins_res.get("blogger_label"):
+                            st.session_state["rc_uni_blbl"] = ins_res["blogger_label"]
+                        if "last_chapter" in ins_res:
+                            st.session_state["rc_uni_last"] = int(ins_res["last_chapter"])
+                            st.session_state["rc_uni_start"] = 1
+                            st.session_state["rc_uni_stop"] = int(ins_res["stop_chapter"])
+                        st.success(f"✅ تم بنجاح جلب بيانات '{ins_res.get('novel_name')}'! آخر فصل منشور: {ins_res.get('last_chapter')}")
+                        st.rerun()
+
+        st.markdown("---")
+        st.markdown("##### ⚙️ 2️⃣ خيارات التخصيص والجدولة (يمكنك تعديل أي حقل بحرية):")
         rc_c1, rc_c2 = st.columns(2)
         with rc_c1:
             n_name = st.text_input("🏷️ اسم الرواية (مطلوب):", placeholder="مثال: Shadow Slave", key="rc_uni_name")
@@ -107,14 +152,14 @@ def render_rewayat_club_tab():
         
         st.info("💡 **توضيح أرقام الفصول:** 'من الفصل' و 'إلى الفصل' يحددان نطاق الفصول المراد جدولتها في الشيت. أما **'آخر فصل نُشر مسبقاً'** فهو الأهم لتحديد نقطة انطلاق النشر الفعلي: إذا وضعت فيه `23`، سيتخطى السيرفر تلقائياً كافة الفصول حتى 23 ويبدأ فوراً بنشر الفصل **24**!")
 
-        st.markdown("##### 2️⃣ معدل النشر التلقائي وموعد الانطلاق:")
+        st.markdown("##### 3️⃣ معدل النشر التلقائي وموعد الانطلاق:")
         rc_c_rate1, rc_c_rate2 = st.columns(2)
         with rc_c_rate1:
             rc_interval_val = st.number_input("⏱️ معدل النشر (ساعات بين كل فصل):", min_value=0.25, max_value=168.0, value=24.0, step=0.5, help="مثال: 24 = فصل كل يوم، 12 = فصلين يومياً، 1 = فصل كل ساعة", key="rc_uni_int")
         with rc_c_rate2:
             rc_start_now = st.radio("⏰ موعد انطلاق أول فصل:", ["start_after_interval", "start_now"], format_func=lambda x: "⏳ بعد انتهاء المعدل الزمني المحدد" if x == "start_after_interval" else "⚡ النشر فوراً عند الحفظ", key="rc_uni_start_mode")
 
-        with st.expander("⚙️ خيارات إضافية متقدمة (اختيارية)", expanded=False):
+        with st.expander("⚙️ خيارات متقدمة إضافية (رابط الموقع، التصنيف، والتعليق التحفيزي)", expanded=False):
             rc_opt1, rc_opt2 = st.columns(2)
             with rc_opt1:
                 n_blogger_url = st.text_input("🔗 رابط صفحة الرواية في المدونة (Blogger):", placeholder="https://novelskyworld.blogspot.com/p/...", key="rc_uni_burl")
@@ -124,33 +169,59 @@ def render_rewayat_club_tab():
             custom_cta = st.text_area("💬 التعليق التحفيزي الثابت لنهاية كل فصل (التوجيه لخانة الدعم):", value=cta_default, height=70, key="rc_uni_cta")
 
         if st.button("🚀 حفظ الرواية وتفعيل النشر التلقائي", key="rc_uni_save_btn", type="primary", use_container_width=True):
-            if not n_name.strip():
-                st.error("❌ يرجى إدخال اسم الرواية.")
-            elif not n_rewayat_id.strip():
+            # إذا ضغط المستخدم حفظ مباشرة مع توفر الرابط السريع فقط دون ملء يدوي، نقوم بالاستنتاج التلقائي السريع فوراً
+            target_name = n_name.strip()
+            target_id = n_rewayat_id.strip()
+            target_burl = n_blogger_url.strip()
+            target_label = n_blogger_label.strip()
+            target_last = int(n_last_ch)
+            target_start = int(n_start_ch)
+            target_stop = int(n_stop_ch)
+
+            if not target_id and rc_quick_novel_url.strip():
+                ins_res = syndication_extractor.inspect_novel_links(
+                    platform="rewayat_club",
+                    platform_url=rc_quick_novel_url.strip(),
+                    blogger_url=rc_quick_blogger_url.strip() or target_burl
+                )
+                target_id = ins_res.get("clean_id", "")
+                if not target_name:
+                    target_name = ins_res.get("novel_name", "")
+                if not target_burl:
+                    target_burl = ins_res.get("blogger_url", "")
+                if not target_label:
+                    target_label = ins_res.get("blogger_label", "")
+                if target_last == 0 and ins_res.get("last_chapter"):
+                    target_last = int(ins_res["last_chapter"])
+                    target_stop = int(ins_res["stop_chapter"])
+
+            if not target_name:
+                st.error("❌ يرجى إدخال اسم الرواية أو إدخال رابطها والضغط على 'فحص واستيراد البيانات تلقائياً'.")
+            elif not target_id:
                 st.error("❌ يرجى إدخال معرّف أو رابط الرواية في نادي الروايات.")
-            elif int(n_start_ch) > int(n_stop_ch):
+            elif target_start > target_stop:
                 st.error("❌ رقم بداية الفصول يجب أن يكون أقل من أو يساوي رقم النهاية.")
             else:
                 with st.spinner("⏳ جاري حفظ الرواية في المنظومة وGoogle Sheet..."):
-                    clean_rc_id = n_rewayat_id.strip()
+                    clean_rc_id = target_id
                     if "novel/" in clean_rc_id:
                         clean_rc_id = clean_rc_id.split("novel/")[-1].split("/")[0].strip()
 
                     first_run_ts = time.time() if rc_start_now == "start_now" else (time.time() + float(rc_interval_val) * 3600.0)
 
                     syndication_db.save_or_update_syndicated_novel({
-                        "novel_name": n_name.strip(),
-                        "blogger_url": n_blogger_url.strip(),
-                        "blogger_label": n_blogger_label.strip() or n_name.strip(),
+                        "novel_name": target_name,
+                        "blogger_url": target_burl,
+                        "blogger_label": target_label or target_name,
                         "rewayat_enabled": 1,
                         "rewayat_novel_id": clean_rc_id,
-                        "rewayat_novel_url": n_rewayat_id.strip() if "rewayat.club" in n_rewayat_id else "",
+                        "rewayat_novel_url": rc_quick_novel_url.strip() if "rewayat.club" in rc_quick_novel_url else f"https://rewayat.club/novel/{clean_rc_id}",
                         "wattpad_enabled": 0,
                         "wattpad_story_id": "",
                         "wattpad_story_url": "",
-                        "start_chapter": int(n_start_ch),
-                        "last_synced_chapter": int(n_last_ch),
-                        "stop_chapter": int(n_stop_ch),
+                        "start_chapter": target_start,
+                        "last_synced_chapter": target_last,
+                        "stop_chapter": target_stop,
                         "interval_hours": float(rc_interval_val),
                         "next_run_timestamp": float(first_run_ts),
                         "custom_cta": custom_cta.strip(),
@@ -158,7 +229,7 @@ def render_rewayat_club_tab():
                     })
 
                     st.balloons()
-                    st.success(f"🎉 تم بنجاح حفظ رواية '{n_name.strip()}' وتفعيل النشر التلقائي بمعدل فصل كل {rc_interval_val} ساعة!")
+                    st.success(f"🎉 تم بنجاح حفظ رواية '{target_name}' وتفعيل النشر التلقائي بمعدل فصل كل {rc_interval_val} ساعة!")
                     st.rerun()
 
 
@@ -647,9 +718,54 @@ def render_wattpad_tab():
                 else:
                     st.warning(f"⚠️ {w_chk.get('message')}")
 
-    # 2. إضافة قصة جديدة لواتباد وجدولة فصولها في Google Sheet
+    # 2. إضافة قصة جديدة لواتباد وجدولة فصولها في Google Sheet (بالروابط فقط أو بالتخصيص الكامل)
     with st.expander("➕ إضافة قصة جديدة وجدولة فصولها في Google Sheet", expanded=True):
-        st.markdown("##### 1️⃣ البيانات الأساسية للقصة على واتباد:")
+        st.markdown("##### 🔗 1️⃣ الإضافة السريعة بالروابط (رابط قصة واتباد + رابط الموقع):")
+        st.caption("أدخل رابط القصة في واتباد ورابطها في موقعك ليقوم السيرفر باستنتاج معرّف القصة واسم الرواية وتصنيف بلوجر وعدد الأجزاء المنشورة تلقائياً!")
+
+        col_wurl1, col_wurl2 = st.columns(2)
+        with col_wurl1:
+            wp_quick_story_url = st.text_input(
+                "🆔 رابط قصة واتباد أو المعرّف:",
+                placeholder="https://www.wattpad.com/story/365123456-shadow-slave أو رقم القصة فقط",
+                key="wp_quick_story_url"
+            )
+        with col_wurl2:
+            wp_quick_blogger_url = st.text_input(
+                "🌐 رابط صفحة الرواية في الموقع (المدونة / Novelskyworld):",
+                placeholder="https://www.novelskyworld.com/p/... أو رابط بلوجر",
+                key="wp_quick_blogger_url"
+            )
+
+        col_wbtn_auto, col_wbtn_direct = st.columns([2, 2])
+        with col_wbtn_auto:
+            if st.button("🔍 فحص واستيراد بيانات القصة تلقائياً", key="wp_auto_fill_btn", use_container_width=True):
+                if not wp_quick_story_url.strip() and not wp_quick_blogger_url.strip():
+                    st.error("❌ يرجى إدخال رابط قصة واتباد أو رابط الموقع أولاً.")
+                else:
+                    with st.spinner("⏳ جاري فحص الروابط واستخراج بيانات قصة واتباد تلقائياً..."):
+                        ins_wp = syndication_extractor.inspect_novel_links(
+                            platform="wattpad",
+                            platform_url=wp_quick_story_url.strip(),
+                            blogger_url=wp_quick_blogger_url.strip()
+                        )
+                        if ins_wp.get("novel_name"):
+                            st.session_state["wp_uni_name"] = ins_wp["novel_name"]
+                        if ins_wp.get("clean_id"):
+                            st.session_state["wp_uni_id"] = ins_wp["clean_id"]
+                        if ins_wp.get("blogger_url"):
+                            st.session_state["wp_uni_burl"] = ins_wp["blogger_url"]
+                        if ins_wp.get("blogger_label"):
+                            st.session_state["wp_uni_blbl"] = ins_wp["blogger_label"]
+                        if "last_chapter" in ins_wp:
+                            st.session_state["wp_uni_last"] = int(ins_wp["last_chapter"])
+                            st.session_state["wp_uni_start"] = 1
+                            st.session_state["wp_uni_stop"] = int(ins_wp["stop_chapter"])
+                        st.success(f"✅ تم بنجاح جلب بيانات قصة '{ins_wp.get('novel_name')}'! آخر جزء منشور: {ins_wp.get('last_chapter')}")
+                        st.rerun()
+
+        st.markdown("---")
+        st.markdown("##### ⚙️ 2️⃣ خيارات التخصيص والجدولة (يمكنك تعديل أي حقل بحرية):")
         wp_c1, wp_c2 = st.columns(2)
         with wp_c1:
             w_name = st.text_input("🏷️ اسم الرواية (مطلوب):", placeholder="مثال: Shadow Slave", key="wp_uni_name")
@@ -663,14 +779,14 @@ def render_wattpad_tab():
             with wp_ch3:
                 w_last_ch = st.number_input("آخر فصل نُشر مسبقاً:", min_value=0, value=0, step=1, help="اتركه 0 إذا كانت رواية جديدة تماماً", key="wp_uni_last")
 
-        st.markdown("##### 2️⃣ معدل النشر التلقائي وموعد الانطلاق:")
+        st.markdown("##### 3️⃣ معدل النشر التلقائي وموعد الانطلاق:")
         wp_c_rate1, wp_c_rate2 = st.columns(2)
         with wp_c_rate1:
             wp_interval_val = st.number_input("⏱️ معدل النشر (ساعات بين كل فصل):", min_value=0.25, max_value=168.0, value=24.0, step=0.5, help="مثال: 24 = فصل كل يوم، 12 = فصلين يومياً، 1 = فصل كل ساعة", key="wp_uni_int")
         with wp_c_rate2:
             wp_start_now = st.radio("⏰ موعد انطلاق أول فصل:", ["start_after_interval", "start_now"], format_func=lambda x: "⏳ بعد انتهاء المعدل الزمني المحدد" if x == "start_after_interval" else "⚡ النشر فوراً عند الحفظ", key="wp_uni_start_mode")
 
-        with st.expander("⚙️ خيارات إضافية متقدمة (اختيارية)", expanded=False):
+        with st.expander("⚙️ خيارات متقدمة إضافية (رابط الموقع، التصنيف، والتعليق التحفيزي للبايو)", expanded=False):
             wp_opt1, wp_opt2 = st.columns(2)
             with wp_opt1:
                 w_blogger_url = st.text_input("🔗 رابط صفحة الرواية في المدونة (Blogger):", placeholder="https://novelskyworld.blogspot.com/p/...", key="wp_uni_burl")
@@ -680,33 +796,59 @@ def render_wattpad_tab():
             w_custom_cta = st.text_area("💬 التعليق التحفيزي لنهاية كل فصل في واتباد (التوجيه للبايو):", value=w_cta_default, height=70, key="wp_uni_cta")
 
         if st.button("🚀 حفظ الرواية وتفعيل النشر التلقائي لواتباد", key="wp_uni_save_btn", type="primary", use_container_width=True):
-            if not w_name.strip():
-                st.error("❌ يرجى إدخال اسم الرواية.")
-            elif not w_story_id.strip():
+            target_wname = w_name.strip()
+            target_wid = w_story_id.strip()
+            target_wburl = w_blogger_url.strip()
+            target_wlabel = w_blogger_label.strip()
+            target_wlast = int(w_last_ch)
+            target_wstart = int(w_start_ch)
+            target_wstop = int(w_stop_ch)
+
+            # إذا توفر رابط واتباد السريع دون ملء يدوي، نقوم بالفحص والاستنتاج التلقائي مباشرة
+            if not target_wid and wp_quick_story_url.strip():
+                ins_wp = syndication_extractor.inspect_novel_links(
+                    platform="wattpad",
+                    platform_url=wp_quick_story_url.strip(),
+                    blogger_url=wp_quick_blogger_url.strip() or target_wburl
+                )
+                target_wid = ins_wp.get("clean_id", "")
+                if not target_wname:
+                    target_wname = ins_wp.get("novel_name", "")
+                if not target_wburl:
+                    target_wburl = ins_wp.get("blogger_url", "")
+                if not target_wlabel:
+                    target_wlabel = ins_wp.get("blogger_label", "")
+                if target_wlast == 0 and ins_wp.get("last_chapter"):
+                    target_wlast = int(ins_wp["last_chapter"])
+                    target_wstop = int(ins_wp["stop_chapter"])
+
+            if not target_wname:
+                st.error("❌ يرجى إدخال اسم الرواية أو إدخال رابط قصة واتباد والضغط على 'فحص واستيراد بيانات القصة تلقائياً'.")
+            elif not target_wid:
                 st.error("❌ يرجى إدخال معرّف قصة واتباد أو رابطها.")
-            elif int(w_start_ch) > int(w_stop_ch):
+            elif target_wstart > target_wstop:
                 st.error("❌ رقم بداية الفصول يجب أن يكون أقل من أو يساوي رقم النهاية.")
             else:
                 with st.spinner("⏳ جاري حفظ قصة واتباد في المنظومة وGoogle Sheet..."):
-                    clean_story_id = w_story_id.strip()
+                    clean_story_id = target_wid
                     if "story/" in clean_story_id:
                         clean_story_id = clean_story_id.split("story/")[-1].split("-")[0].split("/")[0].strip()
 
                     first_run_ts = time.time() if wp_start_now == "start_now" else (time.time() + float(wp_interval_val) * 3600.0)
 
                     syndication_db.save_or_update_syndicated_novel({
-                        "novel_name": w_name.strip(),
-                        "blogger_url": w_blogger_url.strip(),
-                        "blogger_label": w_blogger_label.strip() or w_name.strip(),
+                        "novel_name": target_wname,
+                        "blogger_url": target_wburl,
+                        "blogger_label": target_wlabel or target_wname,
                         "rewayat_enabled": 0,
                         "rewayat_novel_id": "",
                         "rewayat_novel_url": "",
                         "wattpad_enabled": 1,
                         "wattpad_story_id": clean_story_id,
-                        "wattpad_story_url": w_story_id.strip() if "wattpad.com" in w_story_id else "",
-                        "start_chapter": int(w_start_ch),
-                        "last_synced_chapter": int(w_last_ch),
-                        "stop_chapter": int(w_stop_ch),
+                        "wattpad_story_url": wp_quick_story_url.strip() if "wattpad.com" in wp_quick_story_url else f"https://www.wattpad.com/story/{clean_story_id}",
+                        "start_chapter": target_wstart,
+                        "last_synced_chapter": target_wlast,
+                        "stop_chapter": target_wstop,
                         "interval_hours": float(wp_interval_val),
                         "next_run_timestamp": float(first_run_ts),
                         "custom_cta": w_custom_cta.strip(),
@@ -714,7 +856,7 @@ def render_wattpad_tab():
                     })
 
                     st.balloons()
-                    st.success(f"🎉 تم بنجاح حفظ قصة '{w_name.strip()}' وتفعيل النشر التلقائي بمعدل فصل كل {wp_interval_val} ساعة!")
+                    st.success(f"🎉 تم بنجاح حفظ قصة '{target_wname}' وتفعيل النشر التلقائي بمعدل فصل كل {wp_interval_val} ساعة!")
                     st.rerun()
 
     # 3. عرض الروايات المسجلة في واتباد

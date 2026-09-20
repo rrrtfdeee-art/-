@@ -577,3 +577,166 @@ def get_available_chapters_for_novel(novel_name: str) -> list:
             chapters.append(num)
 
     return sorted(set(chapters))
+
+
+# ─────────────────────────────────────────────────────────
+# دالة الاستخراج الذكي من الروابط (نادي الروايات / واتباد + موقع المدونة)
+# ─────────────────────────────────────────────────────────
+
+def inspect_novel_links(
+    platform: str,
+    platform_url: str,
+    blogger_url: str = ""
+) -> Dict[str, Any]:
+    """
+    فحص واستخراج بيانات الرواية تلقائياً من رابط المنصة ورابط الموقع.
+    - يستخرج المعرف النظيف (slug أو story_id)
+    - يجلب الاسم العربي والإنجليزي للرواية
+    - يستخرج اسم الرواية والتصنيف من صفحة المدونة أو شيت الفهارس
+    - يستعلم عن آخر فصل منشور في المنصة تلقائياً
+    """
+    res = {
+        "success": False,
+        "novel_name": "",
+        "blogger_url": blogger_url.strip(),
+        "blogger_label": "",
+        "clean_id": "",
+        "last_chapter": 0,
+        "start_chapter": 1,
+        "stop_chapter": 100,
+        "error": None
+    }
+
+    clean_p_url = str(platform_url).strip()
+    clean_b_url = str(blogger_url).strip()
+
+    # 1. تحليل واستخراج بيانات الموقع الأصلي (المدونة / Novelskyworld)
+    site_title = ""
+    if clean_b_url:
+        try:
+            # محاولة قراءة الصفحة للحصول على العنوان
+            resp_site = requests.get(
+                clean_b_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+                timeout=10
+            )
+            if resp_site.status_code == 200:
+                m_title = re.search(r'<title>(.*?)</title>', resp_site.text, re.IGNORECASE)
+                if m_title:
+                    raw_t = m_title.group(1).strip()
+                    # تنظيف العنوان من لاحقات المدونة الشائعة
+                    for suffix in ["- عالم سماء الروايات", "| عالم سماء الروايات", "- Novelskyworld", "| Novelskyworld", "عالم سماء الروايات"]:
+                        raw_t = raw_t.replace(suffix, "").strip()
+                    site_title = raw_t.strip(" -|:")
+        except Exception as e_site:
+            logger.warning(f"[inspect_novel_links] تعذر جلب عنوان صفحة المدونة: {e_site}")
+
+        # محاولة مطابقة الرابط مع شيت الفهارس (1s-yf1g...) للحصول على الاسم الرسمي
+        try:
+            idx_rows = _fetch_sheet_csv("1s-yf1gRHagPIeikEC9_aVIAst7oDaiwoNzLH-hd0Q24")
+            for r in idx_rows[1:]:
+                if len(r) >= 3:
+                    sheet_name = str(r[0]).strip()
+                    sheet_link = str(r[2]).strip()
+                    if clean_b_url.rstrip("/?") in sheet_link or sheet_link.rstrip("/?") in clean_b_url:
+                        if sheet_name:
+                            site_title = sheet_name
+                            break
+        except Exception as e_idx:
+            logger.warning(f"[inspect_novel_links] تعذر فحص شيت الفهارس: {e_idx}")
+
+    # 2. معالجة منصة نادي الروايات (Rewayat Club)
+    if platform == "rewayat_club":
+        clean_slug = clean_p_url
+        if "rewayat.club/novel/" in clean_slug:
+            clean_slug = clean_slug.split("rewayat.club/novel/")[-1].split("/")[0].split("?")[0].strip()
+        elif "novel/" in clean_slug:
+            clean_slug = clean_slug.split("novel/")[-1].split("/")[0].split("?")[0].strip()
+        else:
+            clean_slug = clean_slug.strip().rstrip("/")
+
+        res["clean_id"] = clean_slug
+
+        # جلب بيانات الرواية من API نادي الروايات
+        api_novel_name = ""
+        if clean_slug:
+            try:
+                api_url = f"https://api.rewayat.club/api/novels/{clean_slug}/"
+                api_resp = requests.get(api_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                if api_resp.status_code == 200:
+                    nov_data = api_resp.json()
+                    arabic_name = (nov_data.get("arabic") or "").strip()
+                    english_name = (nov_data.get("english") or "").strip()
+                    api_novel_name = arabic_name or english_name
+            except Exception as e_api:
+                logger.warning(f"[inspect_novel_links] تعذر جلب بيانات الرواية من API نادي الروايات: {e_api}")
+
+        # اعتماد أفضل اسم متاح للرواية
+        chosen_name = site_title or api_novel_name or clean_slug
+        res["novel_name"] = chosen_name
+        res["blogger_label"] = site_title or api_novel_name or chosen_name
+
+        # فحص آخر فصل منشور على نادي الروايات
+        try:
+            import rewayat_club_api
+            rc_client = rewayat_club_api.RewayatClubClient()
+            latest_ch = rc_client.get_latest_chapter_number(clean_slug)
+            if latest_ch and latest_ch > 0:
+                res["last_chapter"] = latest_ch
+                res["start_chapter"] = 1
+                res["stop_chapter"] = max(latest_ch + 50, 100)
+            else:
+                res["last_chapter"] = 0
+                res["start_chapter"] = 1
+                res["stop_chapter"] = 50
+        except Exception as e_rc:
+            logger.warning(f"[inspect_novel_links] تعذر استعلام آخر فصل في نادي الروايات: {e_rc}")
+
+        res["success"] = bool(clean_slug)
+
+    # 3. معالجة منصة واتباد (Wattpad)
+    elif platform == "wattpad":
+        clean_story_id = clean_p_url
+        story_slug = ""
+        if "wattpad.com/story/" in clean_story_id:
+            part = clean_story_id.split("wattpad.com/story/")[-1].split("?")[0].strip()
+            # قد يكون الشكل: 365123456-shadow-slave-arabic
+            m_wp = re.match(r"^(\d+)(?:-(.*))?", part)
+            if m_wp:
+                clean_story_id = m_wp.group(1)
+                story_slug = (m_wp.group(2) or "").replace("-", " ").strip()
+            else:
+                clean_story_id = part.split("-")[0].split("/")[0].strip()
+        else:
+            # إذا أدخل المستخدم معرف رقمي أو نصي فقط
+            m_num = re.search(r"(\d{6,})", clean_story_id)
+            if m_num:
+                clean_story_id = m_num.group(1)
+
+        res["clean_id"] = clean_story_id
+
+        chosen_name = site_title or story_slug or (f"قصة واتباد {clean_story_id}" if clean_story_id else "")
+        res["novel_name"] = chosen_name
+        res["blogger_label"] = site_title or story_slug or chosen_name
+
+        # فحص آخر فصل منشور على قصة واتباد
+        if clean_story_id:
+            try:
+                import wattpad_poster
+                wp_client = wattpad_poster.WattpadClient()
+                wp_latest = wp_client.get_latest_chapter_number(clean_story_id)
+                if wp_latest and wp_latest > 0:
+                    res["last_chapter"] = wp_latest
+                    res["start_chapter"] = 1
+                    res["stop_chapter"] = max(wp_latest + 30, 50)
+                else:
+                    res["last_chapter"] = 0
+                    res["start_chapter"] = 1
+                    res["stop_chapter"] = 30
+            except Exception as e_wp:
+                logger.warning(f"[inspect_novel_links] تعذر استعلام فصول واتباد: {e_wp}")
+
+        res["success"] = bool(clean_story_id)
+
+    return res
+
