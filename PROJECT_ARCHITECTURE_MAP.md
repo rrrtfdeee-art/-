@@ -257,6 +257,12 @@
   - الاستعلام المباشر عبر GViz من شيت المنشورات العام (`1IFT9mKRFByiPhph-ZaSdUT7c6IPUWpLg6Gj2xa9g5mY`).
   - ملء حقلي الفصل السابق ($N-1$) والفصل التالي ($N+1$) تلقائياً مع مؤشرات الحالة التفاعلية لتسهيل التعديل اليدوي.
 
+### د) نظام التوزيع الخارجي ونوافذ التوقيت الدقيقة (`syndication_db.py`, `syndication_daemon.py`, `ui_syndication_tabs.py`):
+* `render_chapter_time_windows_selector(key_prefix, default_times, next_chap_num, default_interval)`:
+  - واجهة تفاعلية لتحديد وقت نشر الفصول بالساعة والدقيقة (`HH:MM` بتوقيت السعودية/بغداد `UTC+3`)، مع إمكانية اختيار عدد نوافذ الفصول (1 أو 2 أو 3 وحتى 12 فصلاً) وتخصيص نافذة إدخال مستقلة لكل فصل، أو اختيار النشر بفاصل ساعات ثابت.
+* `compute_sequential_slot_timestamps(selected_hours, count, start_after_ts)` و `get_next_daily_slot_timestamp(selected_hours, after_ts)`:
+  - حساب طوابع التوقيت الزمنية (`Unix Timestamps`) المتسلسلة للفصول القادمة بناءً على نوافذ الساعات والدقائق المحددة لكل فصل، وحفظها في عمود `daily_times` بقاعدة البيانات المحلية وشيت `SyndicatedNovels` وفي جدول `scheduled_chapters`.
+
 ---
 
 ## 12. 🏆 سجل إنجازات واكتمال الروايات الرسمية (Production Novels Milestone Record)

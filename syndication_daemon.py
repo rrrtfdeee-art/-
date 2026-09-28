@@ -51,7 +51,12 @@ def process_scheduled_chapters_cycle(now: float):
             plat_target = item.get("platform", "all")
 
             all_novs = syndication_db.get_all_syndicated_novels()
-            nov = next((n for n in all_novs if n["novel_name"] == n_name), None)
+            if plat_target == "wattpad":
+                nov = next((n for n in all_novs if n["novel_name"] == n_name and n.get("wattpad_enabled") == 1), None)
+            elif plat_target == "rewayat_club":
+                nov = next((n for n in all_novs if n["novel_name"] == n_name and n.get("rewayat_enabled") == 1), None)
+            else:
+                nov = next((n for n in all_novs if n["novel_name"] == n_name), None)
             if not nov:
                 continue
 
@@ -141,7 +146,23 @@ def process_scheduled_chapters_cycle(now: float):
                 )
                 if target_ch > (nov.get("last_synced_chapter") or 0):
                     nov["last_synced_chapter"] = target_ch
-                    syndication_db.save_or_update_syndicated_novel(nov)
+                # تحديث موعد الفصل القادم في سجل الرواية ليطابق جدول المواعيد أو الساعات اليومية المحددة
+                try:
+                    import json as _json
+                    rem_pending = [
+                        p for p in syndication_db.get_scheduled_chapters(novel_name=n_name, status="PENDING", limit=50)
+                        if p.get("chapter_num", 0) > target_ch and p.get("platform", "all") in ("all", plat_target)
+                    ]
+                    if rem_pending:
+                        nov["next_run_timestamp"] = float(rem_pending[0]["scheduled_timestamp"])
+                    elif nov.get("daily_times"):
+                        d_list = _json.loads(nov["daily_times"]) if isinstance(nov["daily_times"], str) else nov["daily_times"]
+                        nov["next_run_timestamp"] = syndication_db.get_next_daily_slot_timestamp(d_list, after_ts=time.time())
+                    else:
+                        nov["next_run_timestamp"] = time.time() + max(0.1, float(nov.get("interval_hours", 12.0))) * 3600.0
+                except Exception:
+                    pass
+                syndication_db.save_or_update_syndicated_novel(nov)
 
                 logger.info(f"🚀 Published scheduled chapter {target_ch} for {n_name} successfully!")
 
@@ -350,14 +371,25 @@ def run_syndication_cycle():
             # 5. إذا تم النشر بنجاح على منصة واحدة على الأقل
             if success_rc or success_wp:
                 nov["last_synced_chapter"] = target_ch
-                base_hours = max(0.1, float(nov.get("interval_hours", 1.0)))
-                # تشتيت زمني عشوائي بشري (Jitter من -8 إلى +15 دقيقة) لكسر أي نمط آلي ثابت
-                jitter_secs = random.randint(-480, 900)
-                interval_secs = max(300, int(base_hours * 3600) + jitter_secs)
-                nov["next_run_timestamp"] = time.time() + interval_secs
+                daily_list = []
+                if nov.get("daily_times"):
+                    try:
+                        import json as _json
+                        daily_list = _json.loads(nov["daily_times"]) if isinstance(nov["daily_times"], str) else nov["daily_times"]
+                    except Exception:
+                        daily_list = []
+                if daily_list:
+                    nov["next_run_timestamp"] = syndication_db.get_next_daily_slot_timestamp(daily_list, after_ts=time.time())
+                    interval_secs = max(60, int(nov["next_run_timestamp"] - time.time()))
+                else:
+                    base_hours = max(0.1, float(nov.get("interval_hours", 1.0)))
+                    # تشتيت زمني عشوائي بشري (Jitter من -8 إلى +15 دقيقة) لكسر أي نمط آلي ثابت
+                    jitter_secs = random.randint(-480, 900)
+                    interval_secs = max(300, int(base_hours * 3600) + jitter_secs)
+                    nov["next_run_timestamp"] = time.time() + interval_secs
                 syndication_db.save_or_update_syndicated_novel(nov)
                 next_diff_m = interval_secs / 60.0
-                logger.info(f"Published Ch.{target_ch} for {nov['novel_name']}. Next in {next_diff_m:.1f} mins (with anti-bot jitter)")
+                logger.info(f"Published Ch.{target_ch} for {nov['novel_name']}. Next in {next_diff_m:.1f} mins")
 
                 # إرسال إشعار تليجرام فوري للمشرف (إذا كان فصلاً جديداً)
                 is_already = (success_rc and rc_res.get("already_exists")) or (success_wp and wp_res.get("already_exists"))

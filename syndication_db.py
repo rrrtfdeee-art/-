@@ -61,12 +61,17 @@ def init_syndication_tables():
         interval_hours REAL DEFAULT 12.0,
         next_run_timestamp REAL DEFAULT 0.0,
         
-        -- التعليق التحفيزي
+        -- التعليق التحفيزي وأوقات النشر اليومية بالساعة والدقيقة
         custom_cta TEXT,
+        daily_times TEXT DEFAULT '',
         is_active INTEGER DEFAULT 1,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    try:
+        cur.execute("ALTER TABLE syndicated_novels ADD COLUMN daily_times TEXT DEFAULT ''")
+    except Exception:
+        pass
     
     # 3. سجل الفصول المنشورة لتفادي أي تكرار
     cur.execute("""
@@ -212,6 +217,7 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
     
     novel_id = data.get("id")
     data.setdefault("next_run_timestamp", 0.0)
+    data.setdefault("daily_times", "")
     if novel_id:
         # تحديث
         cur.execute("""
@@ -231,6 +237,7 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
             interval_hours = :interval_hours,
             next_run_timestamp = :next_run_timestamp,
             custom_cta = :custom_cta,
+            daily_times = :daily_times,
             is_active = :is_active
         WHERE id = :id
         """, data)
@@ -243,13 +250,13 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
             rewayat_enabled, rewayat_novel_id, rewayat_novel_url,
             wattpad_enabled, wattpad_story_id, wattpad_story_url,
             start_chapter, last_synced_chapter, stop_chapter,
-            interval_hours, next_run_timestamp, custom_cta, is_active
+            interval_hours, next_run_timestamp, custom_cta, daily_times, is_active
         ) VALUES (
             :novel_name, :blogger_url, :blogger_label,
             :rewayat_enabled, :rewayat_novel_id, :rewayat_novel_url,
             :wattpad_enabled, :wattpad_story_id, :wattpad_story_url,
             :start_chapter, :last_synced_chapter, :stop_chapter,
-            :interval_hours, :next_run_timestamp, :custom_cta, :is_active
+            :interval_hours, :next_run_timestamp, :custom_cta, :daily_times, :is_active
         )
         """, data)
         res_id = cur.lastrowid
@@ -425,7 +432,8 @@ NOVELS_HEADERS = [
     "rewayat_enabled", "rewayat_novel_id", "rewayat_novel_url",
     "wattpad_enabled", "wattpad_story_id", "wattpad_story_url",
     "start_chapter", "last_synced_chapter", "stop_chapter",
-    "interval_hours", "next_run_timestamp", "custom_cta", "is_active"
+    "interval_hours", "next_run_timestamp", "custom_cta", "is_active",
+    "daily_times"
 ]
 
 def ensure_novels_tab_exists(service=None, spreadsheet_id: Optional[str] = None) -> str:
@@ -442,11 +450,11 @@ def ensure_novels_tab_exists(service=None, spreadsheet_id: Optional[str] = None)
             srv.spreadsheets().batchUpdate(spreadsheetId=ssid, body=body).execute()
             logger.info(f"Created tab '{NOVELS_TAB_NAME}' in Google Sheet")
         
-        check_head = srv.spreadsheets().values().get(spreadsheetId=ssid, range=f"{NOVELS_TAB_NAME}!A1:P1").execute().get("values", [])
-        if not check_head or not check_head[0]:
+        check_head = srv.spreadsheets().values().get(spreadsheetId=ssid, range=f"{NOVELS_TAB_NAME}!A1:Q1").execute().get("values", [])
+        if not check_head or not check_head[0] or len(check_head[0]) < len(NOVELS_HEADERS):
             srv.spreadsheets().values().update(
                 spreadsheetId=ssid,
-                range=f"{NOVELS_TAB_NAME}!A1:P1",
+                range=f"{NOVELS_TAB_NAME}!A1:Q1",
                 valueInputOption="RAW",
                 body={"values": [NOVELS_HEADERS]}
             ).execute()
@@ -470,7 +478,7 @@ def sync_novels_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, An
             ensure_novels_tab_exists(service, ssid)
             res = service.spreadsheets().values().get(
                 spreadsheetId=ssid,
-                range=f"{NOVELS_TAB_NAME}!A2:P"
+                range=f"{NOVELS_TAB_NAME}!A2:Q"
             ).execute()
             rows = res.get("values", [])
         except Exception as ex_api:
@@ -542,6 +550,7 @@ def sync_novels_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, An
             is_active = int(float(str(r[15]).strip() or "1")) if len(r) > 15 else 1
         except Exception:
             is_active = 1
+        daily_times = str(r[16]).strip() if len(r) > 16 else ""
             
         # فحص هل الرواية موجودة بالفعل — المطابقة الصارمة بالمعرف + الاسم لمنع التداخل بين سجلات نفس الرواية على منصات مختلفة
         existing = None
@@ -551,11 +560,6 @@ def sync_novels_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, An
         if not existing and w_id:
             cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND wattpad_story_id = ?", (n_name, w_id))
             existing = cur.fetchone()
-        # تعطيل الفرع الاحتياطي بالاسم فقط لأنه يسبب تداخل سجلات المنصات المختلفة
-        # (مثال: After Severing Ties لها سجلان منفصلان — أحدهما لنادي الروايات والآخر لواتباد)
-        # if not existing and not r_id and not w_id:
-        #     cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ?", (n_name,))
-        #     existing = cur.fetchone()
         
         if existing:
             cur.execute("""
@@ -564,12 +568,12 @@ def sync_novels_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, An
                 rewayat_enabled = ?, rewayat_novel_id = ?, rewayat_novel_url = ?,
                 wattpad_enabled = ?, wattpad_story_id = ?, wattpad_story_url = ?,
                 start_chapter = ?, last_synced_chapter = ?, stop_chapter = ?,
-                interval_hours = ?, next_run_timestamp = ?, custom_cta = ?, is_active = ?
+                interval_hours = ?, next_run_timestamp = ?, custom_cta = ?, daily_times = ?, is_active = ?
             WHERE id = ?
             """, (
                 b_url, b_label, r_enabled, r_id, r_url,
                 w_enabled, w_id, w_url, start_ch, last_ch, stop_ch,
-                interval_h, next_run, custom_cta, is_active, existing["id"]
+                interval_h, next_run, custom_cta, daily_times, is_active, existing["id"]
             ))
         else:
             cur.execute("""
@@ -578,12 +582,12 @@ def sync_novels_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, An
                 rewayat_enabled, rewayat_novel_id, rewayat_novel_url,
                 wattpad_enabled, wattpad_story_id, wattpad_story_url,
                 start_chapter, last_synced_chapter, stop_chapter,
-                interval_hours, next_run_timestamp, custom_cta, is_active
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                interval_hours, next_run_timestamp, custom_cta, daily_times, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 n_name, b_url, b_label, r_enabled, r_id, r_url,
                 w_enabled, w_id, w_url, start_ch, last_ch, stop_ch,
-                interval_h, next_run, custom_cta, is_active
+                interval_h, next_run, custom_cta, daily_times, is_active
             ))
         restored += 1
         
@@ -607,10 +611,10 @@ def sync_novel_to_sheet(novel_dict: Dict[str, Any], spreadsheet_id: Optional[str
         r_id = str(novel_dict.get("rewayat_novel_id", "")).strip()
         w_id = str(novel_dict.get("wattpad_story_id", "")).strip()
         
-        # قراءة الصفوف الحالية لمعرفة موقع السطر — نقرأ النطاق الكامل A:P لضمان توفر جميع المعرفات (rewayat_novel_id, wattpad_story_id)
+        # قراءة الصفوف الحالية لمعرفة موقع السطر — نقرأ النطاق الكامل A:Q لضمان توفر جميع المعرفات
         res = service.spreadsheets().values().get(
             spreadsheetId=ssid,
-            range=f"{NOVELS_TAB_NAME}!A:P"
+            range=f"{NOVELS_TAB_NAME}!A:Q"
         ).execute()
         sheet_rows = res.get("values", [])
         
@@ -649,20 +653,21 @@ def sync_novel_to_sheet(novel_dict: Dict[str, Any], spreadsheet_id: Optional[str
             float(novel_dict.get("interval_hours", 12.0)),
             float(novel_dict.get("next_run_timestamp", 0.0)),
             str(novel_dict.get("custom_cta", "")),
-            int(novel_dict.get("is_active", 1))
+            int(novel_dict.get("is_active", 1)),
+            str(novel_dict.get("daily_times", ""))
         ]
         
         if row_idx:
             service.spreadsheets().values().update(
                 spreadsheetId=ssid,
-                range=f"{NOVELS_TAB_NAME}!A{row_idx}:P{row_idx}",
+                range=f"{NOVELS_TAB_NAME}!A{row_idx}:Q{row_idx}",
                 valueInputOption="USER_ENTERED",
                 body={"values": [row_vals]}
             ).execute()
         else:
             service.spreadsheets().values().append(
                 spreadsheetId=ssid,
-                range=f"{NOVELS_TAB_NAME}!A:P",
+                range=f"{NOVELS_TAB_NAME}!A:Q",
                 valueInputOption="USER_ENTERED",
                 insertDataOption="INSERT_ROWS",
                 body={"values": [row_vals]}
@@ -1268,6 +1273,70 @@ def delete_period_rule(rule_id: int):
     conn.commit()
     conn.close()
 
+def compute_sequential_slot_timestamps(
+    selected_hours: List[str],
+    count: int,
+    start_after_ts: Optional[float] = None
+) -> List[float]:
+    """
+    حساب التوقيتات الزمنية المتسلسلة (Timestamps) لعدد `count` من الفصول
+    بناءً على نوافذ الساعات والدقائق المحددة (مثل ['14:30', '20:15']) بتوقيت مكة/العراق (UTC+3)،
+    بحيث يكون كل موعد في المستقبل ومرتباً تسلسلياً حسب نوافذ الإدخال.
+    """
+    valid_hours = []
+    for h in (selected_hours or ["12:00"]):
+        h_clean = str(h).strip()
+        if ":" in h_clean:
+            valid_hours.append(h_clean)
+    if not valid_hours:
+        valid_hours = ["12:00"]
+
+    base_ts = start_after_ts if start_after_ts is not None else time.time()
+    ref_dt = datetime.datetime.fromtimestamp(base_ts, tz=TZ_ARABIA)
+    timestamps = []
+    for i in range(max(0, int(count))):
+        h_str, m_str = valid_hours[i % len(valid_hours)].split(":")[:2]
+        target_time = datetime.time(int(h_str), int(m_str))
+        cand_dt = datetime.datetime.combine(ref_dt.date(), target_time, tzinfo=TZ_ARABIA)
+        while cand_dt <= ref_dt:
+            cand_dt += datetime.timedelta(days=1)
+        timestamps.append(cand_dt.timestamp())
+        ref_dt = cand_dt
+    return timestamps
+
+
+def get_next_daily_slot_timestamp(
+    selected_hours: List[str],
+    after_ts: Optional[float] = None
+) -> float:
+    """
+    إرجاع أقرب موعد قادم في المستقبل من قائمة الساعات اليومية المحددة (بتوقيت UTC+3).
+    """
+    valid_hours = []
+    for h in (selected_hours or ["12:00"]):
+        h_clean = str(h).strip()
+        if ":" in h_clean:
+            valid_hours.append(h_clean)
+    if not valid_hours:
+        return (after_ts or time.time()) + 3600.0
+
+    base_ts = (after_ts if after_ts is not None else time.time()) + 30.0
+    now_ar = datetime.datetime.fromtimestamp(base_ts, tz=TZ_ARABIA)
+    today = now_ar.date()
+    candidates = []
+    for day_offset in (0, 1, 2):
+        chk_date = today + datetime.timedelta(days=day_offset)
+        for hm in valid_hours:
+            try:
+                h_str, m_str = hm.split(":")[:2]
+                dt = datetime.datetime.combine(chk_date, datetime.time(int(h_str), int(m_str)), tzinfo=TZ_ARABIA)
+                if dt.timestamp() > base_ts:
+                    candidates.append(dt.timestamp())
+            except Exception:
+                pass
+    return min(candidates) if candidates else (base_ts + 3600.0)
+
+
 def generate_schedule_from_period_rules(
     novel_name: str,
     start_ch: int,
@@ -1300,17 +1369,28 @@ def generate_schedule_from_period_rules(
             valid_hours.append(h_clean)
     if not valid_hours:
         valid_hours = ["12:00"]
-    valid_hours = sorted(valid_hours)
 
     published_chaps = set()
     if skip_published and novel_name:
         try:
             conn = _get_conn()
             cur = conn.cursor()
-            cur.execute("SELECT chapter_num FROM syndicated_chapter_schedules WHERE novel_name = ? AND status = 'PUBLISHED'", (novel_name,))
+            if platform in ("rewayat_club", "wattpad"):
+                cur.execute(
+                    "SELECT chapter_num FROM syndicated_chapter_schedules WHERE novel_name = ? AND status = 'PUBLISHED' AND platform IN ('all', ?)",
+                    (novel_name, platform)
+                )
+            else:
+                cur.execute("SELECT chapter_num FROM syndicated_chapter_schedules WHERE novel_name = ? AND status = 'PUBLISHED'", (novel_name,))
             for pr in cur.fetchall():
                 published_chaps.add(int(pr["chapter_num"]))
-            cur.execute("SELECT last_synced_chapter FROM syndicated_novels WHERE novel_name = ?", (novel_name,))
+
+            if platform == "rewayat_club":
+                cur.execute("SELECT last_synced_chapter FROM syndicated_novels WHERE novel_name = ? AND rewayat_enabled = 1", (novel_name,))
+            elif platform == "wattpad":
+                cur.execute("SELECT last_synced_chapter FROM syndicated_novels WHERE novel_name = ? AND wattpad_enabled = 1", (novel_name,))
+            else:
+                cur.execute("SELECT last_synced_chapter FROM syndicated_novels WHERE novel_name = ?", (novel_name,))
             nov_r = cur.fetchone()
             if nov_r and nov_r["last_synced_chapter"]:
                 for c in range(1, int(nov_r["last_synced_chapter"]) + 1):
@@ -1320,26 +1400,23 @@ def generate_schedule_from_period_rules(
             pass
 
     if freq_type == "daily":
-        hour_idx = 0
-        while ch <= end_val:
-            if ch in published_chaps:
-                ch += 1
-                continue
-            h_str, m_str = valid_hours[hour_idx].split(":")
-            dt = datetime.datetime.combine(cur_date, datetime.time(int(h_str), int(m_str)), tzinfo=TZ_ARABIA)
+        chaps_to_sched = [c for c in range(ch, end_val + 1) if c not in published_chaps]
+        now_today = datetime.datetime.now(TZ_ARABIA).date()
+        if cur_date <= now_today:
+            start_base_ts = time.time()
+        else:
+            start_base_ts = datetime.datetime.combine(cur_date, datetime.time(0, 0), tzinfo=TZ_ARABIA).timestamp() - 60.0
+        slot_timestamps = compute_sequential_slot_timestamps(valid_hours, len(chaps_to_sched), start_after_ts=start_base_ts)
+        for c_num, ts_val in zip(chaps_to_sched, slot_timestamps):
+            dt = datetime.datetime.fromtimestamp(ts_val, tz=TZ_ARABIA)
             res.append({
-                "chapter_num": ch,
+                "chapter_num": c_num,
                 "scheduled_time": dt.strftime("%Y-%m-%d %H:%M"),
-                "scheduled_timestamp": dt.timestamp(),
+                "scheduled_timestamp": ts_val,
                 "status": "PENDING",
                 "platform": platform,
                 "period_range": p_tag
             })
-            ch += 1
-            hour_idx += 1
-            if hour_idx >= len(valid_hours):
-                hour_idx = 0
-                cur_date += datetime.timedelta(days=1)
 
     elif freq_type == "weekly":
         h_str, m_str = valid_hours[0].split(":")
