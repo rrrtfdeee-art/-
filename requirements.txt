@@ -1,6 +1,8 @@
 # ==============================================================================
-# NSW Publisher & Telegram Bot Service - Minimal Requirements (<80MB RAM)
+# NSW Publisher & Telegram Bot Service - Minimal Requirements
+# Pure Publisher (No Playwright, No Chromium)
 # ==============================================================================
+streamlit>=1.30.0
 requests>=2.31.0
 pyTelegramBotAPI>=4.20.0
 beautifulsoup4>=4.12.0
@@ -8,3 +10,5 @@ google-api-python-client>=2.100.0
 google-auth>=2.20.0
 pydantic>=2.7.0
 urllib3>=2.2.0
+supabase>=2.0.0
+postgrest>=0.16.0
