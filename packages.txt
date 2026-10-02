@@ -1,3 +1,1 @@
-chromium
-chromium-driver
-ffmpeg
+# Lightweight packages only (No Chromium)
