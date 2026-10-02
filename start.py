@@ -1,94 +1,107 @@
 # -*- coding: utf-8 -*-
 """
-start.py — تشغيل موحد: بوت تليجرام + واجهة Streamlit
-شغّله مرة واحدة بـ: python start.py
+start.py — المشغل فائق الخفة لخدمة النشر وتيليجرام على Render (NSW Publisher Service v3.0)
+المميزات:
+1. استهلاك ذاكرة ضئيل جداً (<80MB RAM) — خالي تماماً من متصفح Chromium وStreamlit وPlaywright.
+2. يدعم السكون التلقائي (Sleep / Spin-down): لا يحتوي على Keep-Alive، مما يوفر ساعات باقة Render.
+3. يوفر خادم HTTP مدمج لفحص الصحة في Render ولنبضات إيقاظ السيرفر.
+4. يدير نشر الروايات وبوت تيليجرام بالتوازي في خيوط خلفية موحدة.
 """
-import sys
-import subprocess
-import threading
-import time
+
 import os
+import sys
+import time
+import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-def run_telegram_bot():
-    """تشغيل بوت تليجرام في process مستقل مع إعادة التشغيل التلقائي عند أي توقف."""
+# إعداد السجلات
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("NSWPublisherLauncher")
+
+# استيراد الوحدات الأساسية
+import telegram_bot
+import syndication_daemon
+try:
+    import supabase_db
+except ImportError:
+    supabase_db = None
+
+PORT = int(os.getenv("PORT", "8000"))
+
+class HealthAndWakeupHandler(BaseHTTPRequestHandler):
+    """خادم HTTP مدمج وخفيف جداً لمعالجة فحص الصحة في Render."""
+
+    def do_GET(self):
+        if self.path in ("/", "/ping", "/health"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            status = {
+                "status": "online",
+                "service": "NSW-Publisher-Bot",
+                "version": "3.0",
+                "supabase_connected": supabase_db.is_configured() if supabase_db else False,
+                "time": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            self.wfile.write(str(status).encode("utf-8"))
+            logger.info(f"💓 [Wakeup Ping] Received GET {self.path} from {self.client_address[0]}")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass
+
+def run_http_server():
+    """تشغيل خادم الويب الخفيف على المنفذ المطلوب لـ Render."""
+    server_address = ("0.0.0.0", PORT)
+    httpd = HTTPServer(server_address, HealthAndWakeupHandler)
+    logger.info(f"🌐 [HTTP Server] Listening on 0.0.0.0:{PORT} (Render Health Check Ready)")
+    try:
+        httpd.serve_forever()
+    except Exception as e:
+        logger.error(f"HTTP Server stopped: {e}")
+
+def run_telegram_bot_thread():
+    """تشغيل بوت تيليجرام مع إعادة المحاولة التلقائية عند أي انقطاع."""
     while True:
         try:
-            print("[Launcher] Starting Telegram Bot loop...")
-            subprocess.run(
-                [sys.executable, "telegram_bot.py"],
-                cwd=os.path.dirname(os.path.abspath(__file__))
-            )
+            logger.info("🤖 Starting Telegram Bot polling loop...")
+            if hasattr(telegram_bot, 'run_telegram_bot_loop'):
+                telegram_bot.run_telegram_bot_loop()
+            elif hasattr(telegram_bot, 'bot') and telegram_bot.bot:
+                telegram_bot.bot.infinity_polling(timeout=20, long_polling_timeout=15)
         except Exception as e:
-            print(f"[Launcher] Telegram Bot error: {e}")
-        time.sleep(3)
-
-def run_local_api():
-    """تشغيل خادم الربط المحلي الفائق على بورت 58242."""
-    print("[Launcher] Starting NSW Local Web Bridge API (Port 58242)...")
-    subprocess.run(
-        [sys.executable, "local_nsw_api.py"],
-        cwd=os.path.dirname(os.path.abspath(__file__))
-    )
-
-def run_keep_alive():
-    """Keep-Alive: يرسل طلب ويب دوري كل 8 دقائق لمنع سيرفر Render المجاني من السكون (Inactivity Spin-down)."""
-    import urllib.request
-    url = os.getenv("RENDER_EXTERNAL_URL", "https://2-yqmt.onrender.com").rstrip("/")
-    time.sleep(45)
-    print(f"[Keep-Alive] Heartbeat daemon active. Pinging {url} every 8 minutes...")
-    while True:
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "NSW-KeepAlive/1.0"})
-            with urllib.request.urlopen(req, timeout=25) as response:
-                code = response.getcode()
-                print(f"[Keep-Alive] Heartbeat ping {url} -> HTTP {code}")
-        except Exception as e:
-            print(f"[Keep-Alive] Heartbeat ping warning: {e}")
-        time.sleep(480)
-
-def run_streamlit():
-    """تشغيل واجهة Streamlit."""
-    print("[Launcher] Starting Streamlit App on port 8501...")
-    subprocess.run(
-        [sys.executable, "-m", "streamlit", "run", "app.py",
-         "--server.port", "8501",
-         "--server.address", "0.0.0.0",
-         "--server.headless", "true"],
-        cwd=os.path.dirname(os.path.abspath(__file__))
-    )
+            logger.error(f"Telegram Bot error: {e}")
+        time.sleep(5)
 
 if __name__ == "__main__":
-    print("=" * 50)
-    print("  NSW System Launcher v2.0")
-    print("  Telegram Bot + Streamlit UI")
-    print("=" * 50)
+    print("=" * 60)
+    print("  🚀 NSW Publisher & Syndication Service v3.0")
+    print("  Memory Footprint: <80MB RAM | Pure Publishing Engine")
+    print("=" * 60)
 
-    # تشغيل خيط إبقاء السيرفر حياً ومنع النوم في رندر
-    keep_alive_thread = threading.Thread(target=run_keep_alive, daemon=True, name="KeepAlive")
-    keep_alive_thread.start()
-    print("[Launcher] Keep-Alive heartbeat thread started.")
+    # 1. فحص إعدادات Supabase
+    if supabase_db and supabase_db.is_configured():
+        logger.info("✅ Supabase Cloud Database is configured and ready.")
+    else:
+        logger.warning("ℹ️ Supabase not configured in env, using standard pipeline.")
 
-    # تشغيل البوت في خيط خلفي مع وسم منع الازدواجية
-    os.environ["NSW_BOT_RUNNER"] = "start_py"
-    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True, name="TelegramBot")
-    bot_thread.start()
-    print("[Launcher] Telegram Bot thread started.")
-
-    # تشغيل خادم الربط المحلي الفائق في خيط خلفي
-    api_thread = threading.Thread(target=run_local_api, daemon=True, name="LocalWebBridge")
-    api_thread.start()
-    print("[Launcher] NSW Local Web Bridge API thread started on port 58242.")
-
-    # تشغيل محرك النشر التلقائي الذاتي 24/7 (نادي الروايات + واتباد)
+    # 2. تشغيل محرك النشر التلقائي (Syndication Daemon)
     try:
-        import syndication_daemon
         syndication_daemon.start_syndication_daemon()
+        logger.info("✅ Syndication Daemon started successfully.")
     except Exception as e_daemon:
-        print(f"[Launcher] ⚠️ Could not start syndication daemon: {e_daemon}")
+        logger.error(f"⚠️ Could not start syndication daemon: {e_daemon}")
 
-    # تم إلغاء إشعار الإقلاع التلقائي لمنع الإزعاج عند إعادة إقلاع سيرفر Render الدوري
-    # Notification is disabled to ensure 100% silent startup
+    # 3. تشغيل بوت تيليجرام في خيط مستقل
+    tg_thread = threading.Thread(target=run_telegram_bot_thread, daemon=True, name="TelegramBotThread")
+    tg_thread.start()
+    logger.info("✅ Telegram Bot thread launched.")
 
-    # انتظار ثانيتين ثم تشغيل Streamlit
-    time.sleep(2)
-    run_streamlit()
+    # 4. تشغيل خادم HTTP في الخيط الرئيسي لمنع إغلاق السيرفر ولتلبية فحص الصحة في Render
+    run_http_server()

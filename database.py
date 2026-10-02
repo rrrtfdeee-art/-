@@ -407,6 +407,22 @@ def save_chapter_content(
             WHERE novel_id = ? AND chapter_number = ?;
         """, (title, content, status, error_message, now, novel_id, chapter_number))
         conn.commit()
+
+    # مزامنة سحابية فورية مع Supabase إذا كانت مهيأة
+    try:
+        import supabase_db
+        if supabase_db.is_configured():
+            sb_status = "مؤرشف" if status in ("downloaded", "streamed") else status
+            supabase_db.save_chapter(
+                novel_id=novel_id,
+                chapter_number=chapter_number,
+                title=title,
+                content=content,
+                status=sb_status
+            )
+    except Exception:
+        pass
+
     return True
 
 
@@ -893,6 +909,22 @@ def compare_and_replace_chapter_content(
                 VALUES (?, ?, ?, ?, ?, 'downloaded', ?);
             """, (novel_id, chapter_number, title, original_content, original_url or "", now))
             conn.commit()
+
+            # مزامنة فورية مع Supabase بحالة 'مؤرشف'
+            try:
+                import supabase_db
+                if supabase_db.is_configured():
+                    supabase_db.save_chapter(
+                        novel_id=novel_id,
+                        chapter_number=chapter_number,
+                        title=title,
+                        url=original_url or "",
+                        content=original_content,
+                        status="مؤرشف"
+                    )
+            except Exception:
+                pass
+
             return {
                 "replaced": True,
                 "action": "inserted_new",
@@ -931,6 +963,22 @@ def compare_and_replace_chapter_content(
                 WHERE novel_id = ? AND chapter_number = ?;
             """, (new_title, original_content, new_url, now, novel_id, chapter_number))
             conn.commit()
+
+            # مزامنة فورية مع Supabase بحالة 'مؤرشف'
+            try:
+                import supabase_db
+                if supabase_db.is_configured():
+                    supabase_db.save_chapter(
+                        novel_id=novel_id,
+                        chapter_number=chapter_number,
+                        title=new_title,
+                        url=new_url or "",
+                        content=original_content,
+                        status="مؤرشف"
+                    )
+            except Exception:
+                pass
+
             comp["replaced"] = True
             comp["action"] = "updated_replaced"
         else:

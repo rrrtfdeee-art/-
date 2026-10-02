@@ -8,6 +8,7 @@ syndication_daemon.py — المشغل الذاتي المجدول 24/7 (Autonom
 - يوثق كل حدث في السجل ويحدث العدادات دون أي تكرار
 """
 
+import os
 import time
 import random
 import threading
@@ -16,35 +17,55 @@ import syndication_db
 import syndication_extractor
 import rewayat_club_api
 import wattpad_poster
+import supabase_db
 
 logger = logging.getLogger("SyndicationDaemon")
 
 _DAEMON_RUNNING = False
 _DAEMON_THREAD = None
 
+def _get_platform_credentials():
+    """استخراج بيانات الاعتماد من المتغيرات البيئية أولاً مع Fallback لقاعدة الإعدادات."""
+    rc_token = os.getenv("REWAYAT_CLUB_TOKEN", "").strip() or syndication_db.get_synd_setting("rewayat_token", "")
+    wp_token = os.getenv("WATTPAD_TOKEN", "").strip() or syndication_db.get_synd_setting("wattpad_token", "")
+    wp_user = os.getenv("WATTPAD_USERNAME", "").strip() or syndication_db.get_synd_setting("wattpad_username", "")
+    wp_pass = os.getenv("WATTPAD_PASSWORD", "").strip() or syndication_db.get_synd_setting("wattpad_password", "")
+    return rc_token, wp_token, wp_user, wp_pass
+
 def process_scheduled_chapters_cycle(now: float):
     """
     فحص ونشر الفصول التي حان موعدها من جدول الجدولة المتقدمة في Google Sheet وقاعدة البيانات.
     """
-    try:
-        due_chapters = syndication_db.get_scheduled_chapters(status="PENDING", limit=20)
-    except Exception as ex_db:
-        logger.warning(f"Could not load scheduled chapters: {ex_db}")
-        return
+    due_chapters = []
+    from_supabase = False
+    if supabase_db.is_configured():
+        try:
+            due_chapters = supabase_db.get_pending_schedules(limit=20)
+            if due_chapters:
+                from_supabase = True
+        except Exception as e_sb:
+            logger.warning(f"Error fetching pending schedules from Supabase: {e_sb}")
+
+    if not due_chapters:
+        try:
+            due_chapters = syndication_db.get_scheduled_chapters(status="PENDING", limit=20)
+        except Exception as ex_db:
+            logger.warning(f"Could not load scheduled chapters from local db: {ex_db}")
+            return
 
     if not due_chapters:
         return
 
-    rc_token = syndication_db.get_synd_setting("rewayat_token", "")
-    wp_token = syndication_db.get_synd_setting("wattpad_token", "")
-    wp_user = syndication_db.get_synd_setting("wattpad_username", "")
-    wp_pass = syndication_db.get_synd_setting("wattpad_password", "")
+    rc_token, wp_token, wp_user, wp_pass = _get_platform_credentials()
 
     for item in due_chapters:
         try:
-            sch_ts = float(item.get("scheduled_timestamp") or 0.0)
-            if sch_ts <= 0 or sch_ts > now:
-                continue
+            if from_supabase:
+                sch_ts = now
+            else:
+                sch_ts = float(item.get("scheduled_timestamp") or 0.0)
+                if sch_ts <= 0 or sch_ts > now:
+                    continue
 
             n_name = item["novel_name"]
             target_ch = item["chapter_num"]
@@ -138,6 +159,8 @@ def process_scheduled_chapters_cycle(now: float):
 
             if success_rc or success_wp:
                 combined_url = " | ".join(filter(None, [rc_post_url, wp_post_url]))
+                if from_supabase and item.get("id"):
+                    supabase_db.mark_schedule_published(item["id"], post_url=combined_url)
                 syndication_db.update_chapter_schedule_status(
                     novel_name=n_name,
                     chapter_num=target_ch,
@@ -187,6 +210,8 @@ def process_scheduled_chapters_cycle(now: float):
                     logger.warning(f"Could not send telegram notification: {ex_notif}")
             else:
                 joined_err = " ; ".join(err_messages) or "تعذر النشر"
+                if from_supabase and item.get("id"):
+                    supabase_db.mark_schedule_failed(item["id"], error_msg=joined_err)
                 syndication_db.update_chapter_schedule_status(
                     novel_name=n_name,
                     chapter_num=target_ch,
@@ -211,11 +236,8 @@ def run_syndication_cycle():
     if not novels:
         return
 
-    # جلب التوكنات العامة
-    rc_token = syndication_db.get_synd_setting("rewayat_token", "")
-    wp_token = syndication_db.get_synd_setting("wattpad_token", "")
-    wp_user = syndication_db.get_synd_setting("wattpad_username", "")
-    wp_pass = syndication_db.get_synd_setting("wattpad_password", "")
+    # جلب التوكنات العامة من المتغيرات البيئية أو الإعدادات
+    rc_token, wp_token, wp_user, wp_pass = _get_platform_credentials()
 
     for nov in novels:
         try:

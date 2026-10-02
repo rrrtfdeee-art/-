@@ -1,15 +1,16 @@
-FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
+FROM python:3.11-slim
 
 WORKDIR /app
+
+# منع إنشاء ملفات pyc وضمان الدفق الفوري للسجلات
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Explicitly install Chromium browser inside the container
-RUN playwright install chromium
-
 COPY . .
 
-EXPOSE 8501
+EXPOSE 8000
 
 CMD ["python", "start.py"]

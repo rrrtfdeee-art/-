@@ -34,9 +34,9 @@ import nsw_healer_engine
 from gemini_analyzer import DEFAULT_GAS_URL
 
 # اسم مستخدم البوت الافتراضي وتوكن التحكم
-DEFAULT_BOT_USERNAME = "@Nsw_monitorbot"
-BOT_TOKEN = "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4"
-ADMIN_CHAT_ID = "8883556949"
+DEFAULT_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "@Nsw_monitorbot")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("NSW_TELEGRAM_BOT_TOKEN") or "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4"
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8883556949")
 
 # جلسات المستخدمين المؤقتة لاختيار الخيارات
 USER_SESSIONS: Dict[int, Dict[str, Any]] = {}
@@ -2560,6 +2560,14 @@ def run_telegram_bot_loop():
         print("⚡ [Local API] Web Bridge server active on http://127.0.0.1:58242")
     except Exception as e_api:
         print(f"⚠️ Could not start local web bridge: {e_api}")
+
+    # إزالة أي ويب هوك نشط لتسليم الراية بسلاسة لـ Polling
+    try:
+        bot.remove_webhook()
+        time.sleep(1.5)
+        print("🔓 [Telegram Bot] Webhook removed. Polling listener is active.")
+    except Exception as e_wh:
+        print(f"⚠️ [Telegram Bot] Note on remove_webhook: {e_wh}")
 
     while True:
         try:
