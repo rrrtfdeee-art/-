@@ -241,7 +241,7 @@ def build_chapter_dict(row: dict, novel_name: str) -> dict:
     }
 
 # ─── المرحلة 1: النسخ السحابي وتفريغ المتن ─────────────────────────────────
-def process_tier1_backup_and_empty(empty_content: bool = True, max_batch: int = 50) -> Dict[str, int]:
+def process_tier1_backup_and_empty(empty_content: bool = True, max_batch: int = 500) -> Dict[str, int]:
     """
     تأمين الفصول المجدولة والمنشورة في GitHub وتفريغ متنها فوراً في Supabase.
     """
