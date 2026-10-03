@@ -190,6 +190,7 @@ def create_bot_app():
             types.BotCommand("stop", "🛑 إيقاف فوري طارئ للمحرك"),
             types.BotCommand("logout", "🔒 تسجيل الخروج وقفل البوت"),
             types.BotCommand("ping", "⚡ فحص سرعة الاستجابة والاتصال"),
+            types.BotCommand("backup", "☁️ تشغيل النسخ الاحتياطي السحابي والتنظيف فوراً"),
             types.BotCommand("help", "📋 عرض دليل الأوامر والمساعدة"),
         ])
     except Exception as cmd_err:
@@ -406,6 +407,25 @@ def create_bot_app():
     @bot.message_handler(commands=['ping'])
     def handle_ping(message):
         bot.reply_to(message, "⚡ <b>Pong! السيرفر يعمل واستجابة البوت فورية ومباشرة.</b>")
+
+    @bot.message_handler(commands=['backup', 'backup_now'])
+    def handle_backup(message):
+        bot.reply_to(message, "⏳ <b>بدء النسخ الاحتياطي السحابي والتنظيف الثنائي الآن...</b>\n<i>جاري فحص GitHub وتفريغ المتن في Supabase.</i>")
+        def _bg_run():
+            try:
+                import backup_engine
+                res = backup_engine.run_daily_backup_job(force=True)
+                msg = (
+                    f"✅ <b>اكتمل النسخ الاحتياطي والتنظيف بنجاح!</b>\n\n"
+                    f"☁️ تم رفع: {res.get('backed_up_to_github', 0)} فصلاً إلى GitHub\n"
+                    f"🧹 تم تفريغ متن: {res.get('tier1_emptied', 0)} فصلاً\n"
+                    f"🗑️ تم حذف: {res.get('tier2_purged', 0)} سجلاً بعد 90 يوماً\n"
+                    f"⏱️ الوقت: {res.get('elapsed_seconds', 0)}s"
+                )
+                bot.send_message(message.chat.id, msg)
+            except Exception as e:
+                bot.send_message(message.chat.id, f"❌ حدث خطأ أثناء النسخ الاحتياطي: {e}")
+        threading.Thread(target=_bg_run, daemon=True).start()
 
     @bot.callback_query_handler(func=lambda call: call.data in ['rep_3h', 'rep_24h', 'rep_168h', 'rep_720h', 'act_chat_on', 'act_chat_off', 'act_logout'])
     def handle_report_callbacks(call):

@@ -486,6 +486,7 @@ def daemon_worker_loop():
     global _DAEMON_RUNNING
     logger.info("Syndication Daemon worker loop started (24/7).")
     last_ping = 0.0
+    last_backup_check = 0.0
     while _DAEMON_RUNNING:
         try:
             # نبضة حياة دورية لمنع نوم حاوية Render
@@ -494,6 +495,16 @@ def daemon_worker_loop():
                 _ping_render_keep_alive()
 
             run_syndication_cycle()
+
+            # فحص وتشغيل النسخ الاحتياطي السحابي اليومي
+            if time.time() - last_backup_check > 1800:
+                last_backup_check = time.time()
+                try:
+                    import backup_engine
+                    backup_engine.run_daily_backup_job()
+                except Exception as ex_b:
+                    logger.error(f"Error checking daily backup: {ex_b}")
+
         except Exception as ex:
             logger.error(f"Error in daemon loop: {ex}")
         # فحص كل 60 ثانية بهدوء وخفة دون استهلاك معالج
