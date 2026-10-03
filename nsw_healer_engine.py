@@ -54,7 +54,7 @@ FORMATTING_RULES_GID = 288436831 # الصفحة الثانية: قواعد ال�
 
 PUBLISH_WEBAPP_URL = os.getenv("NSW_PUBLISH_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbxqLaqJru1ag-am7G9Mrwy5Nb7HliZlK5vbIEQD9MeV3wOOquNUvz4d7vWEwZxkBI6zIw/exec")
 TRANSLATE_WEBAPP_URL = os.getenv("NSW_TRANSLATE_WEBAPP_URL", "https://script.google.com/macros/s/AKfycbwk3rNPfyP6lJw5jkXigqUfTgivsNzgDoyhd61lPiRSFZP49jFShKaz-CfnUqlM9OmH/exec")
-TELEGRAM_BOT_TOKEN = os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4")
+TELEGRAM_BOT_TOKEN = os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8914532697:AAGvPnKDtF8Qvz7Z1_SerHWgTacrIdSdxag")
 ADMIN_CHAT_ID = os.getenv("NSW_TELEGRAM_CHAT_ID", "8883556949")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1546569711381254265/ZPrKjMA3tVj6kjWZzZeEOePb1I0PfopeYcpdYo7r8rFIXvlHk8m2HM1tIwM_HRRoTXv8")
 

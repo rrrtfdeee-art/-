@@ -347,7 +347,7 @@ def process_tier2_purge_90_days(days: int = 90, max_batch: int = 50) -> Dict[str
 
 # ─── إشعار تيليجرام التلقائي للمشرف ─────────────────────────────────────────
 def notify_telegram(message: str) -> bool:
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN") or "8914532697:AAFrBMD5o5rWWvXEfjXC0EXOEwPQad0fiy4"
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN") or "8914532697:AAGvPnKDtF8Qvz7Z1_SerHWgTacrIdSdxag"
     admin_chat = os.getenv("ADMIN_CHAT_ID") or "8883556949"
     try:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
