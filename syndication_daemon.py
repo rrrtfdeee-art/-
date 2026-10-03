@@ -470,30 +470,13 @@ def run_syndication_cycle():
         except Exception as e_nov:
             logger.error(f"Error in syndication cycle for {nov.get('novel_name', '?')}: {e_nov}")
 
-def _ping_render_keep_alive():
-    """إرسال نبضة حياة هادئة كل 10 دقائق لمنع خمول وحظر سيرفر Render السحابي المجاني."""
-    try:
-        import os, urllib.request
-        render_url = os.environ.get("RENDER_EXTERNAL_URL", "https://2-yqmt.onrender.com/")
-        req = urllib.request.Request(render_url, headers={"User-Agent": "NSW-Daemon-KeepAlive/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            pass
-    except Exception:
-        pass
-
 def daemon_worker_loop():
-    """حلقة السيرفر الدائرية التي تعمل 24/7 في الخلفية."""
+    """حلقة السيرفر الدائرية التي تعمل أثناء استيقاظ السيرفر."""
     global _DAEMON_RUNNING
-    logger.info("Syndication Daemon worker loop started (24/7).")
-    last_ping = 0.0
+    logger.info("Syndication Daemon worker loop started.")
     last_backup_check = 0.0
     while _DAEMON_RUNNING:
         try:
-            # نبضة حياة دورية لمنع نوم حاوية Render
-            if time.time() - last_ping > 600:
-                last_ping = time.time()
-                _ping_render_keep_alive()
-
             run_syndication_cycle()
 
             # فحص وتشغيل النسخ الاحتياطي السحابي اليومي
