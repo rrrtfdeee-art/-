@@ -1,7 +1,3 @@
-# ==============================================================================
-# NSW Publisher & Telegram Bot Service - Minimal Requirements
-# Pure Publisher (No Playwright, No Chromium)
-# ==============================================================================
 streamlit>=1.30.0
 requests>=2.31.0
 pyTelegramBotAPI>=4.20.0
