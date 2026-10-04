@@ -342,6 +342,7 @@ DEFAULT_SCHEDULE_SPREADSHEET_ID = "12_cNDWNVpyTK-VG1zLl0z6N3fDeO2qIVn5LYuDgRWD0"
 SCHEDULE_TAB_NAME = "SyndicationSchedule"
 TZ_ARABIA = datetime.timezone(datetime.timedelta(hours=3))
 _CREDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_credentials.json")
+GAS_WEBAPP_URL = os.getenv("NSW_GAS_WEBAPP_URL") or "https://script.google.com/macros/s/AKfycby9_FzjhGalNqbG3ywOZUmpaatdDXd9XH1XMpEvwqv4MO_Pf2vnKroof5gsI3Bxjhkf_Q/exec"
 
 def get_schedule_spreadsheet_id() -> str:
     """الحصول على معرف شيت الجدولة السحابي المعتمد من الإعدادات أو الافتراضي."""
@@ -463,6 +464,157 @@ def ensure_novels_tab_exists(service=None, spreadsheet_id: Optional[str] = None)
     except Exception as e_tab:
         logger.warning(f"ensure_novels_tab_exists notice: {e_tab}")
         return NOVELS_TAB_NAME
+
+SETTINGS_TAB_NAME = "SyndicationSettings"
+SETTINGS_HEADERS = ["key", "value", "updated_at"]
+
+def ensure_settings_tab_exists(service=None, spreadsheet_id: Optional[str] = None) -> str:
+    """التأكد من وجود ورقة الإعدادات SyndicationSettings برؤوس الأعمدة المطلوبة."""
+    ssid = spreadsheet_id or get_schedule_spreadsheet_id()
+    srv = service or _get_sheets_service()
+    if not srv:
+        return SETTINGS_TAB_NAME
+    try:
+        meta = srv.spreadsheets().get(spreadsheetId=ssid).execute()
+        existing_tabs = [s["properties"]["title"] for s in meta.get("sheets", [])]
+        if SETTINGS_TAB_NAME not in existing_tabs:
+            body = {"requests": [{"addSheet": {"properties": {"title": SETTINGS_TAB_NAME}}}]}
+            srv.spreadsheets().batchUpdate(spreadsheetId=ssid, body=body).execute()
+            logger.info(f"Created tab '{SETTINGS_TAB_NAME}' in Google Sheet")
+        
+        check_head = srv.spreadsheets().values().get(spreadsheetId=ssid, range=f"{SETTINGS_TAB_NAME}!A1:C1").execute().get("values", [])
+        if not check_head or not check_head[0] or len(check_head[0]) < len(SETTINGS_HEADERS):
+            srv.spreadsheets().values().update(
+                spreadsheetId=ssid,
+                range=f"{SETTINGS_TAB_NAME}!A1:C1",
+                valueInputOption="RAW",
+                body={"values": [SETTINGS_HEADERS]}
+            ).execute()
+        return SETTINGS_TAB_NAME
+    except Exception as e_tab:
+        logger.warning(f"ensure_settings_tab_exists notice: {e_tab}")
+        return SETTINGS_TAB_NAME
+
+def sync_settings_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    استرجاع ومزامنة التوكنات وبيانات الاعتماد من Google Sheet إلى قاعدة البيانات المحلية.
+    """
+    ssid = spreadsheet_id or get_schedule_spreadsheet_id()
+    service = _get_sheets_service()
+    rows = []
+
+    if service:
+        try:
+            ensure_settings_tab_exists(service, ssid)
+            res = service.spreadsheets().values().get(
+                spreadsheetId=ssid,
+                range=f"{SETTINGS_TAB_NAME}!A2:B"
+            ).execute()
+            rows = res.get("values", [])
+        except Exception:
+            rows = []
+
+    if not rows:
+        try:
+            gviz_url = f"https://docs.google.com/spreadsheets/d/{ssid}/gviz/tq?tqx=out:json&sheet={requests.utils.quote(SETTINGS_TAB_NAME)}"
+            resp = requests.get(gviz_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            text = resp.text
+            if '{' in text and '}' in text:
+                json_str = text[text.find('{'):text.rfind('}') + 1]
+                data = json.loads(json_str)
+                raw_rows = data.get("table", {}).get("rows", [])
+                for rr in raw_rows:
+                    c_vals = []
+                    for cell in rr.get("c", []):
+                        c_vals.append(str(cell.get("v", "")) if cell and cell.get("v") is not None else "")
+                    if len(c_vals) >= 2 and c_vals[0]:
+                        rows.append([c_vals[0], c_vals[1]])
+        except Exception as ex_gv:
+            logger.debug(f"GViz fallback settings fetch notice: {ex_gv}")
+
+    restored = 0
+    for r in rows:
+        if len(r) >= 2:
+            k = str(r[0]).strip()
+            v = str(r[1]).strip()
+            if k and k.lower() != "key" and v:
+                save_synd_setting(k, v)
+                restored += 1
+
+    return {"success": True, "count": restored}
+
+def save_setting_to_sheet(key: str, value: str, spreadsheet_id: Optional[str] = None) -> bool:
+    """حفظ وتحديث مفتاح إعدادات في تبويب SyndicationSettings بـ Google Sheet."""
+    save_synd_setting(key, value)
+    ssid = spreadsheet_id or get_schedule_spreadsheet_id()
+    service = _get_sheets_service()
+    now_str = datetime.datetime.now(TZ_ARABIA).strftime("%Y-%m-%d %H:%M:%S")
+
+    if service:
+        try:
+            ensure_settings_tab_exists(service, ssid)
+            res = service.spreadsheets().values().get(
+                spreadsheetId=ssid,
+                range=f"{SETTINGS_TAB_NAME}!A:A"
+            ).execute()
+            sheet_rows = res.get("values", [])
+            row_idx = None
+            for idx, sr in enumerate(sheet_rows, start=1):
+                if idx == 1:
+                    continue
+                if len(sr) > 0 and str(sr[0]).strip() == key.strip():
+                    row_idx = idx
+                    break
+
+            if row_idx:
+                service.spreadsheets().values().update(
+                    spreadsheetId=ssid,
+                    range=f"{SETTINGS_TAB_NAME}!B{row_idx}:C{row_idx}",
+                    valueInputOption="USER_ENTERED",
+                    body={"values": [[value, now_str]]}
+                ).execute()
+            else:
+                service.spreadsheets().values().append(
+                    spreadsheetId=ssid,
+                    range=f"{SETTINGS_TAB_NAME}!A:C",
+                    valueInputOption="USER_ENTERED",
+                    insertDataOption="INSERT_ROWS",
+                    body={"values": [[key, value, now_str]]}
+                ).execute()
+            return True
+        except Exception as e_s:
+            logger.warning(f"Could not save setting to sheet via API: {e_s}")
+
+    # Fallback عبر GAS WebApp
+    try:
+        payload = {
+            "action": "save_setting",
+            "key": key,
+            "value": value,
+            "updated_at": now_str
+        }
+        requests.post(GAS_WEBAPP_URL, json=payload, timeout=10)
+        return True
+    except Exception:
+        return False
+
+def hydrate_all_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    استعادة شاملة وفورية لكافة الروايات والجدولة والإعدادات من Google Sheet عند بدء تشغيل الحاوية.
+    تحمي النظام بنسبة 100% من مشكلة Ephemeral Filesystem على خوادم Render.
+    """
+    res_set = sync_settings_from_sheet(spreadsheet_id)
+    res_nov = sync_novels_from_sheet(spreadsheet_id)
+    res_sch = sync_schedule_from_sheet(spreadsheet_id)
+    logger.info(
+        f"✅ [Hydration Complete] Restored from Sheet: "
+        f"{res_set.get('count', 0)} settings, {res_nov.get('count', 0)} novels, {res_sch.get('count', 0)} scheduled items."
+    )
+    return {
+        "settings": res_set,
+        "novels": res_nov,
+        "schedules": res_sch
+    }
 
 def sync_novels_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -1031,9 +1183,22 @@ def update_chapter_schedule_status(
                             valueInputOption="USER_ENTERED",
                             body={"values": [[error_msg]]}
                         ).execute()
-                    break
         except Exception as ex_up:
             logger.warning(f"Could not update chapter status in Google Sheet: {ex_up}")
+    else:
+        try:
+            payload = {
+                "action": "update_schedule_status",
+                "novel_name": novel_name,
+                "chapter_num": chapter_num,
+                "status": status,
+                "post_url": post_url,
+                "error_msg": error_msg,
+                "published_at": now_str
+            }
+            requests.post(GAS_WEBAPP_URL, json=payload, timeout=12)
+        except Exception as e_gas:
+            logger.debug(f"GAS update_schedule_status notice: {e_gas}")
 
 def get_scheduled_chapters(novel_name: Optional[str] = None, status: Optional[str] = None, limit: int = 500) -> List[Dict[str, Any]]:
     """جلب قائمة الفصول المجدولة بحسب الرواية والحالة."""

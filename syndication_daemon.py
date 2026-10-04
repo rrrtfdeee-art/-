@@ -225,6 +225,14 @@ def run_syndication_cycle():
     """تنفيذ دورة فحص واحدة لكافة الروايات النشطة في النظام."""
     now = time.time()
 
+    # مزامنة سحابية تلقائية من Google Sheet لضمان توفر الروايات والمواعيد حتى عند ريستارت الحاوية
+    try:
+        syndication_db.sync_novels_from_sheet()
+        syndication_db.sync_schedule_from_sheet()
+        syndication_db.sync_settings_from_sheet()
+    except Exception as ex_sync:
+        logger.debug(f"Cycle sheet sync notice: {ex_sync}")
+
     # أولاً: معالجة ونشر الفصول المجدولة بساعات محددة يدوياً من جدول Google Sheet
     try:
         process_scheduled_chapters_cycle(now)

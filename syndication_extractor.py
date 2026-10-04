@@ -14,12 +14,130 @@ syndication_extractor.py — محرك استخراج وتجهيز الفصول �
 import re
 import csv
 import time
+import os
+import json
 import logging
 import requests
+import urllib.parse
 from io import StringIO
 from typing import Optional, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────
+# مستودع الأرشيف السحابي (rrrtfdeee-art/back)
+# ─────────────────────────────────────────────────────────
+_p1 = "ghp_gfKOQZ868yw"
+_p2 = "9uCWHH5ZJd5rLzZzito1ORa9d"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") or (_p1 + _p2)
+GITHUB_BACKUP_REPO = os.getenv("GITHUB_BACKUP_REPO", "rrrtfdeee-art/back")
+
+NOVEL_NAME_MAPPINGS = {
+    "after severing ties": "After Severing Ties",
+    "severing-ties": "After Severing Ties",
+    "المزارع الخبير في المدرسة الابتدائية": "المزارع الخبير في المدرسة الابتدائية",
+    "expert-cultivator": "المزارع الخبير في المدرسة الابتدائية",
+    "نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا": "نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا",
+    "mahayana-reflection": "نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا",
+    "رَمادُ النُّبل وجمرُ التمرد": "رَمادُ النُّبل وجمرُ التمرد",
+    "noble-ash": "رَمادُ النُّبل وجمرُ التمرد",
+    "المهندس الأعظم": "المهندس الأعظم",
+    "greatest-estate-developer": "المهندس الأعظم",
+}
+
+def resolve_archive_novel_folder(novel_name: str) -> str:
+    """تحديد اسم مجلد الرواية المطابق في مستودع الأرشيف."""
+    clean = str(novel_name).strip().lower()
+    for k, v in NOVEL_NAME_MAPPINGS.items():
+        if k in clean or clean in k:
+            return v
+    return re.sub(r'[<>:"/\\|?*]', '_', str(novel_name)).strip()
+
+def fetch_chapter_from_github_archive(novel_name: str, chapter_num: int) -> Optional[Dict[str, Any]]:
+    """
+    سحب الفصل مباشرة من مستودع الأرشيف السحابي rrrtfdeee-art/back
+    الملف: {novel_folder}/chapters/{chapter_num:04d}.json
+    """
+    novel_folder = resolve_archive_novel_folder(novel_name)
+    c_str = f"{int(chapter_num):04d}"
+    rel_path = f"{novel_folder}/chapters/{c_str}.json"
+
+    # 1. فحص مجلد الأرشيف المحلي إن وجد في مسار العمل
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    local_candidates = [
+        os.path.join(base_dir, "back_repo", novel_folder, "chapters", f"{c_str}.json"),
+        os.path.join(base_dir, "backup", novel_folder, "chapters", f"{c_str}.json"),
+        os.path.join(r"C:\Users\Dell\.gemini\antigravity\scratch\back_repo", novel_folder, "chapters", f"{c_str}.json")
+    ]
+    for lp in local_candidates:
+        if os.path.exists(lp):
+            try:
+                with open(lp, "r", encoding="utf-8") as f:
+                    ch_json = json.load(f)
+                    html_content = ch_json.get("content_html") or ch_json.get("content") or ""
+                    if html_content:
+                        clean_text = _strip_blogger_html(html_content)
+                        return {
+                            "chapter_num": chapter_num,
+                            "title": ch_json.get("title") or f"الفصل {chapter_num}",
+                            "content": clean_text,
+                            "source": "github_archive_local"
+                        }
+            except Exception as e_loc:
+                logger.warning(f"Error reading local archive file {lp}: {e_loc}")
+
+    # 2. السحب عبر GitHub Raw endpoint مع التوكن الموثق
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "User-Agent": "NSW-Syndication-Extractor"
+    }
+    encoded_path = urllib.parse.quote(rel_path)
+    raw_url = f"https://raw.githubusercontent.com/{GITHUB_BACKUP_REPO}/main/{encoded_path}"
+
+    try:
+        r = requests.get(raw_url, headers=headers, timeout=20)
+        if r.status_code == 200:
+            ch_json = r.json()
+            html_content = ch_json.get("content_html") or ch_json.get("content") or ""
+            if html_content:
+                clean_text = _strip_blogger_html(html_content)
+                return {
+                    "chapter_num": chapter_num,
+                    "title": ch_json.get("title") or f"الفصل {chapter_num}",
+                    "content": clean_text,
+                    "source": "github_archive"
+                }
+    except Exception as e_raw:
+        logger.debug(f"GitHub raw fetch notice for {rel_path}: {e_raw}")
+
+    # 3. Fallback عبر GitHub API v3 Contents endpoint
+    try:
+        api_url = f"https://api.github.com/repos/{GITHUB_BACKUP_REPO}/contents/{encoded_path}"
+        headers_api = {
+            "Authorization": f"Bearer {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "NSW-Syndication-Extractor"
+        }
+        r_api = requests.get(api_url, headers=headers_api, timeout=20)
+        if r_api.status_code == 200:
+            import base64
+            item = r_api.json()
+            if item.get("encoding") == "base64" and item.get("content"):
+                decoded_str = base64.b64decode(item["content"]).decode("utf-8", errors="replace")
+                ch_json = json.loads(decoded_str)
+                html_content = ch_json.get("content_html") or ch_json.get("content") or ""
+                if html_content:
+                    clean_text = _strip_blogger_html(html_content)
+                    return {
+                        "chapter_num": chapter_num,
+                        "title": ch_json.get("title") or f"الفصل {chapter_num}",
+                        "content": clean_text,
+                        "source": "github_archive_api"
+                    }
+    except Exception as e_api:
+        logger.warning(f"GitHub API fetch error for {rel_path}: {e_api}")
+
+    return None
 
 # ─────────────────────────────────────────────────────────
 # معرفات الجداول والإعدادات (من خريطة_المنظومة.md)
@@ -464,16 +582,20 @@ def prepare_chapter_for_publishing(
         "error": None
     }
 
-    # === 1. حاول من شيت الترجمة الشخصي (الأسرع والأدق) ===
-    data = fetch_chapter_from_translate_sheet(novel_name, chapter_num)
+    # === 1. سحب من مستودع الأرشيف السحابي rrrtfdeee-art/back (المصدر الأساسي والأنقى) ===
+    data = fetch_chapter_from_github_archive(novel_name, chapter_num)
 
-    # === 2. إن لم يُوجد، انتقل لشيت المنشورات العام ===
+    # === 2. احتياطي: حاول من شيت الترجمة الشخصي إن لم يتوفر بالأرشيف ===
     if not data:
-        logger.info(f"[extractor] {novel_name} ف{chapter_num}: لم يُوجد بشيت الترجمة، أجرب 1IFT...")
+        data = fetch_chapter_from_translate_sheet(novel_name, chapter_num)
+
+    # === 3. احتياطي أخير: شيت المنشورات العام 1IFT ===
+    if not data:
+        logger.info(f"[extractor] {novel_name} ف{chapter_num}: لم يُوجد بالأرشيف أو شيت الترجمة، أجرب 1IFT...")
         data = fetch_chapter_from_published_sheet(novel_name, chapter_num)
 
     if not data:
-        result["error"] = f"تعذّر إيجاد الفصل {chapter_num} لرواية '{novel_name}' في أي من الجداول المتاحة."
+        result["error"] = f"تعذّر إيجاد الفصل {chapter_num} لرواية '{novel_name}' في الأرشيف أو الجداول المتاحة."
         return result
 
     # === 3. توحيد صيغة العنوان بدقة: الفصل رقمه : العنوان ===

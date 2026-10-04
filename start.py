@@ -65,13 +65,21 @@ if __name__ == "__main__":
     print("  Telegram Bot + Autonomous Publisher + Streamlit UI")
     print("=" * 60)
 
-    # 1. فحص إعدادات قاعدة البيانات Supabase
+    # 1. استرجاع ومزامنة الروايات والإعدادات والمواعيد سحابياً من Google Sheet
+    try:
+        import syndication_db
+        syndication_db.hydrate_all_from_sheet()
+        logger.info("✅ Hydrated all novels, settings, and schedules from Google Sheet.")
+    except Exception as e_hyd:
+        logger.warning(f"Note on sheet hydration: {e_hyd}")
+
+    # 2. فحص إعدادات قاعدة البيانات Supabase (إن وجدت)
     try:
         import supabase_db
         if supabase_db.is_configured():
             logger.info("✅ Supabase Cloud Database is configured and ready.")
         else:
-            logger.warning("ℹ️ Supabase not configured in env, using local SQLite fallback.")
+            logger.info("ℹ️ Supabase not configured in env, using Google Sheet as primary cloud storage.")
     except Exception as e:
         logger.warning(f"Note on supabase: {e}")
 
