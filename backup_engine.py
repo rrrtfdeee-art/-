@@ -37,6 +37,10 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("NSW_Backup_Engine")
 
+BASE_DIR = Path(__file__).resolve().parent
+LOCAL_BACKUP_DIR = BASE_DIR / "backup"
+STATE_FILE = BASE_DIR / "last_daily_backup.json"
+
 # ─── الإعدادات السحابية والافتراضية ──────────────────────────────────────────
 def _load_env():
     for ep in [".env", str(BASE_DIR / ".env"), r"C:\s\.env"]:
@@ -64,10 +68,6 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") or (_p1 + _p2)
 GITHUB_PRIVATE_REPO = os.getenv("GITHUB_BACKUP_REPO", "rrrtfdeee-art/back")
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "https://pyoxhjxdpvbqnacuihxi.supabase.co").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or (_s1 + _s2)
-
-BASE_DIR = Path(__file__).resolve().parent
-LOCAL_BACKUP_DIR = BASE_DIR / "backup"
-STATE_FILE = BASE_DIR / "last_daily_backup.json"
 
 NOVELS = [
     {"id": 1, "name_ar": "After Severing Ties",                                "slug": "severing-ties"},
