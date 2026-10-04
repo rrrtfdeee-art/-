@@ -10,5 +10,3 @@ google-api-python-client>=2.100.0
 google-auth>=2.20.0
 pydantic>=2.7.0
 urllib3>=2.2.0
-supabase>=2.0.0
-postgrest>=0.16.0
