@@ -10,10 +10,12 @@ syndication_daemon.py — المشغل الذاتي المجدول 24/7 (Autonom
 
 import os
 import time
+import json
 import random
 import threading
 import logging
 from datetime import datetime, timezone
+from typing import Dict, Any, Optional
 import syndication_db
 import syndication_extractor
 import rewayat_club_api
@@ -478,6 +480,131 @@ def run_syndication_cycle():
                         pass
         except Exception as e_nov:
             logger.error(f"Error in syndication cycle for {nov.get('novel_name', '?')}: {e_nov}")
+
+def publish_now_immediate(novel_id: int) -> Dict[str, Any]:
+    """
+    نشر فوري للفصل القادم دون أي انتظار للمؤقت أو فحص الجداول المستقبلية.
+    """
+    nov = syndication_db.get_syndicated_novel_by_id(novel_id)
+    if not nov:
+        return {"success": False, "message": "الرواية غير مسجلة في النظام"}
+
+    rc_token, wp_token, wp_user, wp_pass = _get_platform_credentials()
+    target_ch = int(nov.get("last_synced_chapter", 0)) + 1
+    n_name = nov["novel_name"]
+
+    extracted = syndication_extractor.prepare_chapter_for_publishing(
+        novel_name=n_name,
+        chapter_num=target_ch,
+        custom_cta=nov.get("custom_cta", ""),
+        blogger_url=nov.get("blogger_url", "")
+    )
+    if not extracted.get("success"):
+        return {
+            "success": False,
+            "chapter_num": target_ch,
+            "message": f"الفصل {target_ch} غير متوفر في الأرشيف السحابي rrrtfdeee-art/back. تأكد من توفره هناك أولاً."
+        }
+
+    success = False
+    messages = []
+    post_url = ""
+
+    # 1. نادي الروايات
+    if nov.get("rewayat_enabled") and nov.get("rewayat_novel_id"):
+        if not rc_token:
+            messages.append("توكن نادي الروايات غير مسجل في الإعدادات.")
+        else:
+            try:
+                rc_client = rewayat_club_api.RewayatClubClient(token=rc_token)
+                rc_content = extracted.get("content_rewayat_club") or extracted["content_for_publish"]
+                rc_res = rc_client.publish_chapter(
+                    novel_id=nov["rewayat_novel_id"],
+                    chapter_num=target_ch,
+                    title=extracted["title"],
+                    content=rc_content
+                )
+                if rc_res.get("success"):
+                    success = True
+                    post_url = rc_res.get("post_url", "")
+                    messages.append(f"نادي الروايات: نُشر بنجاح ({post_url})")
+                    syndication_db.log_syndication_event(
+                        novel_id=nov["id"], chapter_num=target_ch, platform="rewayat_club",
+                        status="SUCCESS", post_url=post_url
+                    )
+                else:
+                    err = rc_res.get("error", "فشل النشر على نادي الروايات")
+                    messages.append(f"نادي الروايات: {err}")
+                    syndication_db.log_syndication_event(
+                        novel_id=nov["id"], chapter_num=target_ch, platform="rewayat_club",
+                        status="FAILED", error_msg=err
+                    )
+            except Exception as e:
+                messages.append(f"استثناء بنادي الروايات: {e}")
+
+    # 2. واتباد
+    if nov.get("wattpad_enabled") and nov.get("wattpad_story_id"):
+        try:
+            wp_client = wattpad_poster.WattpadClient(token=wp_token, username=wp_user, password=wp_pass)
+            wp_content = extracted.get("content_wattpad") or extracted["content_clean"]
+            wp_res = wp_client.publish_part(
+                story_id=nov["wattpad_story_id"],
+                title=extracted["title"],
+                text=wp_content
+            )
+            if wp_res.get("success"):
+                success = True
+                wp_url = wp_res.get("post_url", "")
+                if not post_url:
+                    post_url = wp_url
+                messages.append(f"واتباد: نُشر بنجاح ({wp_url})")
+                syndication_db.log_syndication_event(
+                    novel_id=nov["id"], chapter_num=target_ch, platform="wattpad",
+                    status="SUCCESS", post_url=wp_url
+                )
+            else:
+                err = wp_res.get("message", "فشل النشر على واتباد")
+                messages.append(f"واتباد: {err}")
+                syndication_db.log_syndication_event(
+                    novel_id=nov["id"], chapter_num=target_ch, platform="wattpad",
+                    status="FAILED", error_msg=err
+                )
+        except Exception as e:
+            messages.append(f"استثناء بواتباد: {e}")
+
+    if success:
+        nov["last_synced_chapter"] = target_ch
+        daily_times = []
+        if nov.get("daily_times"):
+            try:
+                daily_times = json.loads(nov["daily_times"]) if isinstance(nov["daily_times"], str) else nov["daily_times"]
+            except Exception:
+                daily_times = []
+        if daily_times:
+            seq = syndication_db.compute_sequential_slot_timestamps(daily_times, 2)
+            nov["next_run_timestamp"] = seq[1] if len(seq) > 1 else (time.time() + float(nov.get("interval_hours", 12.0)) * 3600.0)
+        else:
+            nov["next_run_timestamp"] = time.time() + float(nov.get("interval_hours", 12.0)) * 3600.0
+
+        syndication_db.save_or_update_syndicated_novel(nov)
+        syndication_db.update_chapter_schedule_status(
+            novel_name=n_name,
+            chapter_num=target_ch,
+            status="PUBLISHED",
+            post_url=post_url
+        )
+        return {
+            "success": True,
+            "chapter_num": target_ch,
+            "post_url": post_url,
+            "message": " | ".join(messages)
+        }
+    else:
+        return {
+            "success": False,
+            "chapter_num": target_ch,
+            "message": " | ".join(messages)
+        }
 
 def daemon_worker_loop():
     """حلقة السيرفر الدائرية التي تعمل أثناء استيقاظ السيرفر."""

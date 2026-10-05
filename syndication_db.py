@@ -189,6 +189,11 @@ def save_synd_setting(key: str, value: str):
     conn.commit()
     conn.close()
 
+    try:
+        save_setting_to_sheet(key, value)
+    except Exception as ex_st:
+        logger.debug(f"save_synd_setting to sheet notice: {ex_st}")
+
 # ==================== دوال الروايات ====================
 
 def get_all_syndicated_novels(active_only: bool = False) -> List[Dict[str, Any]]:
@@ -313,6 +318,25 @@ def log_syndication_event(novel_id: int, chapter_num: int, platform: str, status
     """, (novel_id, chapter_num, platform, status, post_url, error_msg))
     conn.commit()
     conn.close()
+
+    # مزامنة سحابية مع تبويب SyndicationLogs في Google Sheet
+    def _deferred_log():
+        try:
+            nov = get_syndicated_novel_by_id(novel_id)
+            n_name = nov["novel_name"] if nov else ""
+            payload = {
+                "action": "save_log",
+                "novel_name": n_name,
+                "chapter_num": chapter_num,
+                "platform": platform,
+                "status": status,
+                "post_url": post_url,
+                "error_msg": error_msg
+            }
+            requests.post(GAS_WEBAPP_URL, json=payload, timeout=8)
+        except Exception:
+            pass
+    threading.Thread(target=_deferred_log, daemon=True).start()
 
 def get_recent_syndication_logs(novel_id: Optional[int] = None, limit: int = 50) -> List[Dict[str, Any]]:
     conn = _get_conn()
@@ -752,6 +776,18 @@ def sync_novel_to_sheet(novel_dict: Dict[str, Any], spreadsheet_id: Optional[str
     """مزامنة أو تحديث رواية فردية في تبويب SyndicatedNovels في Google Sheet."""
     service = _get_sheets_service()
     if not service:
+        # Fallback إلى GAS WebApp السحابي (بدون حاجة لأي ملف credentials)
+        try:
+            payload = {
+                "action": "save_novel",
+                "novel": novel_dict
+            }
+            res = requests.post(GAS_WEBAPP_URL, json=payload, timeout=12)
+            if res.status_code == 200:
+                logger.info(f"✅ Synced novel {novel_dict.get('novel_name')} to Google Sheet via GAS WebApp.")
+                return True
+        except Exception as e_gas:
+            logger.debug(f"GAS sync_novel_to_sheet notice: {e_gas}")
         return False
     ssid = spreadsheet_id or get_schedule_spreadsheet_id()
     try:
@@ -1122,6 +1158,17 @@ def save_chapter_schedules_batch(novel_name: str, rows: List[Dict[str, Any]], sp
                 ).execute()
         except Exception as ex_write:
             logger.error(f"Failed to write schedules to Google Sheet: {ex_write}")
+    else:
+        try:
+            payload = {
+                "action": "save_schedules",
+                "novel_name": novel_name,
+                "schedules": rows
+            }
+            requests.post(GAS_WEBAPP_URL, json=payload, timeout=15)
+            logger.info(f"✅ Synced {len(rows)} schedule items for {novel_name} to Google Sheet via GAS WebApp.")
+        except Exception as e_gas:
+            logger.debug(f"GAS save_schedules notice: {e_gas}")
 
     return True
 

@@ -453,16 +453,15 @@ def render_rewayat_club_tab():
                         st.caption(f"⏱️ الوتيرة: فصل كل {nov['interval_hours']} ساعة | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
                 with col_actions:
                     if st.button("⚡ نشر فوراً", key=f"fast_pub_{nov['id']}", help="نشر الفصل القادم الآن دون انتظار المؤقت"):
-                        nov["next_run_timestamp"] = time.time()
-                        nov["is_active"] = 1
-                        syndication_db.save_or_update_syndicated_novel(nov)
-                        try:
+                        with st.spinner(f"⏳ جاري نشر الفصل {target_ch} فوراً..."):
                             import syndication_daemon
-                            syndication_daemon.run_syndication_cycle()
-                            st.success(f"تم إطلاق نشر الفصل {target_ch}!")
+                            res_pub = syndication_daemon.publish_now_immediate(nov["id"])
+                            if res_pub.get("success"):
+                                st.success(f"🎉 تم نشر الفصل {res_pub.get('chapter_num')} بنجاح! الرابط: {res_pub.get('post_url')}")
+                            else:
+                                st.error(f"❌ تعذر النشر: {res_pub.get('message')}")
+                            time.sleep(1.5)
                             st.rerun()
-                        except Exception as ex_f:
-                            st.error(f"خطأ: {ex_f}")
                     if st.button("🗑️ حذف", key=f"del_rc_nov_{nov['id']}"):
                         syndication_db.delete_syndicated_novel(nov["id"])
                         st.success(f"تم حذف {nov['novel_name']}")
@@ -1159,16 +1158,15 @@ def render_wattpad_tab():
                         st.caption(f"⏱️ الوتيرة: فصل كل {nov['interval_hours']} ساعة | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
                 with col_actions:
                     if st.button("⚡ نشر فوراً", key=f"fast_pub_wp_{nov['id']}", help="نشر الفصل القادم الآن دون انتظار المؤقت"):
-                        nov["next_run_timestamp"] = time.time()
-                        nov["is_active"] = 1
-                        syndication_db.save_or_update_syndicated_novel(nov)
-                        try:
+                        with st.spinner(f"⏳ جاري نشر الفصل {target_ch} فوراً إلى واتباد..."):
                             import syndication_daemon
-                            syndication_daemon.run_syndication_cycle()
-                            st.success(f"تم إطلاق نشر الفصل {target_ch}!")
+                            res_pub = syndication_daemon.publish_now_immediate(nov["id"])
+                            if res_pub.get("success"):
+                                st.success(f"🎉 تم نشر الفصل {res_pub.get('chapter_num')} بنجاح! الرابط: {res_pub.get('post_url')}")
+                            else:
+                                st.error(f"❌ تعذر النشر: {res_pub.get('message')}")
+                            time.sleep(1.5)
                             st.rerun()
-                        except Exception as ex_f:
-                            st.error(f"خطأ: {ex_f}")
                     if st.button("🗑️ حذف", key=f"del_wp_nov_{nov['id']}"):
                         syndication_db.delete_syndicated_novel(nov["id"])
                         st.success(f"تم حذف {nov['novel_name']}")
