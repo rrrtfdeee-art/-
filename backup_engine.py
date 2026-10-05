@@ -128,6 +128,16 @@ def sb_delete(table: str, query: str) -> bool:
         logger.error(f"Supabase DELETE error [{table}]: {e}")
         return False
 
+def sb_post(table: str, payload: dict) -> bool:
+    """إدراج سجل في Supabase REST API."""
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    try:
+        r = requests.post(url, headers=SB_HEADERS, json=payload, timeout=20)
+        return r.status_code in (200, 201)
+    except Exception as e:
+        logger.error(f"Supabase POST error [{table}]: {e}")
+        return False
+
 # ─── اتصالات GitHub REST API ────────────────────────────────────────────────
 def safe_name(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*]', '_', str(name)).strip()
@@ -370,15 +380,26 @@ def run_daily_backup_job(force: bool = False) -> Dict[str, Any]:
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     
     # فحص صمام منع التكرار اليومي
-    if not force and STATE_FILE.exists():
+    if not force:
+        if STATE_FILE.exists():
+            try:
+                with open(STATE_FILE, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+                if (state.get("last_run_date") == today_str or state.get("date") == today_str) and state.get("status") == "SUCCESS":
+                    logger.info(f"ℹ️ Daily backup already completed today ({today_str}). Skipping.")
+                    return {"status": "SKIPPED_ALREADY_RUN", "date": today_str}
+            except Exception:
+                pass
+
+        # فحص صمام الأمان من Supabase Logs (يصمد أمام إعادة تشغيل الحاوية على Render)
         try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                state = json.load(f)
-            if state.get("last_run_date") == today_str and state.get("status") == "SUCCESS":
-                logger.info(f"ℹ️ Daily backup already completed today ({today_str}). Skipping.")
+            today_start = f"{today_str}T00:00:00Z"
+            logs = sb_get("syndication_logs", f"module=eq.backup_engine&message=eq.daily_backup_completed&created_at=gte.{today_start}&limit=1")
+            if logs and len(logs) > 0:
+                logger.info(f"ℹ️ Daily backup already verified in Supabase logs today ({today_str}). Skipping.")
                 return {"status": "SKIPPED_ALREADY_RUN", "date": today_str}
-        except Exception:
-            pass
+        except Exception as e_log_chk:
+            logger.debug(f"Note on Supabase log check: {e_log_chk}")
 
     start_time = time.time()
     logger.info("=" * 60)
@@ -393,6 +414,7 @@ def run_daily_backup_job(force: bool = False) -> Dict[str, Any]:
     result = {
         "status": "SUCCESS",
         "date": today_str,
+        "last_run_date": today_str,
         "elapsed_seconds": elapsed,
         "backed_up_to_github": t1_stats.get("backed_up", 0),
         "tier1_emptied": t1_stats.get("tier1_emptied", 0),
@@ -400,12 +422,23 @@ def run_daily_backup_job(force: bool = False) -> Dict[str, Any]:
         "skipped_safety": t2_stats.get("skipped_safety", 0),
     }
 
-    # حفظ حالة الإكمال اليومي
+    # حفظ حالة الإكمال اليومي محلياً
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
     except Exception as ex_save:
         logger.warning(f"Could not save state file: {ex_save}")
+
+    # توثيق في Supabase syndication_logs لصموده أمام إعادة تشغيل الحاوية السحابية
+    try:
+        sb_post("syndication_logs", {
+            "level": "INFO",
+            "module": "backup_engine",
+            "message": "daily_backup_completed",
+            "details": result
+        })
+    except Exception as ex_sb_log:
+        logger.warning(f"Could not log backup completion to Supabase: {ex_sb_log}")
 
     # تقرير تيليجرام
     report_msg = (

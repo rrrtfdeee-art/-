@@ -13,6 +13,7 @@ import time
 import random
 import threading
 import logging
+from datetime import datetime, timezone
 import syndication_db
 import syndication_extractor
 import rewayat_club_api
@@ -482,13 +483,16 @@ def daemon_worker_loop():
     """حلقة السيرفر الدائرية التي تعمل أثناء استيقاظ السيرفر."""
     global _DAEMON_RUNNING
     logger.info("Syndication Daemon worker loop started.")
-    last_backup_check = 0.0
+    # لا نبدأ بتشغيل النسخ الاحتياطي فوراً عند الإقلاع العرضي إلا إذا حان موعده (04:00 UTC)
+    now_utc = datetime.now(timezone.utc)
+    last_backup_check = 0.0 if now_utc.hour == 4 else time.time()
     while _DAEMON_RUNNING:
         try:
             run_syndication_cycle()
 
             # فحص وتشغيل النسخ الاحتياطي السحابي اليومي
-            if time.time() - last_backup_check > 1800:
+            now_loop = datetime.now(timezone.utc)
+            if (now_loop.hour == 4 or time.time() - last_backup_check > 43200) and (time.time() - last_backup_check > 1800):
                 last_backup_check = time.time()
                 try:
                     import backup_engine
