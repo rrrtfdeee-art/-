@@ -1064,6 +1064,12 @@ function getOrCreateSheetTab(ss, tabName, headers) {
   return sheet;
 }
 
+function cleanIdString(val) {
+  var s = String(val || "").trim();
+  if (s.endsWith(".0")) s = s.substring(0, s.length - 2);
+  return s;
+}
+
 function handleSaveSyndicatedNovel(req) {
   try {
     var ssId = req.spreadsheet_id || DEFAULT_SYNDICATION_SPREADSHEET_ID;
@@ -1080,7 +1086,7 @@ function handleSaveSyndicatedNovel(req) {
     if (!nName) return { success: false, error: "Empty novel_name" };
 
     var rId = String(nov.rewayat_novel_id || "").trim();
-    var wId = String(nov.wattpad_story_id || "").trim();
+    var wId = cleanIdString(nov.wattpad_story_id);
 
     var lastRow = sheet.getLastRow();
     var targetRow = -1;
@@ -1089,7 +1095,7 @@ function handleSaveSyndicatedNovel(req) {
       for (var i = 0; i < data.length; i++) {
         var rowName = String(data[i][0] || "").trim();
         var rowRid = data[i].length > 4 ? String(data[i][4] || "").trim() : "";
-        var rowWid = data[i].length > 7 ? String(data[i][7] || "").trim() : "";
+        var rowWid = data[i].length > 7 ? cleanIdString(data[i][7]) : "";
         if (rowName === nName) {
           if (rId && rowRid === rId) { targetRow = i + 2; break; }
           else if (wId && rowWid === wId) { targetRow = i + 2; break; }
@@ -1144,12 +1150,13 @@ function handleSaveSchedulesBatch(req) {
     var lastRow = sheet.getLastRow();
     var existingMap = {};
     if (lastRow > 1) {
-      var data = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+      var data = sheet.getRange(2, 1, lastRow - 1, Math.min(sheet.getLastColumn(), 5)).getValues();
       for (var i = 0; i < data.length; i++) {
         var n = String(data[i][0] || "").trim();
         var ch = String(data[i][1] || "").trim();
+        var p = data[i].length > 4 ? String(data[i][4] || "").trim().toLowerCase() : "all";
         if (n && ch) {
-          existingMap[n + "___" + ch] = i + 2;
+          existingMap[n + "___" + p + "___" + ch] = i + 2;
         }
       }
     }
@@ -1159,7 +1166,8 @@ function handleSaveSchedulesBatch(req) {
       var s = schedules[j];
       var sNovel = String(s.novel_name || novelName).trim();
       var sCh = String(s.chapter_num || "").trim();
-      var key = sNovel + "___" + sCh;
+      var sPlat = String(s.platform || "all").trim().toLowerCase();
+      var key = sNovel + "___" + sPlat + "___" + sCh;
 
       var rowData = [
         sNovel,
@@ -1200,14 +1208,19 @@ function handleUpdateScheduleStatus(req) {
 
     var nName = String(req.novel_name || "").trim();
     var chNum = String(req.chapter_num || "").trim();
+    var platTarget = String(req.platform || "").trim().toLowerCase();
     var lastRow = sheet.getLastRow();
     if (lastRow <= 1) return { success: false, message: "Sheet empty" };
 
-    var data = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+    var data = sheet.getRange(2, 1, lastRow - 1, Math.min(sheet.getLastColumn(), 5)).getValues();
     for (var i = 0; i < data.length; i++) {
       var rowName = String(data[i][0] || "").trim();
       var rowCh = String(data[i][1] || "").trim();
+      var rowPlat = data[i].length > 4 ? String(data[i][4] || "").trim().toLowerCase() : "all";
       if (rowName === nName && rowCh === chNum) {
+        if (platTarget && platTarget !== "all" && rowPlat && rowPlat !== "all" && rowPlat !== platTarget) {
+          continue;
+        }
         var rowIndex = i + 2;
         sheet.getRange(rowIndex, 4).setValue(String(req.status || "PUBLISHED"));
         if (req.published_at) sheet.getRange(rowIndex, 6).setValue(String(req.published_at));
@@ -1277,5 +1290,49 @@ function handleSaveSyndLog(req) {
     return { success: false, error: err.toString() };
   }
 }
+
+/**
+ * ==============================================================================
+ * 10. دالة نبضة إيقاظ سيرفر Render تلقائياً (Render Keep-Alive / Wake-up Pulse)
+ * ==============================================================================
+ * تعمل هذه الدالة بمشغل زمني (Trigger) كل 5 أو 10 دقائق لضمان بقاء سيرفر Render مستيقظاً 24/7.
+ * تستخدم muteHttpExceptions لمنع أي خطأ أثناء إقلاع السيرفر البارد (Cold Boot).
+ */
+function wakeRenderServer() {
+  var renderHealthUrl = "https://2-yqmt.onrender.com/_stcore/health";
+  var renderMainUrl = "https://2-yqmt.onrender.com/";
+  var options = {
+    "method": "get",
+    "headers": {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (NSW-Pulse/1.0)"
+    },
+    "muteHttpExceptions": true,
+    "followRedirects": true
+  };
+
+  try {
+    var response = UrlFetchApp.fetch(renderHealthUrl, options);
+    var code = response.getResponseCode();
+    Logger.log("✅ Render Health Pulse Status: " + code);
+    if (code >= 500) {
+      Utilities.sleep(2000);
+      var resp2 = UrlFetchApp.fetch(renderMainUrl, options);
+      Logger.log("🔄 Fallback Ping Status: " + resp2.getResponseCode());
+    }
+    return "OK (" + code + ")";
+  } catch (err) {
+    Logger.log("⚠️ Health check retry: " + err.toString());
+    try {
+      var respFallback = UrlFetchApp.fetch(renderMainUrl, options);
+      var fallbackCode = respFallback.getResponseCode();
+      Logger.log("🔄 Fallback Ping Status: " + fallbackCode);
+      return "Fallback OK (" + fallbackCode + ")";
+    } catch (e2) {
+      Logger.log("❌ Render Wake-up Exception: " + e2.toString());
+      return "Error: " + e2.toString();
+    }
+  }
+}
+
 
 

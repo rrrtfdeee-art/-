@@ -295,15 +295,20 @@ def delete_syndicated_novel(novel_id: int, delete_from_sheet: bool = True):
     
     cur.execute("DELETE FROM syndication_logs WHERE novel_id = ?", (novel_id,))
     cur.execute("DELETE FROM syndicated_novels WHERE id = ?", (novel_id,))
+    plat = "wattpad" if w_id else ("rewayat_club" if r_id else None)
     if novel_name:
-        cur.execute("DELETE FROM syndicated_chapter_schedules WHERE novel_name = ?", (novel_name,))
-        cur.execute("DELETE FROM syndicated_period_rules WHERE novel_name = ?", (novel_name,))
+        if plat:
+            cur.execute("DELETE FROM syndicated_chapter_schedules WHERE novel_name = ? AND (platform = ? OR platform = 'all')", (novel_name, plat))
+            cur.execute("DELETE FROM syndicated_period_rules WHERE novel_name = ?", (novel_name,))
+        else:
+            cur.execute("DELETE FROM syndicated_chapter_schedules WHERE novel_name = ?", (novel_name,))
+            cur.execute("DELETE FROM syndicated_period_rules WHERE novel_name = ?", (novel_name,))
     conn.commit()
     conn.close()
 
     if delete_from_sheet and novel_name:
         try:
-            delete_novel_schedules_from_sheet(novel_name, only_pending=False)
+            delete_novel_schedules_from_sheet(novel_name, only_pending=False, platform=plat)
         except Exception as ex_sh:
             logger.warning(f"Failed to delete novel schedules from Google Sheet: {ex_sh}")
         try:
@@ -705,6 +710,8 @@ def sync_novels_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, An
         r_url = str(r[5]).strip() if len(r) > 5 else ""
         w_enabled = int(float(str(r[6]).strip() or "0")) if len(r) > 6 else 0
         w_id = str(r[7]).strip() if len(r) > 7 else ""
+        if w_id.endswith(".0"):
+            w_id = w_id[:-2]
         w_url = str(r[8]).strip() if len(r) > 8 else ""
         
         try:
@@ -740,8 +747,16 @@ def sync_novels_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, An
             cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND rewayat_novel_id = ?", (n_name, r_id))
             existing = cur.fetchone()
         if not existing and w_id:
-            cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND wattpad_story_id = ?", (n_name, w_id))
+            cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND (wattpad_story_id = ? OR wattpad_story_id = ?)", (n_name, w_id, w_id + ".0"))
             existing = cur.fetchone()
+        if not existing:
+            # مطابقة بالمنصة إذا لم تتوفر معرفات دقيقة
+            if r_enabled and not w_enabled:
+                cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND rewayat_enabled = 1", (n_name,))
+                existing = cur.fetchone()
+            elif w_enabled and not r_enabled:
+                cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND wattpad_enabled = 1", (n_name,))
+                existing = cur.fetchone()
         
         if existing:
             cur.execute("""
@@ -806,6 +821,8 @@ def sync_novel_to_sheet(novel_dict: Dict[str, Any], spreadsheet_id: Optional[str
             
         r_id = str(novel_dict.get("rewayat_novel_id", "")).strip()
         w_id = str(novel_dict.get("wattpad_story_id", "")).strip()
+        if w_id.endswith(".0"):
+            w_id = w_id[:-2]
         
         # قراءة الصفوف الحالية لمعرفة موقع السطر — نقرأ النطاق الكامل A:Q لضمان توفر جميع المعرفات
         res = service.spreadsheets().values().get(
@@ -821,6 +838,8 @@ def sync_novel_to_sheet(novel_dict: Dict[str, Any], spreadsheet_id: Optional[str
             curr_name = str(sr[0]).strip() if len(sr) > 0 else ""
             curr_rid = str(sr[4]).strip() if len(sr) > 4 else ""
             curr_wid = str(sr[7]).strip() if len(sr) > 7 else ""
+            if curr_wid.endswith(".0"):
+                curr_wid = curr_wid[:-2]
             
             if curr_name == n_name:
                 if r_id and curr_rid == r_id:
@@ -1014,40 +1033,55 @@ def sync_schedule_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, 
             sch_ts = 0.0
 
         cur.execute("""
-        INSERT INTO syndicated_chapter_schedules (
-            novel_name, chapter_num, scheduled_time, scheduled_timestamp,
-            status, platform, published_at, post_url, period_range, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(novel_name, chapter_num) DO UPDATE SET
-            scheduled_time = excluded.scheduled_time,
-            scheduled_timestamp = excluded.scheduled_timestamp,
-            status = excluded.status,
-            platform = excluded.platform,
-            published_at = excluded.published_at,
-            post_url = excluded.post_url,
-            period_range = excluded.period_range,
-            last_error = excluded.last_error
-        """, (n_name, ch_num, sch_time_str, sch_ts, stat, plat, pub_at, p_url, p_range, l_err))
+        SELECT id, status FROM syndicated_chapter_schedules 
+        WHERE novel_name = ? AND platform = ? AND chapter_num = ?
+        """, (n_name, plat, ch_num))
+        exist_sch = cur.fetchone()
+        if exist_sch:
+            cur.execute("""
+            UPDATE syndicated_chapter_schedules SET
+                scheduled_time = ?,
+                scheduled_timestamp = ?,
+                status = ?,
+                published_at = ?,
+                post_url = ?,
+                period_range = ?,
+                last_error = ?
+            WHERE id = ?
+            """, (sch_time_str, sch_ts, stat, pub_at, p_url, p_range, l_err, exist_sch["id"]))
+        else:
+            cur.execute("""
+            INSERT INTO syndicated_chapter_schedules (
+                novel_name, chapter_num, scheduled_time, scheduled_timestamp,
+                status, platform, published_at, post_url, period_range, last_error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (n_name, ch_num, sch_time_str, sch_ts, stat, plat, pub_at, p_url, p_range, l_err))
         synced_count += 1
 
-        if n_name not in novel_stats:
-            novel_stats[n_name] = {"max_published": 0, "earliest_pending": None, "pending_count": 0}
+        stat_key = (n_name, plat)
+        if stat_key not in novel_stats:
+            novel_stats[stat_key] = {"max_published": 0, "earliest_pending": None, "pending_count": 0}
 
         if stat == "PUBLISHED":
-            if ch_num > novel_stats[n_name]["max_published"]:
-                novel_stats[n_name]["max_published"] = ch_num
+            if ch_num > novel_stats[stat_key]["max_published"]:
+                novel_stats[stat_key]["max_published"] = ch_num
         elif stat == "PENDING" and sch_ts > 0:
-            novel_stats[n_name]["pending_count"] += 1
-            if novel_stats[n_name]["earliest_pending"] is None or sch_ts < novel_stats[n_name]["earliest_pending"]:
-                novel_stats[n_name]["earliest_pending"] = sch_ts
+            novel_stats[stat_key]["pending_count"] += 1
+            if novel_stats[stat_key]["earliest_pending"] is None or sch_ts < novel_stats[stat_key]["earliest_pending"]:
+                novel_stats[stat_key]["earliest_pending"] = sch_ts
 
     conn.commit()
 
-    # تحديث وتنشيط الروايات في syndicated_novels تلقائياً لدعم ريستارت سيرفر Render
-    for n_name, st_info in novel_stats.items():
-        cur.execute("SELECT * FROM syndicated_novels WHERE novel_name = ?", (n_name,))
-        existing_nov = cur.fetchone()
-        if existing_nov:
+    # تحديث وتنشيط الروايات في syndicated_novels تلقائياً حسب المنصة لدعم ريستارت سيرفر Render
+    for (n_name, plat), st_info in novel_stats.items():
+        if plat == "rewayat_club":
+            cur.execute("SELECT * FROM syndicated_novels WHERE novel_name = ? AND rewayat_enabled = 1", (n_name,))
+        elif plat == "wattpad":
+            cur.execute("SELECT * FROM syndicated_novels WHERE novel_name = ? AND wattpad_enabled = 1", (n_name,))
+        else:
+            cur.execute("SELECT * FROM syndicated_novels WHERE novel_name = ?", (n_name,))
+        matching_novels = cur.fetchall()
+        for existing_nov in matching_novels:
             updates = {}
             if st_info["max_published"] > (existing_nov["last_synced_chapter"] or 0):
                 updates["last_synced_chapter"] = st_info["max_published"]
@@ -1075,28 +1109,43 @@ def save_chapter_schedules_batch(novel_name: str, rows: List[Dict[str, Any]], sp
     cur = conn.cursor()
     for r in rows:
         cur.execute("""
-        INSERT INTO syndicated_chapter_schedules (
-            novel_name, chapter_num, scheduled_time, scheduled_timestamp,
-            status, platform, published_at, post_url, period_range, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(novel_name, chapter_num) DO UPDATE SET
-            scheduled_time = excluded.scheduled_time,
-            scheduled_timestamp = excluded.scheduled_timestamp,
-            status = CASE WHEN syndicated_chapter_schedules.status = 'PUBLISHED' THEN 'PUBLISHED' ELSE excluded.status END,
-            platform = excluded.platform,
-            period_range = excluded.period_range
-        """, (
-            novel_name,
-            r["chapter_num"],
-            r["scheduled_time"],
-            r["scheduled_timestamp"],
-            r.get("status", "PENDING"),
-            r.get("platform", "all"),
-            r.get("published_at", ""),
-            r.get("post_url", ""),
-            r.get("period_range", ""),
-            r.get("last_error", "")
-        ))
+        SELECT id, status FROM syndicated_chapter_schedules 
+        WHERE novel_name = ? AND platform = ? AND chapter_num = ?
+        """, (novel_name, r.get("platform", "all"), r["chapter_num"]))
+        exist_sch = cur.fetchone()
+        if exist_sch:
+            cur.execute("""
+            UPDATE syndicated_chapter_schedules SET
+                scheduled_time = ?,
+                scheduled_timestamp = ?,
+                status = CASE WHEN status = 'PUBLISHED' THEN 'PUBLISHED' ELSE ? END,
+                period_range = ?
+            WHERE id = ?
+            """, (
+                r["scheduled_time"],
+                r["scheduled_timestamp"],
+                r.get("status", "PENDING"),
+                r.get("period_range", ""),
+                exist_sch["id"]
+            ))
+        else:
+            cur.execute("""
+            INSERT INTO syndicated_chapter_schedules (
+                novel_name, chapter_num, scheduled_time, scheduled_timestamp,
+                status, platform, published_at, post_url, period_range, last_error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                novel_name,
+                r["chapter_num"],
+                r["scheduled_time"],
+                r["scheduled_timestamp"],
+                r.get("status", "PENDING"),
+                r.get("platform", "all"),
+                r.get("published_at", ""),
+                r.get("post_url", ""),
+                r.get("period_range", ""),
+                r.get("last_error", "")
+            ))
     conn.commit()
     conn.close()
 
@@ -1108,7 +1157,7 @@ def save_chapter_schedules_batch(novel_name: str, rows: List[Dict[str, Any]], sp
             tab_name = ensure_schedule_tab_exists(service, ssid)
             res = service.spreadsheets().values().get(
                 spreadsheetId=ssid,
-                range=f"{tab_name}!A:D"
+                range=f"{tab_name}!A:E"
             ).execute()
             sheet_rows = res.get("values", [])
             row_map = {}
@@ -1117,7 +1166,8 @@ def save_chapter_schedules_batch(novel_name: str, rows: List[Dict[str, Any]], sp
                     continue
                 if len(sr) >= 2:
                     try:
-                        k = (str(sr[0]).strip(), int(float(str(sr[1]).strip())))
+                        p_val = str(sr[4]).strip().lower() if len(sr) > 4 and str(sr[4]).strip() else "all"
+                        k = (str(sr[0]).strip(), p_val, int(float(str(sr[1]).strip())))
                         st_val = str(sr[3]).strip().upper() if len(sr) >= 4 else ""
                         row_map[k] = (idx, st_val)
                     except Exception:
@@ -1127,6 +1177,7 @@ def save_chapter_schedules_batch(novel_name: str, rows: List[Dict[str, Any]], sp
             update_data = []
 
             for r in rows:
+                plat_val = str(r.get("platform", "all")).lower()
                 val_row = [
                     novel_name,
                     r["chapter_num"],
@@ -1138,7 +1189,7 @@ def save_chapter_schedules_batch(novel_name: str, rows: List[Dict[str, Any]], sp
                     r.get("period_range", ""),
                     r.get("last_error", "")
                 ]
-                key = (novel_name, r["chapter_num"])
+                key = (novel_name, plat_val, r["chapter_num"])
                 if key in row_map:
                     row_idx, cur_status = row_map[key]
                     if cur_status == "PUBLISHED":
@@ -1188,20 +1239,31 @@ def update_chapter_schedule_status(
     post_url: str = "",
     error_msg: str = "",
     published_at: str = "",
+    platform: Optional[str] = None,
     spreadsheet_id: Optional[str] = None
 ):
-    """تحديث حالة الفصل المجدول في قاعدة البيانات المحلية وفي Google Sheet."""
+    """تحديث حالة الفصل المجدول في قاعدة البيانات المحلية وفي Google Sheet بحسب المنصة."""
     now_str = published_at or datetime.datetime.now(TZ_ARABIA).strftime("%Y-%m-%d %H:%M:%S")
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("""
-    UPDATE syndicated_chapter_schedules SET
-        status = ?,
-        published_at = CASE WHEN ? = 'PUBLISHED' THEN ? ELSE published_at END,
-        post_url = CASE WHEN ? != '' THEN ? ELSE post_url END,
-        last_error = ?
-    WHERE novel_name = ? AND chapter_num = ?
-    """, (status, status, now_str, post_url, post_url, error_msg, novel_name, chapter_num))
+    if platform and platform != "all":
+        cur.execute("""
+        UPDATE syndicated_chapter_schedules SET
+            status = ?,
+            published_at = CASE WHEN ? = 'PUBLISHED' THEN ? ELSE published_at END,
+            post_url = CASE WHEN ? != '' THEN ? ELSE post_url END,
+            last_error = ?
+        WHERE novel_name = ? AND chapter_num = ? AND (platform = ? OR platform = 'all')
+        """, (status, status, now_str, post_url, post_url, error_msg, novel_name, chapter_num, platform))
+    else:
+        cur.execute("""
+        UPDATE syndicated_chapter_schedules SET
+            status = ?,
+            published_at = CASE WHEN ? = 'PUBLISHED' THEN ? ELSE published_at END,
+            post_url = CASE WHEN ? != '' THEN ? ELSE post_url END,
+            last_error = ?
+        WHERE novel_name = ? AND chapter_num = ?
+        """, (status, status, now_str, post_url, post_url, error_msg, novel_name, chapter_num))
     conn.commit()
     conn.close()
 
@@ -1212,13 +1274,16 @@ def update_chapter_schedule_status(
             tab_name = ensure_schedule_tab_exists(service, ssid)
             res = service.spreadsheets().values().get(
                 spreadsheetId=ssid,
-                range=f"{tab_name}!A:B"
+                range=f"{tab_name}!A:E"
             ).execute()
             sheet_rows = res.get("values", [])
             for idx, sr in enumerate(sheet_rows, start=1):
                 if idx == 1:
                     continue
+                r_plat = str(sr[4]).strip().lower() if len(sr) > 4 else "all"
                 if len(sr) >= 2 and str(sr[0]).strip() == novel_name and str(sr[1]).strip() == str(chapter_num):
+                    if platform and platform != "all" and r_plat not in (platform.lower(), "all"):
+                        continue
                     service.spreadsheets().values().update(
                         spreadsheetId=ssid,
                         range=f"{tab_name}!D{idx}",
@@ -1251,7 +1316,8 @@ def update_chapter_schedule_status(
                 "status": status,
                 "post_url": post_url,
                 "error_msg": error_msg,
-                "published_at": now_str
+                "published_at": now_str,
+                "platform": platform or "all"
             }
             requests.post(GAS_WEBAPP_URL, json=payload, timeout=12)
         except Exception as e_gas:
@@ -1312,8 +1378,8 @@ def delete_chapter_schedule(novel_name: str, chapter_num: int, spreadsheet_id: O
             logger.warning(f"Could not cancel chapter in Google Sheet: {ex_d}")
     return True
 
-def delete_novel_schedules_from_sheet(novel_name: str, only_pending: bool = False, spreadsheet_id: Optional[str] = None) -> bool:
-    """حذف صفوف الرواية من شيت الجدولة السحابي في Google Sheet."""
+def delete_novel_schedules_from_sheet(novel_name: str, only_pending: bool = False, platform: Optional[str] = None, spreadsheet_id: Optional[str] = None) -> bool:
+    """حذف صفوف الرواية من شيت الجدولة السحابي في Google Sheet بحسب المنصة."""
     ssid = spreadsheet_id or get_schedule_spreadsheet_id()
     service = _get_sheets_service()
     if not service:
@@ -1330,7 +1396,11 @@ def delete_novel_schedules_from_sheet(novel_name: str, only_pending: bool = Fals
         header = rows[0]
         remaining = [header]
         for r in rows[1:]:
+            r_plat = str(r[4]).strip().lower() if len(r) > 4 else "all"
             if len(r) >= 1 and str(r[0]).strip().lower() == novel_name.strip().lower():
+                if platform and platform != "all" and r_plat not in (platform.lower(), "all"):
+                    remaining.append(r)
+                    continue
                 if only_pending and len(r) >= 4 and str(r[3]).strip().upper() == "PUBLISHED":
                     remaining.append(r)
                 else:
@@ -1354,14 +1424,17 @@ def delete_novel_schedules_from_sheet(novel_name: str, only_pending: bool = Fals
         logger.error(f"Error removing novel schedules from sheet: {ex}")
         return False
 
-def cancel_all_pending_schedules_for_novel(novel_name: str) -> bool:
-    """إلغاء وحذف كافة الفصول المجدولة المعلقة لرواية معينة من قاعدة البيانات والشيت."""
+def cancel_all_pending_schedules_for_novel(novel_name: str, platform: Optional[str] = None) -> bool:
+    """إلغاء وحذف كافة الفصول المجدولة المعلقة لرواية معينة من قاعدة البيانات والشيت بحسب المنصة."""
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("DELETE FROM syndicated_chapter_schedules WHERE novel_name = ? AND status != 'PUBLISHED'", (novel_name,))
+    if platform and platform != "all":
+        cur.execute("DELETE FROM syndicated_chapter_schedules WHERE novel_name = ? AND status != 'PUBLISHED' AND (platform = ? OR platform = 'all')", (novel_name, platform))
+    else:
+        cur.execute("DELETE FROM syndicated_chapter_schedules WHERE novel_name = ? AND status != 'PUBLISHED'", (novel_name,))
     conn.commit()
     conn.close()
-    delete_novel_schedules_from_sheet(novel_name, only_pending=True)
+    delete_novel_schedules_from_sheet(novel_name, only_pending=True, platform=platform)
     return True
 
 def set_novel_last_published_chapter(novel_name: str, last_chapter: int, novel_id: Optional[int] = None, platform: Optional[str] = None):
@@ -1377,10 +1450,16 @@ def set_novel_last_published_chapter(novel_name: str, last_chapter: int, novel_i
     else:
         cur.execute("UPDATE syndicated_novels SET last_synced_chapter = ? WHERE novel_name = ?", (last_chapter, novel_name))
 
-    cur.execute("""
-    UPDATE syndicated_chapter_schedules SET status = 'PUBLISHED'
-    WHERE novel_name = ? AND chapter_num <= ? AND status != 'PUBLISHED'
-    """, (novel_name, last_chapter))
+    if platform and platform != "all":
+        cur.execute("""
+        UPDATE syndicated_chapter_schedules SET status = 'PUBLISHED'
+        WHERE novel_name = ? AND chapter_num <= ? AND status != 'PUBLISHED' AND (platform = ? OR platform = 'all')
+        """, (novel_name, last_chapter, platform))
+    else:
+        cur.execute("""
+        UPDATE syndicated_chapter_schedules SET status = 'PUBLISHED'
+        WHERE novel_name = ? AND chapter_num <= ? AND status != 'PUBLISHED'
+        """, (novel_name, last_chapter))
     conn.commit()
     conn.close()
     try:
@@ -1388,13 +1467,16 @@ def set_novel_last_published_chapter(novel_name: str, last_chapter: int, novel_i
         service = _get_sheets_service()
         if service:
             tab_name = ensure_schedule_tab_exists(service, ssid)
-            res = service.spreadsheets().values().get(spreadsheetId=ssid, range=f"{tab_name}!A:D").execute()
+            res = service.spreadsheets().values().get(spreadsheetId=ssid, range=f"{tab_name}!A:E").execute()
             sheet_rows = res.get("values", [])
             up_data = []
             for idx, sr in enumerate(sheet_rows, start=1):
                 if idx == 1:
                     continue
+                r_plat = str(sr[4]).strip().lower() if len(sr) > 4 else "all"
                 if len(sr) >= 2 and str(sr[0]).strip().lower() == novel_name.strip().lower():
+                    if platform and platform != "all" and r_plat not in (platform.lower(), "all"):
+                        continue
                     try:
                         ch_n = int(float(str(sr[1]).strip()))
                         if ch_n <= last_chapter:

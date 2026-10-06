@@ -524,7 +524,7 @@ def render_rewayat_club_tab():
                         syndication_db.save_or_update_syndicated_novel(nov)
 
                         if edit_mode == "daily_times" and edit_hours and final_stop > last_s:
-                            syndication_db.cancel_all_pending_schedules_for_novel(nov["novel_name"])
+                            syndication_db.cancel_all_pending_schedules_for_novel(nov["novel_name"], platform="rewayat_club")
                             gen_rows = syndication_db.generate_schedule_from_period_rules(
                                 novel_name=nov["novel_name"],
                                 start_ch=last_s + 1,
@@ -1054,9 +1054,11 @@ def render_wattpad_tab():
                 st.error("❌ رقم بداية الفصول يجب أن يكون أقل من أو يساوي رقم النهاية.")
             else:
                 with st.spinner("⏳ جاري حفظ قصة واتباد وجدولة المواعيد في المنظومة وGoogle Sheet..."):
-                    clean_story_id = target_wid
+                    clean_story_id = str(target_wid).strip()
                     if "story/" in clean_story_id:
                         clean_story_id = clean_story_id.split("story/")[-1].split("-")[0].split("/")[0].strip()
+                    if clean_story_id.endswith(".0"):
+                        clean_story_id = clean_story_id[:-2]
 
                     wp_mode = wp_sched_cfg["mode"]
                     wp_hours = wp_sched_cfg["selected_hours"]
@@ -1125,7 +1127,10 @@ def render_wattpad_tab():
                 col_info, col_status, col_actions = st.columns([3, 2, 1.5])
                 with col_info:
                     st.markdown(f"**📖 {nov['novel_name']}**")
-                    st.caption(f"معرف قصة واتباد: `{nov['wattpad_story_id'] or 'غير محدد'}` | المصدر: `{nov['blogger_label']}`")
+                    w_disp_id = str(nov['wattpad_story_id'] or 'غير محدد')
+                    if w_disp_id.endswith(".0"):
+                        w_disp_id = w_disp_id[:-2]
+                    st.caption(f"معرف قصة واتباد: `{w_disp_id}` | المصدر: `{nov['blogger_label']}`")
                 with col_status:
                     target_ch = nov['last_synced_chapter'] + 1
                     st.markdown(f"📊 آخر فصل تم نشره: **{nov['last_synced_chapter']}** / التوقف عند: **{nov['stop_chapter']}**")
@@ -1229,7 +1234,7 @@ def render_wattpad_tab():
                         syndication_db.save_or_update_syndicated_novel(nov)
 
                         if wedit_mode == "daily_times" and wedit_hours and wfinal_stop > wlast_s:
-                            syndication_db.cancel_all_pending_schedules_for_novel(nov["novel_name"])
+                            syndication_db.cancel_all_pending_schedules_for_novel(nov["novel_name"], platform="wattpad")
                             gen_rows = syndication_db.generate_schedule_from_period_rules(
                                 novel_name=nov["novel_name"],
                                 start_ch=wlast_s + 1,

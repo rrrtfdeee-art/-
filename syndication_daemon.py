@@ -547,10 +547,11 @@ def publish_now_immediate(novel_id: int) -> Dict[str, Any]:
         try:
             wp_client = wattpad_poster.WattpadClient(token=wp_token, username=wp_user, password=wp_pass)
             wp_content = extracted.get("content_wattpad") or extracted["content_clean"]
-            wp_res = wp_client.publish_part(
+            wp_res = wp_client.publish_chapter_to_story(
                 story_id=nov["wattpad_story_id"],
+                chapter_num=target_ch,
                 title=extracted["title"],
-                text=wp_content
+                content=wp_content
             )
             if wp_res.get("success"):
                 success = True
@@ -563,7 +564,7 @@ def publish_now_immediate(novel_id: int) -> Dict[str, Any]:
                     status="SUCCESS", post_url=wp_url
                 )
             else:
-                err = wp_res.get("message", "فشل النشر على واتباد")
+                err = wp_res.get("error") or wp_res.get("message", "فشل النشر على واتباد")
                 messages.append(f"واتباد: {err}")
                 syndication_db.log_syndication_event(
                     novel_id=nov["id"], chapter_num=target_ch, platform="wattpad",
@@ -586,12 +587,14 @@ def publish_now_immediate(novel_id: int) -> Dict[str, Any]:
         else:
             nov["next_run_timestamp"] = time.time() + float(nov.get("interval_hours", 12.0)) * 3600.0
 
+        plat_target = "wattpad" if nov.get("wattpad_enabled") else ("rewayat_club" if nov.get("rewayat_enabled") else "all")
         syndication_db.save_or_update_syndicated_novel(nov)
         syndication_db.update_chapter_schedule_status(
             novel_name=n_name,
             chapter_num=target_ch,
             status="PUBLISHED",
-            post_url=post_url
+            post_url=post_url,
+            platform=plat_target
         )
         return {
             "success": True,

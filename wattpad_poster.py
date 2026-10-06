@@ -160,11 +160,15 @@ class WattpadClient:
         if not self.token:
             return {"success": False, "error": "يرجى إدخال وحفظ التوكن أو بيانات الحساب في واتباد أولاً."}
 
-        clean_story_id = story_id.strip()
+        clean_story_id = str(story_id).strip()
         # تنظيف إذا تم إدخال رابط قصة واتباد كامل
         if "wattpad.com/story/" in clean_story_id:
             part = clean_story_id.split("wattpad.com/story/")[-1]
             clean_story_id = part.split("-")[0].split("/")[0].split("?")[0]
+        try:
+            clean_story_id = str(int(float(clean_story_id)))
+        except Exception:
+            pass
 
         part_title = title.strip() or f"الفصل {chapter_num}"
         # تنسيق المحتوى بـ HTML صحيح
@@ -275,4 +279,9 @@ class WattpadClient:
                 }
         except Exception as e:
             return {"success": False, "error": f"استثناء أثناء نشر الفصل على واتباد: {str(e)}"}
+
+    def publish_part(self, story_id: str, title: str = "", content: str = "", text: str = "", chapter_num: int = 0) -> Dict[str, Any]:
+        """اسم مرادف لـ publish_chapter_to_story لضمان التوافق مع كافة الاستدعاءات."""
+        body = content or text
+        return self.publish_chapter_to_story(story_id=story_id, chapter_num=chapter_num, title=title, content=body)
 
