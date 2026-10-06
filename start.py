@@ -65,13 +65,17 @@ if __name__ == "__main__":
     print("  Telegram Bot + Autonomous Publisher + Streamlit UI")
     print("=" * 60)
 
-    # 1. استرجاع ومزامنة الروايات والإعدادات والمواعيد سحابياً من Google Sheet
-    try:
-        import syndication_db
-        syndication_db.hydrate_all_from_sheet()
-        logger.info("✅ Hydrated all novels, settings, and schedules from Google Sheet.")
-    except Exception as e_hyd:
-        logger.warning(f"Note on sheet hydration: {e_hyd}")
+    # 1. استرجاع ومزامنة الروايات والإعدادات والمواعيد سحابياً في خيط خلفي (Non-blocking)
+    def _deferred_hydration():
+        try:
+            time.sleep(1)
+            import syndication_db
+            syndication_db.hydrate_all_from_sheet()
+            logger.info("✅ Hydrated all novels, settings, and schedules from Google Sheet.")
+        except Exception as e_hyd:
+            logger.warning(f"Note on sheet hydration: {e_hyd}")
+
+    threading.Thread(target=_deferred_hydration, daemon=True, name="SheetHydrationThread").start()
 
     # 2. فحص إعدادات قاعدة البيانات Supabase (إن وجدت)
     try:

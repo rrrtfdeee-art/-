@@ -161,6 +161,25 @@ function doPost(e) {
       return createJsonResponse({ status: "success", result: resUpdate }, 200);
     }
 
+    // =========================================================================
+    // 9. تفريغ وحفظ بيانات النشر التلقائي والجدولة في Google Sheet
+    // =========================================================================
+    if (action === "save_novel") {
+      return createJsonResponse(handleSaveSyndicatedNovel(requestData), 200);
+    }
+    if (action === "save_schedules") {
+      return createJsonResponse(handleSaveSchedulesBatch(requestData), 200);
+    }
+    if (action === "update_schedule_status") {
+      return createJsonResponse(handleUpdateScheduleStatus(requestData), 200);
+    }
+    if (action === "save_setting") {
+      return createJsonResponse(handleSaveSyndSetting(requestData), 200);
+    }
+    if (action === "save_log") {
+      return createJsonResponse(handleSaveSyndLog(requestData), 200);
+    }
+
     return ContentService.createTextOutput("OK");
 
   } catch (err) {
@@ -1016,6 +1035,247 @@ function updateChapterContentInPlace(spreadsheetId, sheetName, novelName, chapte
     new_length: newContent.length,
     gain: newContent.length - oldContent.length
   };
+}
+
+
+/**
+ * ==============================================================================
+ * دوال تفريغ ومزامنة بيانات النشر التلقائي (Syndication Engine Cloud Sync)
+ * ==============================================================================
+ */
+var DEFAULT_SYNDICATION_SPREADSHEET_ID = "12_cNDWNVpyTK-VG1zLl0z6N3fDeO2qIVn5LYuDgRWD0";
+
+function getOrCreateSheetTab(ss, tabName, headers) {
+  var sheet = ss.getSheetByName(tabName);
+  if (!sheet) {
+    if (tabName === "SyndicationSchedule") {
+      sheet = ss.getSheetByName("الورقة1");
+    }
+  }
+  if (!sheet) {
+    sheet = ss.insertSheet(tabName);
+  }
+  if (headers && headers.length > 0) {
+    var lastRow = sheet.getLastRow();
+    if (lastRow === 0) {
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    }
+  }
+  return sheet;
+}
+
+function handleSaveSyndicatedNovel(req) {
+  try {
+    var ssId = req.spreadsheet_id || DEFAULT_SYNDICATION_SPREADSHEET_ID;
+    var ss = SpreadsheetApp.openById(ssId);
+    var headers = [
+      "novel_name", "blogger_url", "blogger_label", "rewayat_enabled", "rewayat_novel_id",
+      "rewayat_novel_url", "wattpad_enabled", "wattpad_story_id", "wattpad_story_url",
+      "start_chapter", "last_synced_chapter", "stop_chapter", "interval_hours",
+      "next_run_timestamp", "custom_cta", "is_active", "daily_times"
+    ];
+    var sheet = getOrCreateSheetTab(ss, "SyndicatedNovels", headers);
+    var nov = req.novel || {};
+    var nName = String(nov.novel_name || "").trim();
+    if (!nName) return { success: false, error: "Empty novel_name" };
+
+    var rId = String(nov.rewayat_novel_id || "").trim();
+    var wId = String(nov.wattpad_story_id || "").trim();
+
+    var lastRow = sheet.getLastRow();
+    var targetRow = -1;
+    if (lastRow > 1) {
+      var data = sheet.getRange(2, 1, lastRow - 1, Math.min(sheet.getLastColumn(), 17)).getValues();
+      for (var i = 0; i < data.length; i++) {
+        var rowName = String(data[i][0] || "").trim();
+        var rowRid = data[i].length > 4 ? String(data[i][4] || "").trim() : "";
+        var rowWid = data[i].length > 7 ? String(data[i][7] || "").trim() : "";
+        if (rowName === nName) {
+          if (rId && rowRid === rId) { targetRow = i + 2; break; }
+          else if (wId && rowWid === wId) { targetRow = i + 2; break; }
+          else if (!rId && !wId) { targetRow = i + 2; break; }
+        }
+      }
+    }
+
+    var rowValues = [
+      nName,
+      String(nov.blogger_url || ""),
+      String(nov.blogger_label || ""),
+      nov.rewayat_enabled !== undefined ? Number(nov.rewayat_enabled) : 1,
+      rId,
+      String(nov.rewayat_novel_url || ""),
+      nov.wattpad_enabled !== undefined ? Number(nov.wattpad_enabled) : 0,
+      wId,
+      String(nov.wattpad_story_url || ""),
+      Number(nov.start_chapter || 1),
+      Number(nov.last_synced_chapter || 0),
+      Number(nov.stop_chapter || 9999),
+      Number(nov.interval_hours || 12.0),
+      Number(nov.next_run_timestamp || 0.0),
+      String(nov.custom_cta || ""),
+      nov.is_active !== undefined ? Number(nov.is_active) : 1,
+      String(nov.daily_times || "")
+    ];
+
+    if (targetRow > 0) {
+      sheet.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
+    } else {
+      sheet.appendRow(rowValues);
+    }
+    SpreadsheetApp.flush();
+    return { success: true, novel_name: nName, row: targetRow > 0 ? targetRow : sheet.getLastRow() };
+  } catch (err) {
+    return { success: false, error: err.toString() };
+  }
+}
+
+function handleSaveSchedulesBatch(req) {
+  try {
+    var ssId = req.spreadsheet_id || DEFAULT_SYNDICATION_SPREADSHEET_ID;
+    var ss = SpreadsheetApp.openById(ssId);
+    var headers = ["novel_name", "chapter_num", "scheduled_time", "status", "platform", "published_at", "post_url", "period_range", "last_error"];
+    var sheet = getOrCreateSheetTab(ss, "SyndicationSchedule", headers);
+
+    var novelName = String(req.novel_name || "").trim();
+    var schedules = req.schedules || [];
+    if (!schedules.length) return { success: true, count: 0 };
+
+    var lastRow = sheet.getLastRow();
+    var existingMap = {};
+    if (lastRow > 1) {
+      var data = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+      for (var i = 0; i < data.length; i++) {
+        var n = String(data[i][0] || "").trim();
+        var ch = String(data[i][1] || "").trim();
+        if (n && ch) {
+          existingMap[n + "___" + ch] = i + 2;
+        }
+      }
+    }
+
+    var newRows = [];
+    for (var j = 0; j < schedules.length; j++) {
+      var s = schedules[j];
+      var sNovel = String(s.novel_name || novelName).trim();
+      var sCh = String(s.chapter_num || "").trim();
+      var key = sNovel + "___" + sCh;
+
+      var rowData = [
+        sNovel,
+        Number(sCh) || sCh,
+        String(s.scheduled_time || ""),
+        String(s.status || "PENDING"),
+        String(s.platform || "all"),
+        String(s.published_at || ""),
+        String(s.post_url || ""),
+        String(s.period_range || ""),
+        String(s.last_error || "")
+      ];
+
+      if (existingMap[key]) {
+        sheet.getRange(existingMap[key], 1, 1, rowData.length).setValues([rowData]);
+      } else {
+        newRows.push(rowData);
+      }
+    }
+
+    if (newRows.length > 0) {
+      var startRow = sheet.getLastRow() + 1;
+      sheet.getRange(startRow, 1, newRows.length, headers.length).setValues(newRows);
+    }
+
+    SpreadsheetApp.flush();
+    return { success: true, updated: schedules.length - newRows.length, inserted: newRows.length };
+  } catch (err) {
+    return { success: false, error: err.toString() };
+  }
+}
+
+function handleUpdateScheduleStatus(req) {
+  try {
+    var ssId = req.spreadsheet_id || DEFAULT_SYNDICATION_SPREADSHEET_ID;
+    var ss = SpreadsheetApp.openById(ssId);
+    var sheet = getOrCreateSheetTab(ss, "SyndicationSchedule", null);
+
+    var nName = String(req.novel_name || "").trim();
+    var chNum = String(req.chapter_num || "").trim();
+    var lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return { success: false, message: "Sheet empty" };
+
+    var data = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+    for (var i = 0; i < data.length; i++) {
+      var rowName = String(data[i][0] || "").trim();
+      var rowCh = String(data[i][1] || "").trim();
+      if (rowName === nName && rowCh === chNum) {
+        var rowIndex = i + 2;
+        sheet.getRange(rowIndex, 4).setValue(String(req.status || "PUBLISHED"));
+        if (req.published_at) sheet.getRange(rowIndex, 6).setValue(String(req.published_at));
+        if (req.post_url) sheet.getRange(rowIndex, 7).setValue(String(req.post_url));
+        if (req.error_msg) sheet.getRange(rowIndex, 9).setValue(String(req.error_msg));
+        SpreadsheetApp.flush();
+        return { success: true, row: rowIndex };
+      }
+    }
+    return { success: false, message: "Chapter not found in schedule" };
+  } catch (err) {
+    return { success: false, error: err.toString() };
+  }
+}
+
+function handleSaveSyndSetting(req) {
+  try {
+    var ssId = req.spreadsheet_id || DEFAULT_SYNDICATION_SPREADSHEET_ID;
+    var ss = SpreadsheetApp.openById(ssId);
+    var headers = ["key", "value", "updated_at"];
+    var sheet = getOrCreateSheetTab(ss, "SyndicationSettings", headers);
+
+    var key = String(req.key || "").trim();
+    var val = String(req.value || "");
+    var updatedAt = String(req.updated_at || new Date().toISOString());
+    if (!key) return { success: false, error: "Empty key" };
+
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+      var keys = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+      for (var i = 0; i < keys.length; i++) {
+        if (String(keys[i][0] || "").trim() === key) {
+          sheet.getRange(i + 2, 2, 1, 2).setValues([[val, updatedAt]]);
+          SpreadsheetApp.flush();
+          return { success: true, updated: key };
+        }
+      }
+    }
+    sheet.appendRow([key, val, updatedAt]);
+    SpreadsheetApp.flush();
+    return { success: true, inserted: key };
+  } catch (err) {
+    return { success: false, error: err.toString() };
+  }
+}
+
+function handleSaveSyndLog(req) {
+  try {
+    var ssId = req.spreadsheet_id || DEFAULT_SYNDICATION_SPREADSHEET_ID;
+    var ss = SpreadsheetApp.openById(ssId);
+    var headers = ["novel_name", "chapter_num", "platform", "status", "post_url", "error_msg", "published_at"];
+    var sheet = getOrCreateSheetTab(ss, "SyndicationLogs", headers);
+
+    var logRow = [
+      String(req.novel_name || ""),
+      Number(req.chapter_num) || 0,
+      String(req.platform || ""),
+      String(req.status || ""),
+      String(req.post_url || ""),
+      String(req.error_msg || ""),
+      new Date().toISOString()
+    ];
+    sheet.appendRow(logRow);
+    SpreadsheetApp.flush();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.toString() };
+  }
 }
 
 

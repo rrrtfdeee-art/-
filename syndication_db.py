@@ -326,6 +326,7 @@ def log_syndication_event(novel_id: int, chapter_num: int, platform: str, status
             n_name = nov["novel_name"] if nov else ""
             payload = {
                 "action": "save_log",
+                "spreadsheet_id": get_schedule_spreadsheet_id(),
                 "novel_name": n_name,
                 "chapter_num": chapter_num,
                 "platform": platform,
@@ -569,7 +570,6 @@ def sync_settings_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, 
 
 def save_setting_to_sheet(key: str, value: str, spreadsheet_id: Optional[str] = None) -> bool:
     """حفظ وتحديث مفتاح إعدادات في تبويب SyndicationSettings بـ Google Sheet."""
-    save_synd_setting(key, value)
     ssid = spreadsheet_id or get_schedule_spreadsheet_id()
     service = _get_sheets_service()
     now_str = datetime.datetime.now(TZ_ARABIA).strftime("%Y-%m-%d %H:%M:%S")
@@ -613,6 +613,7 @@ def save_setting_to_sheet(key: str, value: str, spreadsheet_id: Optional[str] = 
     try:
         payload = {
             "action": "save_setting",
+            "spreadsheet_id": ssid,
             "key": key,
             "value": value,
             "updated_at": now_str
@@ -778,8 +779,10 @@ def sync_novel_to_sheet(novel_dict: Dict[str, Any], spreadsheet_id: Optional[str
     if not service:
         # Fallback إلى GAS WebApp السحابي (بدون حاجة لأي ملف credentials)
         try:
+            ssid = spreadsheet_id or get_schedule_spreadsheet_id()
             payload = {
                 "action": "save_novel",
+                "spreadsheet_id": ssid,
                 "novel": novel_dict
             }
             res = requests.post(GAS_WEBAPP_URL, json=payload, timeout=12)
@@ -1162,6 +1165,7 @@ def save_chapter_schedules_batch(novel_name: str, rows: List[Dict[str, Any]], sp
         try:
             payload = {
                 "action": "save_schedules",
+                "spreadsheet_id": ssid,
                 "novel_name": novel_name,
                 "schedules": rows
             }
@@ -1236,6 +1240,7 @@ def update_chapter_schedule_status(
         try:
             payload = {
                 "action": "update_schedule_status",
+                "spreadsheet_id": ssid,
                 "novel_name": novel_name,
                 "chapter_num": chapter_num,
                 "status": status,
