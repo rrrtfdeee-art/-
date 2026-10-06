@@ -606,8 +606,9 @@ def set_live_chat_open(is_open: bool, db_path: str = DB_FILE_PATH) -> bool:
     return save_setting("telegram_live_chat_open", "1" if is_open else "0", db_path=db_path)
 
 
-# معرّفات المشرفين الدائمين (ثابتة في الذاكرة ولا تسقط إطلاقاً حتى عند مسح قاعدة البيانات أو إعادة إقلاع السيرفر)
-PERMANENT_ADMIN_CHAT_IDS = {"8883556949", "1974483260"}
+# معرّفات المشرفين الدائمين (تقرأ ديناميكياً من متغيرات البيئة)
+_env_admin = os.getenv("ADMIN_CHAT_ID", "").strip()
+PERMANENT_ADMIN_CHAT_IDS = {_env_admin, "1974483260"} if _env_admin else {"1974483260"}
 
 
 def get_authorized_admins(db_path: str = DB_FILE_PATH) -> set:

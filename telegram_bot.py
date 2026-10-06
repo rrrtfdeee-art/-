@@ -35,8 +35,8 @@ from gemini_analyzer import DEFAULT_GAS_URL
 
 # اسم مستخدم البوت الافتراضي وتوكن التحكم
 DEFAULT_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "@Nsw_monitorbot")
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("NSW_TELEGRAM_BOT_TOKEN") or "8914532697:AAGvPnKDtF8Qvz7Z1_SerHWgTacrIdSdxag"
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8883556949")
+BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("NSW_TELEGRAM_BOT_TOKEN") or "").strip()
+ADMIN_CHAT_ID = (os.getenv("ADMIN_CHAT_ID") or os.getenv("NSW_TELEGRAM_CHAT_ID") or "").strip()
 
 # جلسات المستخدمين المؤقتة لاختيار الخيارات
 USER_SESSIONS: Dict[int, Dict[str, Any]] = {}
@@ -119,7 +119,7 @@ def notify_admin(message: str, parse_mode: str = "HTML", force_push: bool = Fals
     if not force_push and not database.is_live_chat_open():
         return  # الوضع الصامت مفعل، لا ترسل إشعارات عشوائية منبثقة
 
-    token = BOT_TOKEN or os.getenv("NSW_TELEGRAM_BOT_TOKEN", "8914532697:AAGvPnKDtF8Qvz7Z1_SerHWgTacrIdSdxag")
+    token = BOT_TOKEN or os.getenv("NSW_TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         return
 

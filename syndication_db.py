@@ -149,18 +149,23 @@ def init_syndication_tables():
         logger.warning(f"Could not launch initial sheet sync: {e_th}")
 
 def _seed_default_syndication_data(conn):
-    """تهيئة البيانات الافتراضية المعتمدة تلقائياً إذا كانت الجداول فارغة (مفيد لحاويات Render السحابية)."""
+    """تهيئة البيانات الافتراضية المعتمدة تلقائياً من المتغيرات البيئية (مفيد لحاويات Render السحابية)."""
     try:
         cur = conn.cursor()
-        # 1. إعدادات حساب نادي الروايات
-        cur.execute("SELECT COUNT(*) FROM syndication_settings WHERE key = 'rewayat_token'")
-        if cur.fetchone()[0] == 0:
-            cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", 
-                        ("rewayat_username", os.environ.get("REWAYAT_USERNAME", "wx")))
-            cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", 
-                        ("rewayat_token", os.environ.get("REWAYAT_TOKEN", "4e3379691bd8dcf3025308a2c677318ed4383f31")))
-        
-        # تم إيقاف إضافة الروايات الافتراضية تلقائياً بناءً على طلب المشرف لمنع التعارض أو استعادة روايات محذوفة
+        r_user = os.environ.get("REWAYAT_USERNAME", "").strip()
+        r_token = os.environ.get("REWAYAT_TOKEN", "").strip()
+        if r_user:
+            cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", ("rewayat_username", r_user))
+        if r_token:
+            cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", ("rewayat_token", r_token))
+
+        w_user = os.environ.get("WATTPAD_USERNAME", "").strip()
+        w_pass = os.environ.get("WATTPAD_PASSWORD", "").strip()
+        if w_user:
+            cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", ("wattpad_username", w_user))
+        if w_pass:
+            cur.execute("INSERT OR REPLACE INTO syndication_settings (key, value) VALUES (?, ?)", ("wattpad_password", w_pass))
+
         conn.commit()
     except Exception as e_seed:
         pass
