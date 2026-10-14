@@ -135,7 +135,9 @@ def process_scheduled_chapters_cycle(now: float):
                 novel_name=n_name,
                 chapter_num=target_ch,
                 custom_cta=nov.get("custom_cta", ""),
-                blogger_url=nov.get("blogger_url", "")
+                blogger_url=nov.get("blogger_url", ""),
+                source_site=nov.get("source_site", "ar"),
+                archive_repo=nov.get("archive_repo", "")
             )
 
             if not extracted.get("success"):
@@ -366,7 +368,9 @@ def run_syndication_cycle():
                 novel_name=nov["novel_name"],
                 chapter_num=target_ch,
                 custom_cta=nov.get("custom_cta", ""),
-                blogger_url=nov.get("blogger_url", "")
+                blogger_url=nov.get("blogger_url", ""),
+                source_site=nov.get("source_site", "ar"),
+                archive_repo=nov.get("archive_repo", "")
             )
 
             if not extracted.get("success"):
@@ -550,13 +554,15 @@ def publish_now_immediate(novel_id: int) -> Dict[str, Any]:
         novel_name=n_name,
         chapter_num=target_ch,
         custom_cta=nov.get("custom_cta", ""),
-        blogger_url=nov.get("blogger_url", "")
+        blogger_url=nov.get("blogger_url", ""),
+        source_site=nov.get("source_site", "ar"),
+        archive_repo=nov.get("archive_repo", "")
     )
     if not extracted.get("success"):
         return {
             "success": False,
             "chapter_num": target_ch,
-            "message": f"الفصل {target_ch} غير متوفر في الأرشيف السحابي rrrtfdeee-art/back. تأكد من توفره هناك أولاً."
+            "message": f"الفصل {target_ch} غير متوفر في الأرشيف السحابي (المصدر: {nov.get('source_site', 'ar')}). تأكد من توفره هناك أولاً."
         }
 
     success = False

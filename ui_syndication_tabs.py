@@ -362,6 +362,24 @@ def render_rewayat_club_tab():
             cta_default = "✨ استمتعتم بالفصل؟ لدعم استمرار الترجمة ومتابعة الفصول المتقدمة فور صدورها، تفضلوا بزيارة موقعنا الأصلي عبر الرابط في خانة الدعم/بطاقة الرواية ✨"
             custom_cta = st.text_area("💬 التعليق التحفيزي الثابت لنهاية كل فصل (التوجيه لخانة الدعم):", value=cta_default, height=70, key="rc_uni_cta")
 
+        # اختيار مصدر محتوى الرواية والأرشيف السحابي
+        rc_src_c1, rc_src_c2 = st.columns([2, 1])
+        with rc_src_c1:
+            rc_source_choice = st.radio(
+                "🌐 مصدر محتوى الرواية والأرشيف:",
+                ["🇸🇦 الموقع العربي (الأرشيف: rrrtfdeee-art/back)", "🇬🇧 الموقع الإنجليزي (الأرشيف: rrrtfdeee-art/back-en)"],
+                index=0,
+                horizontal=True,
+                key="rc_add_source_choice"
+            )
+            chosen_rc_source = "en" if "الإنجليزي" in rc_source_choice else "ar"
+        with rc_src_c2:
+            rc_custom_repo = st.text_input(
+                "📁 مستودع أرشيف مخصص (اختياري):",
+                value="" if chosen_rc_source == "ar" else "rrrtfdeee-art/back-en",
+                key="rc_add_custom_repo"
+            )
+
         # اختيار حساب النشر للرواية
         rc_avail_accs = syndication_db.get_all_accounts(platform="rewayat_club")
         chosen_rc_acc_id = 0
@@ -450,6 +468,8 @@ def render_rewayat_club_tab():
                         "custom_cta": custom_cta.strip(),
                         "daily_times": daily_times_json,
                         "account_id": chosen_rc_acc_id,
+                        "source_site": chosen_rc_source,
+                        "archive_repo": rc_custom_repo.strip(),
                         "is_active": 1
                     })
 
@@ -472,185 +492,224 @@ def render_rewayat_club_tab():
                     st.rerun()
 
 
-    # 3. عرض الروايات المسجلة
+    def _render_rc_novel_card(nov):
+        with st.container():
+            col_info, col_status, col_actions = st.columns([3, 2, 1.5])
+            with col_info:
+                st.markdown(f"**📖 {nov['novel_name']}**")
+                # عرض الحساب والمصدر المرتبط
+                linked_acc = syndication_db.get_account_for_novel(nov['id'])
+                acc_label = linked_acc['account_label'] if linked_acc else 'الحساب الافتراضي'
+                src_site = nov.get("source_site", "ar")
+                src_badge = "🇬🇧 الموقع الإنجليزي" if src_site == "en" else "🇸🇦 الموقع العربي"
+                st.caption(f"معرف نادي الروايات: `{nov['rewayat_novel_id'] or 'غير محدد'}` | المصدر: `{nov['blogger_label']}` | الأرشيف: **{src_badge}** | الحساب: **{acc_label}**")
+            with col_status:
+                target_ch = nov['last_synced_chapter'] + 1
+                st.markdown(f"📊 آخر فصل تم نشره: **{nov['last_synced_chapter']}** / التوقف عند: **{nov['stop_chapter']}**")
+                next_run = nov.get("next_run_timestamp", 0.0)
+                now_ts = time.time()
+                nov_daily_list = []
+                if nov.get("daily_times"):
+                    try:
+                        nov_daily_list = json.loads(nov["daily_times"]) if isinstance(nov["daily_times"], str) else nov["daily_times"]
+                    except Exception:
+                        nov_daily_list = []
+                if not nov['is_active']:
+                    st.caption(f"⏸️ **النشر متوقف:** اضغط 'استئناف' أو اختر موعداً للبدء.")
+                elif next_run and next_run > now_ts:
+                    rem_hours = (next_run - now_ts) / 3600.0
+                    dt_label = format_schedule_time_label(next_run)
+                    st.caption(f"⏳ **موعد الفصل {target_ch}:** {dt_label} (بعد {rem_hours:.1f} ساعة)")
+                    if len(nov_daily_list) > 1:
+                        seq_prev = syndication_db.compute_sequential_slot_timestamps(nov_daily_list, len(nov_daily_list))
+                        extra_labels = [f"الفصل {target_ch + idx}: {format_schedule_time_label(ts_v)}" for idx, ts_v in enumerate(seq_prev[1:], start=1) if (target_ch + idx) <= nov['stop_chapter']]
+                        if extra_labels:
+                            st.caption("📅 **المواعيد التالية:** " + " | ".join(extra_labels))
+                elif next_run and next_run <= now_ts:
+                    st.caption(f"🟢 **الفصل {target_ch}:** حان موعده وجاهز للنشر في الدورة الحالية")
+                else:
+                    st.caption(f"⏸️ **غير مجدول:** حدد موعد الانطلاق من الأسفل للبدء.")
+                if nov_daily_list:
+                    st.caption(f"⏰ أوقات النشر اليومية ({len(nov_daily_list)} فصل/يوم): `{' | '.join(nov_daily_list)}` | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
+                else:
+                    st.caption(f"⏱️ الوتيرة: فصل كل {nov['interval_hours']} ساعة | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
+            with col_actions:
+                if st.button("⚡ نشر فوراً", key=f"fast_pub_{nov['id']}", help="نشر الفصل القادم الآن دون انتظار المؤقت"):
+                    with st.spinner(f"⏳ جاري نشر الفصل {target_ch} فوراً..."):
+                        import syndication_daemon
+                        res_pub = syndication_daemon.publish_now_immediate(nov["id"])
+                        if res_pub.get("success"):
+                            st.success(f"🎉 تم نشر الفصل {res_pub.get('chapter_num')} بنجاح! الرابط: {res_pub.get('post_url')}")
+                        else:
+                            st.error(f"❌ تعذر النشر: {res_pub.get('message')}")
+                        time.sleep(1.5)
+                        st.rerun()
+                if st.button("🗑️ حذف", key=f"del_rc_nov_{nov['id']}", type="secondary"):
+                    with st.spinner("⏳ جاري حذف الرواية من الشيت والقاعدة..."):
+                        syndication_db.delete_syndicated_novel(nov["id"], delete_from_sheet=True)
+                    st.success(f"✅ تم حذف '{nov['novel_name']}' من الشيت والقاعدة بنجاح!")
+                    time.sleep(1)
+                    st.rerun()
+
+            # لوحة التحكم والإدارة الشاملة للرواية
+            with st.expander(f"🎮 لوحة التحكم والإدارة الشاملة ({nov['novel_name']})", expanded=False):
+                # اختيار الحساب المرتبط بالرواية
+                st.markdown("##### 👤 الحساب المرتبط بالرواية:")
+                avail_accounts = syndication_db.get_all_accounts(platform="rewayat_club")
+                if avail_accounts:
+                    acc_options = {f"{a['account_label']} ({a['username']})": a['id'] for a in avail_accounts}
+                    acc_options_list = list(acc_options.keys())
+                    current_acc_id = nov.get('account_id', 0)
+                    current_idx = 0
+                    for idx_a, a in enumerate(avail_accounts):
+                        if a['id'] == current_acc_id:
+                            current_idx = idx_a
+                            break
+                    selected_acc_label = st.selectbox(
+                        "اختر الحساب لنشر هذه الرواية عليه:",
+                        acc_options_list,
+                        index=current_idx,
+                        key=f"rc_acc_sel_{nov['id']}"
+                    )
+                    selected_acc_id = acc_options[selected_acc_label]
+                    if selected_acc_id != current_acc_id:
+                        if st.button("💾 حفظ ربط الحساب", key=f"rc_save_acc_{nov['id']}"):
+                            syndication_db.set_novel_account(nov['id'], selected_acc_id)
+                            st.success(f"تم ربط الرواية بالحساب: {selected_acc_label}")
+                            st.rerun()
+                else:
+                    st.info("لا توجد حسابات مسجلة. أضف حساباً من قسم 'حسابات نادي الروايات' أعلاه.")
+                st.markdown("---")
+
+                # تبديل مصدر الرواية (العربي vs الإنجليزي)
+                st.markdown("##### 🌐 مصدر محتوى الرواية والأرشيف السحابي:")
+                curr_rc_src = nov.get("source_site", "ar")
+                src_opts = ["🇸🇦 الموقع العربي (rrrtfdeee-art/back)", "🇬🇧 الموقع الإنجليزي (rrrtfdeee-art/back-en)"]
+                new_src_idx = 1 if curr_rc_src == "en" else 0
+                ch_rc_src = st.selectbox("اختر المصدر السحابي للفصول:", src_opts, index=new_src_idx, key=f"rc_src_chg_{nov['id']}")
+                new_rc_src_val = "en" if "الإنجليزي" in ch_rc_src else "ar"
+                if new_rc_src_val != curr_rc_src:
+                    if st.button("💾 حفظ تغيير المصدر", key=f"rc_save_src_{nov['id']}"):
+                        syndication_db.set_novel_source_site(nov['id'], new_rc_src_val)
+                        st.success(f"تم تحويل مصدر الرواية إلى: {ch_rc_src}")
+                        st.rerun()
+                st.markdown("---")
+
+                st.markdown("##### ⚙️ إعدادات الرواية وتحديد توقيت نشر الفصول بالساعة والدقيقة:")
+                st.caption("حدد وقت نشر فصل واحد أو 2 أو 3 (أو أكثر) بالساعة والدقيقة عبر النوافذ أدناه، مع الحفظ السحابي الفوري في Google Sheet.")
+                c_cfg1, c_cfg2 = st.columns([1, 1])
+                with c_cfg1:
+                    new_stop = st.number_input(
+                        "🛑 التوقف عند الفصل (Stop Chapter):",
+                        min_value=1,
+                        value=int(nov.get("stop_chapter", 100)),
+                        step=1,
+                        key=f"rc_cfg_stop_{nov['id']}",
+                        help="رقم الفصل الذي سيتوقف عنده المحرك نهائياً ولا ينشر بعده"
+                    )
+                with c_cfg2:
+                    new_active_val = st.selectbox(
+                        "🚦 وضع النشر التلقائي:",
+                        [1, 0],
+                        index=0 if nov.get("is_active", 1) == 1 else 1,
+                        format_func=lambda x: "🟢 نشط (يعمل تلقائياً)" if x == 1 else "🔴 متوقف مؤقتاً",
+                        key=f"rc_cfg_active_{nov['id']}"
+                    )
+
+                rc_edit_sched = render_chapter_time_windows_selector(
+                    key_prefix=f"rc_cfg_tw_{nov['id']}",
+                    default_times=nov.get("daily_times", ""),
+                    next_chap_num=int(nov.get("last_synced_chapter", 0)) + 1,
+                    default_interval=float(nov.get("interval_hours", 12.0))
+                )
+
+                if st.button("💾 حفظ الإعدادات وتثبيت التوقيتات سحابياً فوراً", key=f"rc_save_cfg_btn_{nov['id']}", type="primary", use_container_width=True):
+                    edit_mode = rc_edit_sched["mode"]
+                    edit_hours = rc_edit_sched["selected_hours"]
+                    edit_interval = rc_edit_sched["interval_hours"]
+                    edit_rep = rc_edit_sched["repeat_mode"]
+
+                    final_stop = int(new_stop)
+                    last_s = int(nov.get("last_synced_chapter", 0))
+                    if edit_mode == "daily_times" and edit_hours:
+                        if edit_rep == "only_these":
+                            final_stop = max(1, last_s + len(edit_hours))
+                        seq_ts = syndication_db.compute_sequential_slot_timestamps(edit_hours, max(1, final_stop - last_s))
+                        nov["next_run_timestamp"] = seq_ts[0] if seq_ts else (time.time() + 3600.0)
+                        nov["daily_times"] = json.dumps(edit_hours)
+                    elif edit_mode == "start_now":
+                        nov["next_run_timestamp"] = time.time()
+                        nov["daily_times"] = ""
+                    else:
+                        nov["next_run_timestamp"] = time.time() + float(edit_interval) * 3600.0
+                        nov["daily_times"] = ""
+
+                    nov["stop_chapter"] = final_stop
+                    nov["interval_hours"] = float(edit_interval)
+                    nov["is_active"] = int(new_active_val)
+                    syndication_db.save_or_update_syndicated_novel(nov)
+
+                    if edit_mode == "daily_times" and edit_hours and final_stop > last_s:
+                        syndication_db.cancel_all_pending_schedules_for_novel(nov["novel_name"], platform="rewayat_club")
+                        gen_rows = syndication_db.generate_schedule_from_period_rules(
+                            novel_name=nov["novel_name"],
+                            start_ch=last_s + 1,
+                            end_ch=final_stop,
+                            freq_type="daily",
+                            times_per_day=len(edit_hours),
+                            selected_hours=edit_hours,
+                            start_date_str=datetime.datetime.now(TZ_ARABIA).strftime("%Y-%m-%d"),
+                            platform="rewayat_club",
+                            skip_published=True
+                        )
+                        syndication_db.save_chapter_schedules_batch(nov["novel_name"], gen_rows)
+
+                    st.success("✅ تم حفظ التوقيتات والإعدادات بنجاح وتحديثها سحابياً في Google Sheet!")
+                    st.rerun()
+
+                st.markdown("---")
+                st.markdown("##### 🚨 حذف الرواية بالكامل:")
+                col_del1, col_del2 = st.columns([2, 1])
+                with col_del1:
+                    confirm_del = st.checkbox(f"أؤكد رغبتي بحذف '{nov['novel_name']}' نهائياً ومسح كافة فصولها من Google Sheet", key=f"rc_conf_del_{nov['id']}")
+                with col_del2:
+                    if st.button("🗑️ حذف الرواية وفصولها نهائياً", key=f"rc_del_all_btn_{nov['id']}", type="secondary", use_container_width=True):
+                        if confirm_del:
+                            with st.spinner("⏳ جاري حذف الرواية ومسح كافة فصولها من Google Sheet..."):
+                                syndication_db.delete_syndicated_novel(nov["id"], delete_from_sheet=True)
+                                st.success(f"تم حذف الرواية '{nov['novel_name']}' نهائياً ومسح كافة فصولها من Google Sheet!")
+                                st.rerun()
+                        else:
+                            st.error("يرجى تفعيل مربع التأكيد أولاً لحذف الرواية.")
+            st.markdown("---")
+
+    # 3. عرض الروايات المسجلة (مقسمة لتبويبين: عربي وإنجليزي)
     st.markdown("### 📚 الروايات المربوطة حالياً بنادي الروايات")
     all_novels = [n for n in syndication_db.get_all_syndicated_novels() if n.get("rewayat_enabled") == 1]
     if not all_novels:
         st.info("لا توجد روايات مضافة لنادي الروايات حتى الآن. استخدم النموذج أعلاه لإضافة أول رواية.")
     else:
-        for nov in all_novels:
-            with st.container():
-                col_info, col_status, col_actions = st.columns([3, 2, 1.5])
-                with col_info:
-                    st.markdown(f"**📖 {nov['novel_name']}**")
-                    # عرض الحساب المرتبط
-                    linked_acc = syndication_db.get_account_for_novel(nov['id'])
-                    acc_label = linked_acc['account_label'] if linked_acc else 'الحساب الافتراضي'
-                    st.caption(f"معرف نادي الروايات: `{nov['rewayat_novel_id'] or 'غير محدد'}` | المصدر: `{nov['blogger_label']}` | الحساب: **{acc_label}**")
-                with col_status:
-                    target_ch = nov['last_synced_chapter'] + 1
-                    st.markdown(f"📊 آخر فصل تم نشره: **{nov['last_synced_chapter']}** / التوقف عند: **{nov['stop_chapter']}**")
-                    next_run = nov.get("next_run_timestamp", 0.0)
-                    now_ts = time.time()
-                    nov_daily_list = []
-                    if nov.get("daily_times"):
-                        try:
-                            nov_daily_list = json.loads(nov["daily_times"]) if isinstance(nov["daily_times"], str) else nov["daily_times"]
-                        except Exception:
-                            nov_daily_list = []
-                    if not nov['is_active']:
-                        st.caption(f"⏸️ **النشر متوقف:** اضغط 'استئناف' أو اختر موعداً للبدء.")
-                    elif next_run and next_run > now_ts:
-                        rem_hours = (next_run - now_ts) / 3600.0
-                        dt_label = format_schedule_time_label(next_run)
-                        st.caption(f"⏳ **موعد الفصل {target_ch}:** {dt_label} (بعد {rem_hours:.1f} ساعة)")
-                        if len(nov_daily_list) > 1:
-                            seq_prev = syndication_db.compute_sequential_slot_timestamps(nov_daily_list, len(nov_daily_list))
-                            extra_labels = [f"الفصل {target_ch + idx}: {format_schedule_time_label(ts_v)}" for idx, ts_v in enumerate(seq_prev[1:], start=1) if (target_ch + idx) <= nov['stop_chapter']]
-                            if extra_labels:
-                                st.caption("📅 **المواعيد التالية:** " + " | ".join(extra_labels))
-                    elif next_run and next_run <= now_ts:
-                        st.caption(f"🟢 **الفصل {target_ch}:** حان موعده وجاهز للنشر في الدورة الحالية")
-                    else:
-                        st.caption(f"⏸️ **غير مجدول:** حدد موعد الانطلاق من الأسفل للبدء.")
-                    if nov_daily_list:
-                        st.caption(f"⏰ أوقات النشر اليومية ({len(nov_daily_list)} فصل/يوم): `{' | '.join(nov_daily_list)}` | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
-                    else:
-                        st.caption(f"⏱️ الوتيرة: فصل كل {nov['interval_hours']} ساعة | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
-                with col_actions:
-                    if st.button("⚡ نشر فوراً", key=f"fast_pub_{nov['id']}", help="نشر الفصل القادم الآن دون انتظار المؤقت"):
-                        with st.spinner(f"⏳ جاري نشر الفصل {target_ch} فوراً..."):
-                            import syndication_daemon
-                            res_pub = syndication_daemon.publish_now_immediate(nov["id"])
-                            if res_pub.get("success"):
-                                st.success(f"🎉 تم نشر الفصل {res_pub.get('chapter_num')} بنجاح! الرابط: {res_pub.get('post_url')}")
-                            else:
-                                st.error(f"❌ تعذر النشر: {res_pub.get('message')}")
-                            time.sleep(1.5)
-                            st.rerun()
-                    if st.button("🗑️ حذف", key=f"del_rc_nov_{nov['id']}", type="secondary"):
-                        with st.spinner("⏳ جاري حذف الرواية من الشيت والقاعدة..."):
-                            syndication_db.delete_syndicated_novel(nov["id"], delete_from_sheet=True)
-                        st.success(f"✅ تم حذف '{nov['novel_name']}' من الشيت والقاعدة بنجاح!")
-                        time.sleep(1)
-                        st.rerun()
+        ar_novels = [n for n in all_novels if n.get("source_site", "ar") != "en"]
+        en_novels = [n for n in all_novels if n.get("source_site", "ar") == "en"]
 
-                # لوحة التحكم والإدارة الشاملة للرواية
-                with st.expander(f"🎮 لوحة التحكم والإدارة الشاملة ({nov['novel_name']})", expanded=False):
-                    # اختيار الحساب المرتبط بالرواية
-                    st.markdown("##### 👤 الحساب المرتبط بالرواية:")
-                    avail_accounts = syndication_db.get_all_accounts(platform="rewayat_club")
-                    if avail_accounts:
-                        acc_options = {f"{a['account_label']} ({a['username']})": a['id'] for a in avail_accounts}
-                        acc_options_list = list(acc_options.keys())
-                        current_acc_id = nov.get('account_id', 0)
-                        current_idx = 0
-                        for idx_a, a in enumerate(avail_accounts):
-                            if a['id'] == current_acc_id:
-                                current_idx = idx_a
-                                break
-                        selected_acc_label = st.selectbox(
-                            "اختر الحساب لنشر هذه الرواية عليه:",
-                            acc_options_list,
-                            index=current_idx,
-                            key=f"rc_acc_sel_{nov['id']}"
-                        )
-                        selected_acc_id = acc_options[selected_acc_label]
-                        if selected_acc_id != current_acc_id:
-                            if st.button("💾 حفظ ربط الحساب", key=f"rc_save_acc_{nov['id']}"):
-                                syndication_db.set_novel_account(nov['id'], selected_acc_id)
-                                st.success(f"تم ربط الرواية بالحساب: {selected_acc_label}")
-                                st.rerun()
-                    else:
-                        st.info("لا توجد حسابات مسجلة. أضف حساباً من قسم 'حسابات نادي الروايات' أعلاه.")
-                    st.markdown("---")
-                    st.markdown("##### ⚙️ إعدادات الرواية وتحديد توقيت نشر الفصول بالساعة والدقيقة:")
-                    st.caption("حدد وقت نشر فصل واحد أو 2 أو 3 (أو أكثر) بالساعة والدقيقة عبر النوافذ أدناه، مع الحفظ السحابي الفوري في Google Sheet.")
-                    c_cfg1, c_cfg2 = st.columns([1, 1])
-                    with c_cfg1:
-                        new_stop = st.number_input(
-                            "🛑 التوقف عند الفصل (Stop Chapter):",
-                            min_value=1,
-                            value=int(nov.get("stop_chapter", 100)),
-                            step=1,
-                            key=f"rc_cfg_stop_{nov['id']}",
-                            help="رقم الفصل الذي سيتوقف عنده المحرك نهائياً ولا ينشر بعده"
-                        )
-                    with c_cfg2:
-                        new_active_val = st.selectbox(
-                            "🚦 وضع النشر التلقائي:",
-                            [1, 0],
-                            index=0 if nov.get("is_active", 1) == 1 else 1,
-                            format_func=lambda x: "🟢 نشط (يعمل تلقائياً)" if x == 1 else "🔴 متوقف مؤقتاً",
-                            key=f"rc_cfg_active_{nov['id']}"
-                        )
+        tab_rc_ar, tab_rc_en = st.tabs([
+            f"🇸🇦 روايات الموقع العربي ({len(ar_novels)})",
+            f"🇬🇧 روايات الموقع الإنجليزي ({len(en_novels)})"
+        ])
 
-                    rc_edit_sched = render_chapter_time_windows_selector(
-                        key_prefix=f"rc_cfg_tw_{nov['id']}",
-                        default_times=nov.get("daily_times", ""),
-                        next_chap_num=int(nov.get("last_synced_chapter", 0)) + 1,
-                        default_interval=float(nov.get("interval_hours", 12.0))
-                    )
+        with tab_rc_ar:
+            if not ar_novels:
+                st.info("لا توجد روايات عربية مسجلة في نادي الروايات حتى الآن.")
+            else:
+                for nov in ar_novels:
+                    _render_rc_novel_card(nov)
 
-                    if st.button("💾 حفظ الإعدادات وتثبيت التوقيتات سحابياً فوراً", key=f"rc_save_cfg_btn_{nov['id']}", type="primary", use_container_width=True):
-                        edit_mode = rc_edit_sched["mode"]
-                        edit_hours = rc_edit_sched["selected_hours"]
-                        edit_interval = rc_edit_sched["interval_hours"]
-                        edit_rep = rc_edit_sched["repeat_mode"]
-
-                        final_stop = int(new_stop)
-                        last_s = int(nov.get("last_synced_chapter", 0))
-                        if edit_mode == "daily_times" and edit_hours:
-                            if edit_rep == "only_these":
-                                final_stop = max(1, last_s + len(edit_hours))
-                            seq_ts = syndication_db.compute_sequential_slot_timestamps(edit_hours, max(1, final_stop - last_s))
-                            nov["next_run_timestamp"] = seq_ts[0] if seq_ts else (time.time() + 3600.0)
-                            nov["daily_times"] = json.dumps(edit_hours)
-                        elif edit_mode == "start_now":
-                            nov["next_run_timestamp"] = time.time()
-                            nov["daily_times"] = ""
-                        else:
-                            nov["next_run_timestamp"] = time.time() + float(edit_interval) * 3600.0
-                            nov["daily_times"] = ""
-
-                        nov["stop_chapter"] = final_stop
-                        nov["interval_hours"] = float(edit_interval)
-                        nov["is_active"] = int(new_active_val)
-                        syndication_db.save_or_update_syndicated_novel(nov)
-
-                        if edit_mode == "daily_times" and edit_hours and final_stop > last_s:
-                            syndication_db.cancel_all_pending_schedules_for_novel(nov["novel_name"], platform="rewayat_club")
-                            gen_rows = syndication_db.generate_schedule_from_period_rules(
-                                novel_name=nov["novel_name"],
-                                start_ch=last_s + 1,
-                                end_ch=final_stop,
-                                freq_type="daily",
-                                times_per_day=len(edit_hours),
-                                selected_hours=edit_hours,
-                                start_date_str=datetime.datetime.now(TZ_ARABIA).strftime("%Y-%m-%d"),
-                                platform="rewayat_club",
-                                skip_published=True
-                            )
-                            syndication_db.save_chapter_schedules_batch(nov["novel_name"], gen_rows)
-
-                        st.success("✅ تم حفظ التوقيتات والإعدادات بنجاح وتحديثها سحابياً في Google Sheet!")
-                        st.rerun()
-
-                    st.markdown("---")
-                    st.markdown("##### 🚨 حذف الرواية بالكامل:")
-                    col_del1, col_del2 = st.columns([2, 1])
-                    with col_del1:
-                        confirm_del = st.checkbox(f"أؤكد رغبتي بحذف '{nov['novel_name']}' نهائياً ومسح كافة فصولها من Google Sheet", key=f"rc_conf_del_{nov['id']}")
-                    with col_del2:
-                        if st.button("🗑️ حذف الرواية وفصولها نهائياً", key=f"rc_del_all_btn_{nov['id']}", type="secondary", use_container_width=True):
-                            if confirm_del:
-                                with st.spinner("⏳ جاري حذف الرواية ومسح كافة فصولها من Google Sheet..."):
-                                    syndication_db.delete_syndicated_novel(nov["id"], delete_from_sheet=True)
-                                    st.success(f"تم حذف الرواية '{nov['novel_name']}' نهائياً ومسح كافة فصولها من Google Sheet!")
-                                    st.rerun()
-                            else:
-                                st.error("يرجى تفعيل مربع التأكيد أولاً لحذف الرواية.")
-                st.markdown("---")
+        with tab_rc_en:
+            if not en_novels:
+                st.info("لا توجد روايات إنجليزية مسجلة في نادي الروايات حتى الآن. يمكنك إضافة روايات إنجليزية من نموذج الإضافة أعلاه باختيار 'الموقع الإنجليزي'.")
+            else:
+                for nov in en_novels:
+                    _render_rc_novel_card(nov)
 
     # 4. قسم معاينة الفصل قبل نشره
     st.markdown("### 👁️ معاينة فصل وتجهيزه (اختبار المحرك)")
@@ -676,7 +735,9 @@ def render_rewayat_club_tab():
                         novel_name=preview_novel,
                         chapter_num=int(preview_chapter),
                         custom_cta=custom_cta,
-                        blogger_url=blogger_url
+                        blogger_url=blogger_url,
+                        source_site=nov_cfg.get("source_site", "ar") if nov_cfg else "ar",
+                        archive_repo=nov_cfg.get("archive_repo", "") if nov_cfg else ""
                     )
                     st.session_state["rc_preview_data"] = res
                     st.session_state["rc_preview_meta"] = {
@@ -1129,6 +1190,24 @@ def render_wattpad_tab():
             w_cta_default = "✨ استمتعتم بالفصل؟ لمتابعة أحدث الفصول الحصرية والمتقدمة فور صدورها، تفضلوا بزيارة موقعنا الأصلي عبر الرابط في بايو الحساب (Bio) 🔗 ✨"
             w_custom_cta = st.text_area("💬 التعليق التحفيزي لنهاية كل فصل في واتباد (التوجيه للبايو):", value=w_cta_default, height=70, key="wp_uni_cta")
 
+        # اختيار مصدر محتوى الرواية والأرشيف السحابي
+        wp_src_c1, wp_src_c2 = st.columns([2, 1])
+        with wp_src_c1:
+            wp_source_choice = st.radio(
+                "🌐 مصدر محتوى الرواية والأرشيف:",
+                ["🇸🇦 الموقع العربي (الأرشيف: rrrtfdeee-art/back)", "🇬🇧 الموقع الإنجليزي (الأرشيف: rrrtfdeee-art/back-en)"],
+                index=0,
+                horizontal=True,
+                key="wp_add_source_choice"
+            )
+            chosen_wp_source = "en" if "الإنجليزي" in wp_source_choice else "ar"
+        with wp_src_c2:
+            wp_custom_repo = st.text_input(
+                "📁 مستودع أرشيف مخصص (اختياري):",
+                value="" if chosen_wp_source == "ar" else "rrrtfdeee-art/back-en",
+                key="wp_add_custom_repo"
+            )
+
         # اختيار حساب واتباد لنشر القصة
         wp_avail_accs = syndication_db.get_all_accounts(platform="wattpad")
         chosen_wp_acc_id = 0
@@ -1219,6 +1298,8 @@ def render_wattpad_tab():
                         "custom_cta": w_custom_cta.strip(),
                         "daily_times": daily_times_json,
                         "account_id": chosen_wp_acc_id,
+                        "source_site": chosen_wp_source,
+                        "archive_repo": wp_custom_repo.strip(),
                         "is_active": 1
                     })
 
@@ -1240,187 +1321,226 @@ def render_wattpad_tab():
                     st.success(f"🎉 تم بنجاح حفظ قصة '{target_wname}' وتثبيت مواعيد النشر التلقائي!")
                     st.rerun()
 
-    # 3. عرض الروايات المسجلة في واتباد
+    def _render_wp_novel_card(nov):
+        with st.container():
+            col_info, col_status, col_actions = st.columns([3, 2, 1.5])
+            with col_info:
+                st.markdown(f"**📖 {nov['novel_name']}**")
+                w_disp_id = str(nov['wattpad_story_id'] or 'غير محدد')
+                if w_disp_id.endswith(".0"):
+                    w_disp_id = w_disp_id[:-2]
+                linked_wp_acc = syndication_db.get_account_for_novel(nov['id'])
+                acc_wp_label = linked_wp_acc['account_label'] if linked_wp_acc else 'الحساب الافتراضي'
+                src_site = nov.get("source_site", "ar")
+                src_badge = "🇬🇧 الموقع الإنجليزي" if src_site == "en" else "🇸🇦 الموقع العربي"
+                st.caption(f"معرف قصة واتباد: `{w_disp_id}` | المصدر: `{nov['blogger_label']}` | الأرشيف: **{src_badge}** | الحساب: **{acc_wp_label}**")
+            with col_status:
+                target_ch = nov['last_synced_chapter'] + 1
+                st.markdown(f"📊 آخر فصل تم نشره: **{nov['last_synced_chapter']}** / التوقف عند: **{nov['stop_chapter']}**")
+                next_run = nov.get("next_run_timestamp", 0.0)
+                now_ts = time.time()
+                nov_daily_list = []
+                if nov.get("daily_times"):
+                    try:
+                        nov_daily_list = json.loads(nov["daily_times"]) if isinstance(nov["daily_times"], str) else nov["daily_times"]
+                    except Exception:
+                        nov_daily_list = []
+                if not nov['is_active']:
+                    st.caption(f"⏸️ **النشر متوقف:** اضغط 'استئناف' أو اختر موعداً للبدء.")
+                elif next_run and next_run > now_ts:
+                    rem_hours = (next_run - now_ts) / 3600.0
+                    dt_label = format_schedule_time_label(next_run)
+                    st.caption(f"⏳ **موعد الفصل {target_ch}:** {dt_label} (بعد {rem_hours:.1f} ساعة)")
+                    if len(nov_daily_list) > 1:
+                        seq_prev = syndication_db.compute_sequential_slot_timestamps(nov_daily_list, len(nov_daily_list))
+                        extra_labels = [f"الفصل {target_ch + idx}: {format_schedule_time_label(ts_v)}" for idx, ts_v in enumerate(seq_prev[1:], start=1) if (target_ch + idx) <= nov['stop_chapter']]
+                        if extra_labels:
+                            st.caption("📅 **المواعيد التالية:** " + " | ".join(extra_labels))
+                elif next_run and next_run <= now_ts:
+                    st.caption(f"🟢 **الفصل {target_ch}:** حان موعده وجاهز للنشر في الدورة الحالية")
+                else:
+                    st.caption(f"⏸️ **غير مجدول:** حدد موعد الانطلاق من الأسفل للبدء.")
+                if nov_daily_list:
+                    st.caption(f"⏰ أوقات النشر اليومية ({len(nov_daily_list)} فصل/يوم): `{' | '.join(nov_daily_list)}` | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
+                else:
+                    st.caption(f"⏱️ الوتيرة: فصل كل {nov['interval_hours']} ساعة | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
+            with col_actions:
+                if st.button("⚡ نشر فوراً", key=f"fast_pub_wp_{nov['id']}", help="نشر الفصل القادم الآن دون انتظار المؤقت"):
+                    with st.spinner(f"⏳ جاري نشر الفصل {target_ch} فوراً إلى واتباد..."):
+                        import syndication_daemon
+                        res_pub = syndication_daemon.publish_now_immediate(nov["id"])
+                        if res_pub.get("success"):
+                            st.success(f"🎉 تم نشر الفصل {res_pub.get('chapter_num')} بنجاح! الرابط: {res_pub.get('post_url')}")
+                        else:
+                            st.error(f"❌ تعذر النشر: {res_pub.get('message')}")
+                        time.sleep(1.5)
+                        st.rerun()
+                if st.button("🗑️ حذف", key=f"del_wp_nov_{nov['id']}", type="secondary"):
+                    with st.spinner("⏳ جاري حذف الرواية من الشيت والقاعدة..."):
+                        syndication_db.delete_syndicated_novel(nov["id"], delete_from_sheet=True)
+                    st.success(f"✅ تم حذف '{nov['novel_name']}' من الشيت والقاعدة بنجاح!")
+                    time.sleep(1)
+                    st.rerun()
+
+            # لوحة التحكم والإدارة الشاملة لقصة واتباد
+            with st.expander(f"🎮 لوحة التحكم والإدارة الشاملة ({nov['novel_name']})", expanded=False):
+                # اختيار الحساب المرتبط بالقصة على واتباد
+                st.markdown("##### 👤 الحساب المرتبط بالقصة على واتباد:")
+                avail_wp_accounts = syndication_db.get_all_accounts(platform="wattpad")
+                if avail_wp_accounts:
+                    wp_acc_options = {f"{a['account_label']} ({a['username']})": a['id'] for a in avail_wp_accounts}
+                    wp_acc_options_list = list(wp_acc_options.keys())
+                    current_wp_acc_id = nov.get('account_id', 0)
+                    current_wp_idx = 0
+                    for idx_w, a in enumerate(avail_wp_accounts):
+                        if a['id'] == current_wp_acc_id:
+                            current_wp_idx = idx_w
+                            break
+                    selected_wp_label = st.selectbox(
+                        "اختر حساب واتباد لنشر هذه القصة عليه:",
+                        wp_acc_options_list,
+                        index=current_wp_idx,
+                        key=f"wp_acc_sel_{nov['id']}"
+                    )
+                    selected_wp_acc_id = wp_acc_options[selected_wp_label]
+                    if selected_wp_acc_id != current_wp_acc_id:
+                        if st.button("💾 حفظ ربط الحساب", key=f"wp_save_acc_{nov['id']}"):
+                            syndication_db.set_novel_account(nov['id'], selected_wp_acc_id)
+                            st.success(f"تم ربط القصة بحساب واتباد: {selected_wp_label}")
+                            st.rerun()
+                else:
+                    st.info("لا توجد حسابات واتباد مسجلة. أضف حساباً من قسم 'حسابات واتباد' أعلاه.")
+                st.markdown("---")
+
+                # تبديل مصدر الرواية (العربي vs الإنجليزي)
+                st.markdown("##### 🌐 مصدر محتوى الرواية والأرشيف السحابي:")
+                curr_wp_src = nov.get("source_site", "ar")
+                wp_src_opts = ["🇸🇦 الموقع العربي (rrrtfdeee-art/back)", "🇬🇧 الموقع الإنجليزي (rrrtfdeee-art/back-en)"]
+                new_wp_src_idx = 1 if curr_wp_src == "en" else 0
+                ch_wp_src = st.selectbox("اختر المصدر السحابي للفصول:", wp_src_opts, index=new_wp_src_idx, key=f"wp_src_chg_{nov['id']}")
+                new_wp_src_val = "en" if "الإنجليزي" in ch_wp_src else "ar"
+                if new_wp_src_val != curr_wp_src:
+                    if st.button("💾 حفظ تغيير المصدر", key=f"wp_save_src_{nov['id']}"):
+                        syndication_db.set_novel_source_site(nov['id'], new_wp_src_val)
+                        st.success(f"تم تحويل مصدر الرواية إلى: {ch_wp_src}")
+                        st.rerun()
+                st.markdown("---")
+
+                st.markdown("##### ⚙️ إعدادات قصة واتباد وتحديد توقيت نشر الفصول بالساعة والدقيقة:")
+                st.caption("حدد وقت نشر فصل واحد أو 2 أو 3 (أو أكثر) بالساعة والدقيقة عبر النوافذ أدناه، مع الحفظ السحابي الفوري في Google Sheet.")
+                c_wcfg1, c_wcfg2 = st.columns([1, 1])
+                with c_wcfg1:
+                    wnew_stop = st.number_input(
+                        "🛑 التوقف عند الفصل (Stop Chapter):",
+                        min_value=1,
+                        value=int(nov.get("stop_chapter", 50)),
+                        step=1,
+                        key=f"wp_cfg_stop_{nov['id']}",
+                        help="رقم الفصل الذي سيتوقف عنده المحرك نهائياً ولا ينشر بعده"
+                    )
+                with c_wcfg2:
+                    wnew_active_val = st.selectbox(
+                        "🚦 وضع النشر التلقائي:",
+                        [1, 0],
+                        index=0 if nov.get("is_active", 1) == 1 else 1,
+                        format_func=lambda x: "🟢 نشط (يعمل تلقائياً)" if x == 1 else "🔴 متوقف مؤقتاً",
+                        key=f"wp_cfg_active_{nov['id']}"
+                    )
+
+                wp_edit_sched = render_chapter_time_windows_selector(
+                    key_prefix=f"wp_cfg_tw_{nov['id']}",
+                    default_times=nov.get("daily_times", ""),
+                    next_chap_num=int(nov.get("last_synced_chapter", 0)) + 1,
+                    default_interval=float(nov.get("interval_hours", 12.0))
+                )
+
+                if st.button("💾 حفظ الإعدادات وتثبيت التوقيتات سحابياً فوراً", key=f"wp_save_cfg_btn_{nov['id']}", type="primary", use_container_width=True):
+                    wedit_mode = wp_edit_sched["mode"]
+                    wedit_hours = wp_edit_sched["selected_hours"]
+                    wedit_interval = wp_edit_sched["interval_hours"]
+                    wedit_rep = wp_edit_sched["repeat_mode"]
+
+                    wfinal_stop = int(wnew_stop)
+                    wlast_s = int(nov.get("last_synced_chapter", 0))
+                    if wedit_mode == "daily_times" and wedit_hours:
+                        if wedit_rep == "only_these":
+                            wfinal_stop = max(1, wlast_s + len(wedit_hours))
+                        seq_ts = syndication_db.compute_sequential_slot_timestamps(wedit_hours, max(1, wfinal_stop - wlast_s))
+                        nov["next_run_timestamp"] = seq_ts[0] if seq_ts else (time.time() + 3600.0)
+                        nov["daily_times"] = json.dumps(wedit_hours)
+                    elif wedit_mode == "start_now":
+                        nov["next_run_timestamp"] = time.time()
+                        nov["daily_times"] = ""
+                    else:
+                        nov["next_run_timestamp"] = time.time() + float(wedit_interval) * 3600.0
+                        nov["daily_times"] = ""
+
+                    nov["stop_chapter"] = wfinal_stop
+                    nov["interval_hours"] = float(wedit_interval)
+                    nov["is_active"] = int(wnew_active_val)
+                    syndication_db.save_or_update_syndicated_novel(nov)
+
+                    if wedit_mode == "daily_times" and wedit_hours and wfinal_stop > wlast_s:
+                        syndication_db.cancel_all_pending_schedules_for_novel(nov["novel_name"], platform="wattpad")
+                        gen_rows = syndication_db.generate_schedule_from_period_rules(
+                            novel_name=nov["novel_name"],
+                            start_ch=wlast_s + 1,
+                            end_ch=wfinal_stop,
+                            freq_type="daily",
+                            times_per_day=len(wedit_hours),
+                            selected_hours=wedit_hours,
+                            start_date_str=datetime.datetime.now(TZ_ARABIA).strftime("%Y-%m-%d"),
+                            platform="wattpad",
+                            skip_published=True
+                        )
+                        syndication_db.save_chapter_schedules_batch(nov["novel_name"], gen_rows)
+
+                    st.success("✅ تم حفظ التوقيتات والإعدادات بنجاح وتحديثها سحابياً في Google Sheet!")
+                    st.rerun()
+
+                st.markdown("---")
+                st.markdown("##### 🚨 حذف الرواية بالكامل:")
+                col_wdel1, col_wdel2 = st.columns([2, 1])
+                with col_wdel1:
+                    wconfirm_del = st.checkbox(f"أؤكد رغبتي بحذف '{nov['novel_name']}' نهائياً ومسح كافة فصولها من Google Sheet", key=f"wp_conf_del_{nov['id']}")
+                with col_wdel2:
+                    if st.button("🗑️ حذف الرواية وفصولها نهائياً", key=f"wp_del_all_btn_{nov['id']}", type="secondary", use_container_width=True):
+                        if wconfirm_del:
+                            with st.spinner("⏳ جاري حذف الرواية ومسح كافة فصولها من Google Sheet..."):
+                                syndication_db.delete_syndicated_novel(nov["id"], delete_from_sheet=True)
+                                st.success(f"تم حذف الرواية '{nov['novel_name']}' نهائياً ومسح كافة فصولها من Google Sheet!")
+                                st.rerun()
+                        else:
+                            st.error("يرجى تفعيل مربع التأكيد أولاً لحذف الرواية.")
+            st.markdown("---")
+
+    # 3. عرض الروايات المسجلة في واتباد (مقسمة لتبويبين: عربي وإنجليزي)
     st.markdown("### 📚 الروايات المربوطة حالياً بواتباد")
     all_wp_novels = [n for n in syndication_db.get_all_syndicated_novels() if n.get("wattpad_enabled") == 1]
     if not all_wp_novels:
         st.info("لا توجد روايات مضافة لواتباد حتى الآن. استخدم النموذج أعلاه لإضافة قصة جديدة.")
     else:
-        for nov in all_wp_novels:
-            with st.container():
-                col_info, col_status, col_actions = st.columns([3, 2, 1.5])
-                with col_info:
-                    st.markdown(f"**📖 {nov['novel_name']}**")
-                    w_disp_id = str(nov['wattpad_story_id'] or 'غير محدد')
-                    if w_disp_id.endswith(".0"):
-                        w_disp_id = w_disp_id[:-2]
-                    linked_wp_acc = syndication_db.get_account_for_novel(nov['id'])
-                    acc_wp_label = linked_wp_acc['account_label'] if linked_wp_acc else 'الحساب الافتراضي'
-                    st.caption(f"معرف قصة واتباد: `{w_disp_id}` | المصدر: `{nov['blogger_label']}` | الحساب: **{acc_wp_label}**")
-                with col_status:
-                    target_ch = nov['last_synced_chapter'] + 1
-                    st.markdown(f"📊 آخر فصل تم نشره: **{nov['last_synced_chapter']}** / التوقف عند: **{nov['stop_chapter']}**")
-                    next_run = nov.get("next_run_timestamp", 0.0)
-                    now_ts = time.time()
-                    nov_daily_list = []
-                    if nov.get("daily_times"):
-                        try:
-                            nov_daily_list = json.loads(nov["daily_times"]) if isinstance(nov["daily_times"], str) else nov["daily_times"]
-                        except Exception:
-                            nov_daily_list = []
-                    if not nov['is_active']:
-                        st.caption(f"⏸️ **النشر متوقف:** اضغط 'استئناف' أو اختر موعداً للبدء.")
-                    elif next_run and next_run > now_ts:
-                        rem_hours = (next_run - now_ts) / 3600.0
-                        dt_label = format_schedule_time_label(next_run)
-                        st.caption(f"⏳ **موعد الفصل {target_ch}:** {dt_label} (بعد {rem_hours:.1f} ساعة)")
-                        if len(nov_daily_list) > 1:
-                            seq_prev = syndication_db.compute_sequential_slot_timestamps(nov_daily_list, len(nov_daily_list))
-                            extra_labels = [f"الفصل {target_ch + idx}: {format_schedule_time_label(ts_v)}" for idx, ts_v in enumerate(seq_prev[1:], start=1) if (target_ch + idx) <= nov['stop_chapter']]
-                            if extra_labels:
-                                st.caption("📅 **المواعيد التالية:** " + " | ".join(extra_labels))
-                    elif next_run and next_run <= now_ts:
-                        st.caption(f"🟢 **الفصل {target_ch}:** حان موعده وجاهز للنشر في الدورة الحالية")
-                    else:
-                        st.caption(f"⏸️ **غير مجدول:** حدد موعد الانطلاق من الأسفل للبدء.")
-                    if nov_daily_list:
-                        st.caption(f"⏰ أوقات النشر اليومية ({len(nov_daily_list)} فصل/يوم): `{' | '.join(nov_daily_list)}` | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
-                    else:
-                        st.caption(f"⏱️ الوتيرة: فصل كل {nov['interval_hours']} ساعة | الحالة: {'🟢 نشط' if nov['is_active'] else '🔴 متوقف'}")
-                with col_actions:
-                    if st.button("⚡ نشر فوراً", key=f"fast_pub_wp_{nov['id']}", help="نشر الفصل القادم الآن دون انتظار المؤقت"):
-                        with st.spinner(f"⏳ جاري نشر الفصل {target_ch} فوراً إلى واتباد..."):
-                            import syndication_daemon
-                            res_pub = syndication_daemon.publish_now_immediate(nov["id"])
-                            if res_pub.get("success"):
-                                st.success(f"🎉 تم نشر الفصل {res_pub.get('chapter_num')} بنجاح! الرابط: {res_pub.get('post_url')}")
-                            else:
-                                st.error(f"❌ تعذر النشر: {res_pub.get('message')}")
-                            time.sleep(1.5)
-                            st.rerun()
-                    if st.button("🗑️ حذف", key=f"del_wp_nov_{nov['id']}", type="secondary"):
-                        with st.spinner("⏳ جاري حذف الرواية من الشيت والقاعدة..."):
-                            syndication_db.delete_syndicated_novel(nov["id"], delete_from_sheet=True)
-                        st.success(f"✅ تم حذف '{nov['novel_name']}' من الشيت والقاعدة بنجاح!")
-                        time.sleep(1)
-                        st.rerun()
+        ar_wp_novels = [n for n in all_wp_novels if n.get("source_site", "ar") != "en"]
+        en_wp_novels = [n for n in all_wp_novels if n.get("source_site", "ar") == "en"]
 
-                # لوحة التحكم والإدارة الشاملة لقصة واتباد
-                with st.expander(f"🎮 لوحة التحكم والإدارة الشاملة ({nov['novel_name']})", expanded=False):
-                    # اختيار الحساب المرتبط بالقصة على واتباد
-                    st.markdown("##### 👤 الحساب المرتبط بالقصة على واتباد:")
-                    avail_wp_accounts = syndication_db.get_all_accounts(platform="wattpad")
-                    if avail_wp_accounts:
-                        wp_acc_options = {f"{a['account_label']} ({a['username']})": a['id'] for a in avail_wp_accounts}
-                        wp_acc_options_list = list(wp_acc_options.keys())
-                        current_wp_acc_id = nov.get('account_id', 0)
-                        current_wp_idx = 0
-                        for idx_w, a in enumerate(avail_wp_accounts):
-                            if a['id'] == current_wp_acc_id:
-                                current_wp_idx = idx_w
-                                break
-                        selected_wp_label = st.selectbox(
-                            "اختر حساب واتباد لنشر هذه القصة عليه:",
-                            wp_acc_options_list,
-                            index=current_wp_idx,
-                            key=f"wp_acc_sel_{nov['id']}"
-                        )
-                        selected_wp_acc_id = wp_acc_options[selected_wp_label]
-                        if selected_wp_acc_id != current_wp_acc_id:
-                            if st.button("💾 حفظ ربط الحساب", key=f"wp_save_acc_{nov['id']}"):
-                                syndication_db.set_novel_account(nov['id'], selected_wp_acc_id)
-                                st.success(f"تم ربط القصة بحساب واتباد: {selected_wp_label}")
-                                st.rerun()
-                    else:
-                        st.info("لا توجد حسابات واتباد مسجلة. أضف حساباً من قسم 'حسابات واتباد' أعلاه.")
-                    st.markdown("---")
-                    st.markdown("##### ⚙️ إعدادات قصة واتباد وتحديد توقيت نشر الفصول بالساعة والدقيقة:")
-                    st.caption("حدد وقت نشر فصل واحد أو 2 أو 3 (أو أكثر) بالساعة والدقيقة عبر النوافذ أدناه، مع الحفظ السحابي الفوري في Google Sheet.")
-                    c_wcfg1, c_wcfg2 = st.columns([1, 1])
-                    with c_wcfg1:
-                        wnew_stop = st.number_input(
-                            "🛑 التوقف عند الفصل (Stop Chapter):",
-                            min_value=1,
-                            value=int(nov.get("stop_chapter", 50)),
-                            step=1,
-                            key=f"wp_cfg_stop_{nov['id']}",
-                            help="رقم الفصل الذي سيتوقف عنده المحرك نهائياً ولا ينشر بعده"
-                        )
-                    with c_wcfg2:
-                        wnew_active_val = st.selectbox(
-                            "🚦 وضع النشر التلقائي:",
-                            [1, 0],
-                            index=0 if nov.get("is_active", 1) == 1 else 1,
-                            format_func=lambda x: "🟢 نشط (يعمل تلقائياً)" if x == 1 else "🔴 متوقف مؤقتاً",
-                            key=f"wp_cfg_active_{nov['id']}"
-                        )
+        tab_wp_ar, tab_wp_en = st.tabs([
+            f"🇸🇦 قصص الموقع العربي ({len(ar_wp_novels)})",
+            f"🇬🇧 قصص الموقع الإنجليزي ({len(en_wp_novels)})"
+        ])
 
-                    wp_edit_sched = render_chapter_time_windows_selector(
-                        key_prefix=f"wp_cfg_tw_{nov['id']}",
-                        default_times=nov.get("daily_times", ""),
-                        next_chap_num=int(nov.get("last_synced_chapter", 0)) + 1,
-                        default_interval=float(nov.get("interval_hours", 12.0))
-                    )
+        with tab_wp_ar:
+            if not ar_wp_novels:
+                st.info("لا توجد قصص عربية مسجلة في واتباد حتى الآن.")
+            else:
+                for nov in ar_wp_novels:
+                    _render_wp_novel_card(nov)
 
-                    if st.button("💾 حفظ الإعدادات وتثبيت التوقيتات سحابياً فوراً", key=f"wp_save_cfg_btn_{nov['id']}", type="primary", use_container_width=True):
-                        wedit_mode = wp_edit_sched["mode"]
-                        wedit_hours = wp_edit_sched["selected_hours"]
-                        wedit_interval = wp_edit_sched["interval_hours"]
-                        wedit_rep = wp_edit_sched["repeat_mode"]
-
-                        wfinal_stop = int(wnew_stop)
-                        wlast_s = int(nov.get("last_synced_chapter", 0))
-                        if wedit_mode == "daily_times" and wedit_hours:
-                            if wedit_rep == "only_these":
-                                wfinal_stop = max(1, wlast_s + len(wedit_hours))
-                            seq_ts = syndication_db.compute_sequential_slot_timestamps(wedit_hours, max(1, wfinal_stop - wlast_s))
-                            nov["next_run_timestamp"] = seq_ts[0] if seq_ts else (time.time() + 3600.0)
-                            nov["daily_times"] = json.dumps(wedit_hours)
-                        elif wedit_mode == "start_now":
-                            nov["next_run_timestamp"] = time.time()
-                            nov["daily_times"] = ""
-                        else:
-                            nov["next_run_timestamp"] = time.time() + float(wedit_interval) * 3600.0
-                            nov["daily_times"] = ""
-
-                        nov["stop_chapter"] = wfinal_stop
-                        nov["interval_hours"] = float(wedit_interval)
-                        nov["is_active"] = int(wnew_active_val)
-                        syndication_db.save_or_update_syndicated_novel(nov)
-
-                        if wedit_mode == "daily_times" and wedit_hours and wfinal_stop > wlast_s:
-                            syndication_db.cancel_all_pending_schedules_for_novel(nov["novel_name"], platform="wattpad")
-                            gen_rows = syndication_db.generate_schedule_from_period_rules(
-                                novel_name=nov["novel_name"],
-                                start_ch=wlast_s + 1,
-                                end_ch=wfinal_stop,
-                                freq_type="daily",
-                                times_per_day=len(wedit_hours),
-                                selected_hours=wedit_hours,
-                                start_date_str=datetime.datetime.now(TZ_ARABIA).strftime("%Y-%m-%d"),
-                                platform="wattpad",
-                                skip_published=True
-                            )
-                            syndication_db.save_chapter_schedules_batch(nov["novel_name"], gen_rows)
-
-                        st.success("✅ تم حفظ التوقيتات والإعدادات بنجاح وتحديثها سحابياً في Google Sheet!")
-                        st.rerun()
-
-                    st.markdown("---")
-                    st.markdown("##### 🚨 حذف الرواية بالكامل:")
-                    col_wdel1, col_wdel2 = st.columns([2, 1])
-                    with col_wdel1:
-                        wconfirm_del = st.checkbox(f"أؤكد رغبتي بحذف '{nov['novel_name']}' نهائياً ومسح كافة فصولها من Google Sheet", key=f"wp_conf_del_{nov['id']}")
-                    with col_wdel2:
-                        if st.button("🗑️ حذف الرواية وفصولها نهائياً", key=f"wp_del_all_btn_{nov['id']}", type="secondary", use_container_width=True):
-                            if wconfirm_del:
-                                with st.spinner("⏳ جاري حذف الرواية ومسح كافة فصولها من Google Sheet..."):
-                                    syndication_db.delete_syndicated_novel(nov["id"], delete_from_sheet=True)
-                                    st.success(f"تم حذف الرواية '{nov['novel_name']}' نهائياً ومسح كافة فصولها من Google Sheet!")
-                                    st.rerun()
-                            else:
-                                st.error("يرجى تفعيل مربع التأكيد أولاً لحذف الرواية.")
-                st.markdown("---")
+        with tab_wp_en:
+            if not en_wp_novels:
+                st.info("لا توجد قصص إنجليزية مسجلة في واتباد حتى الآن. يمكنك إضافة قصص إنجليزية من نموذج الإضافة أعلاه باختيار 'الموقع الإنجليزي'.")
+            else:
+                for nov in en_wp_novels:
+                    _render_wp_novel_card(nov)
 
     # 4. معاينة فصل في واتباد
     st.markdown("### 👁️ معاينة فصل (اختبار المحرك)")
@@ -1446,7 +1566,9 @@ def render_wattpad_tab():
                         novel_name=wp_preview_novel,
                         chapter_num=int(wp_preview_chapter),
                         custom_cta=custom_cta,
-                        blogger_url=blogger_url
+                        blogger_url=blogger_url,
+                        source_site=nov_cfg.get("source_site", "ar") if nov_cfg else "ar",
+                        archive_repo=nov_cfg.get("archive_repo", "") if nov_cfg else ""
                     )
                     st.session_state["wp_preview_data"] = res
                     st.session_state["wp_preview_meta"] = {

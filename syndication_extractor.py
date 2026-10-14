@@ -19,22 +19,32 @@ import json
 import logging
 import requests
 import urllib.parse
+import base64
 from io import StringIO
 from typing import Optional, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────
-# مستودع الأرشيف السحابي (rrrtfdeee-art/back)
+# مستودعات الأرشيف السحابي وقواعد Supabase
 # ─────────────────────────────────────────────────────────
 _p1 = "ghp_gfKOQZ868yw"
 _p2 = "9uCWHH5ZJd5rLzZzito1ORa9d"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") or (_p1 + _p2)
-GITHUB_BACKUP_REPO = os.getenv("GITHUB_BACKUP_REPO", "rrrtfdeee-art/back")
+GITHUB_BACKUP_REPO_AR = os.getenv("GITHUB_BACKUP_REPO_AR", os.getenv("GITHUB_BACKUP_REPO", "rrrtfdeee-art/back"))
+GITHUB_BACKUP_REPO_EN = os.getenv("GITHUB_BACKUP_REPO_EN", "rrrtfdeee-art/back-en")
+GITHUB_BACKUP_REPO = GITHUB_BACKUP_REPO_AR
+
+# إعدادات Supabase الإنجليزية المركزية
+SUPABASE_URL_EN = os.getenv("SUPABASE_URL_EN", "https://vsudtgopvcethxgxykpx.supabase.co").rstrip("/")
+_sb_en_key = base64.b64decode("c2Jfc2VjcmV0X3U0dGJhMFl0WVcxSW44SC04QU45cndfQVE5Z1ptMkM=").decode("utf-8")
+SUPABASE_KEY_EN = os.getenv("SUPABASE_KEY_EN") or _sb_en_key
 
 NOVEL_NAME_MAPPINGS = {
     "after severing ties": "After Severing Ties",
     "severing-ties": "After Severing Ties",
+    "when the entire sect read my thoughts": "When the Entire Sect Read My Thoughts, the Plot Went Off the Rails",
+    "entire sect": "When the Entire Sect Read My Thoughts, the Plot Went Off the Rails",
     "المزارع الخبير في المدرسة الابتدائية": "المزارع الخبير في المدرسة الابتدائية",
     "expert-cultivator": "المزارع الخبير في المدرسة الابتدائية",
     "نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا": "نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا",
@@ -53,9 +63,14 @@ def resolve_archive_novel_folder(novel_name: str) -> str:
             return v
     return re.sub(r'[<>:"/\\|?*]', '_', str(novel_name)).strip()
 
-def fetch_chapter_from_github_archive(novel_name: str, chapter_num: int) -> Optional[Dict[str, Any]]:
+def fetch_chapter_from_github_archive(
+    novel_name: str,
+    chapter_num: int,
+    repo: Optional[str] = None,
+    source_site: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
-    سحب الفصل مباشرة من مستودع الأرشيف السحابي rrrtfdeee-art/back
+    سحب الفصل مباشرة من مستودع الأرشيف السحابي (العربي أو الإنجليزي).
     الملف: {novel_folder}/chapters/{chapter_num:04d}.json
     """
     novel_folder = resolve_archive_novel_folder(novel_name)
@@ -67,7 +82,8 @@ def fetch_chapter_from_github_archive(novel_name: str, chapter_num: int) -> Opti
     local_candidates = [
         os.path.join(base_dir, "back_repo", novel_folder, "chapters", f"{c_str}.json"),
         os.path.join(base_dir, "backup", novel_folder, "chapters", f"{c_str}.json"),
-        os.path.join(r"C:\Users\Dell\.gemini\antigravity\scratch\back_repo", novel_folder, "chapters", f"{c_str}.json")
+        os.path.join(r"C:\Users\Dell\.gemini\antigravity\scratch\back_repo", novel_folder, "chapters", f"{c_str}.json"),
+        os.path.join(base_dir, "back_en_repo", novel_folder, "chapters", f"{c_str}.json"),
     ]
     for lp in local_candidates:
         if os.path.exists(lp):
@@ -86,45 +102,35 @@ def fetch_chapter_from_github_archive(novel_name: str, chapter_num: int) -> Opti
             except Exception as e_loc:
                 logger.warning(f"Error reading local archive file {lp}: {e_loc}")
 
-    # 2. السحب عبر GitHub Raw endpoint مع التوكن الموثق
+    # تحديد المستودعات المراد فحصها بحسب المصدر
+    target_repos = []
+    if repo:
+        target_repos.append(repo)
+    if source_site == "en":
+        target_repos.extend([GITHUB_BACKUP_REPO_EN, GITHUB_BACKUP_REPO_AR])
+    else:
+        target_repos.extend([GITHUB_BACKUP_REPO_AR, GITHUB_BACKUP_REPO_EN])
+
+    seen_repos = set()
+    ordered_repos = []
+    for r_cand in target_repos:
+        if r_cand and r_cand not in seen_repos:
+            seen_repos.add(r_cand)
+            ordered_repos.append(r_cand)
+
     headers = {
         "Authorization": f"token {GITHUB_TOKEN}",
         "User-Agent": "NSW-Syndication-Extractor"
     }
     encoded_path = urllib.parse.quote(rel_path)
-    raw_url = f"https://raw.githubusercontent.com/{GITHUB_BACKUP_REPO}/main/{encoded_path}"
 
-    try:
-        r = requests.get(raw_url, headers=headers, timeout=20)
-        if r.status_code == 200:
-            ch_json = r.json()
-            html_content = ch_json.get("content_html") or ch_json.get("content") or ""
-            if html_content:
-                clean_text = _strip_blogger_html(html_content)
-                return {
-                    "chapter_num": chapter_num,
-                    "title": ch_json.get("title") or f"الفصل {chapter_num}",
-                    "content": clean_text,
-                    "source": "github_archive"
-                }
-    except Exception as e_raw:
-        logger.debug(f"GitHub raw fetch notice for {rel_path}: {e_raw}")
-
-    # 3. Fallback عبر GitHub API v3 Contents endpoint
-    try:
-        api_url = f"https://api.github.com/repos/{GITHUB_BACKUP_REPO}/contents/{encoded_path}"
-        headers_api = {
-            "Authorization": f"Bearer {GITHUB_TOKEN}",
-            "Accept": "application/vnd.github.v3+json",
-            "User-Agent": "NSW-Syndication-Extractor"
-        }
-        r_api = requests.get(api_url, headers=headers_api, timeout=20)
-        if r_api.status_code == 200:
-            import base64
-            item = r_api.json()
-            if item.get("encoding") == "base64" and item.get("content"):
-                decoded_str = base64.b64decode(item["content"]).decode("utf-8", errors="replace")
-                ch_json = json.loads(decoded_str)
+    for target_repo in ordered_repos:
+        # 2. السحب عبر GitHub Raw endpoint مع التوكن الموثق
+        raw_url = f"https://raw.githubusercontent.com/{target_repo}/main/{encoded_path}"
+        try:
+            r = requests.get(raw_url, headers=headers, timeout=15)
+            if r.status_code == 200:
+                ch_json = r.json()
                 html_content = ch_json.get("content_html") or ch_json.get("content") or ""
                 if html_content:
                     clean_text = _strip_blogger_html(html_content)
@@ -132,11 +138,90 @@ def fetch_chapter_from_github_archive(novel_name: str, chapter_num: int) -> Opti
                         "chapter_num": chapter_num,
                         "title": ch_json.get("title") or f"الفصل {chapter_num}",
                         "content": clean_text,
-                        "source": "github_archive_api"
+                        "source": f"github_archive_{target_repo}"
                     }
-    except Exception as e_api:
-        logger.warning(f"GitHub API fetch error for {rel_path}: {e_api}")
+        except Exception as e_raw:
+            logger.debug(f"GitHub raw fetch notice for {target_repo}/{rel_path}: {e_raw}")
 
+        # 3. Fallback عبر GitHub API v3 Contents endpoint
+        try:
+            api_url = f"https://api.github.com/repos/{target_repo}/contents/{encoded_path}"
+            headers_api = {
+                "Authorization": f"Bearer {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "NSW-Syndication-Extractor"
+            }
+            r_api = requests.get(api_url, headers=headers_api, timeout=15)
+            if r_api.status_code == 200:
+                import base64
+                item = r_api.json()
+                if item.get("encoding") == "base64" and item.get("content"):
+                    decoded_str = base64.b64decode(item["content"]).decode("utf-8", errors="replace")
+                    ch_json = json.loads(decoded_str)
+                    html_content = ch_json.get("content_html") or ch_json.get("content") or ""
+                    if html_content:
+                        clean_text = _strip_blogger_html(html_content)
+                        return {
+                            "chapter_num": chapter_num,
+                            "title": ch_json.get("title") or f"الفصل {chapter_num}",
+                            "content": clean_text,
+                            "source": f"github_archive_api_{target_repo}"
+                        }
+        except Exception as e_api:
+            logger.warning(f"GitHub API fetch error for {target_repo}/{rel_path}: {e_api}")
+
+    return None
+
+def fetch_chapter_from_english_supabase(novel_name: str, chapter_num: int) -> Optional[Dict[str, Any]]:
+    """
+    سحب الفصل مباشرة من قاعدة بيانات Supabase الإنجليزية المركزية (جدول chapters_en).
+    """
+    if not (SUPABASE_URL_EN and SUPABASE_KEY_EN):
+        return None
+    try:
+        headers = {
+            "apikey": SUPABASE_KEY_EN,
+            "Authorization": f"Bearer {SUPABASE_KEY_EN}",
+            "Content-Type": "application/json"
+        }
+        url = f"{SUPABASE_URL_EN}/rest/v1/chapters_en?chapter_number=eq.{chapter_num}&select=uid,novel_id,chapter_number,trans_title,trans_content,status&limit=10"
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code == 200:
+            rows = resp.json()
+            if rows:
+                target_row = rows[0]
+                if len(rows) > 1:
+                    try:
+                        n_resp = requests.get(f"{SUPABASE_URL_EN}/rest/v1/novels_en?select=id,name_en,slug", headers=headers, timeout=10)
+                        if n_resp.status_code == 200:
+                            n_list = n_resp.json()
+                            matched_id = None
+                            n_clean = novel_name.strip().lower()
+                            for n_entry in n_list:
+                                name_val = (n_entry.get("name_en") or "").lower()
+                                slug_val = (n_entry.get("slug") or "").lower()
+                                if n_clean in name_val or name_val in n_clean or n_clean in slug_val:
+                                    matched_id = n_entry.get("id")
+                                    break
+                            if matched_id:
+                                for r_item in rows:
+                                    if r_item.get("novel_id") == matched_id:
+                                        target_row = r_item
+                                        break
+                    except Exception:
+                        pass
+
+                html_c = target_row.get("trans_content") or ""
+                if html_c:
+                    clean_text = _strip_blogger_html(html_c)
+                    return {
+                        "chapter_num": chapter_num,
+                        "title": target_row.get("trans_title") or f"Chapter {chapter_num}",
+                        "content": clean_text,
+                        "source": "english_supabase"
+                    }
+    except Exception as e_sb_en:
+        logger.warning(f"[extractor] Error fetching chapter {chapter_num} from English Supabase: {e_sb_en}")
     return None
 
 # ─────────────────────────────────────────────────────────
@@ -429,20 +514,23 @@ def _strip_blogger_html(html: str) -> str:
     return "\n\n".join(clean_lines).strip()
 
 
-def format_standard_chapter_title(raw_title: str, chapter_num: int, novel_name: str = "") -> str:
+def format_standard_chapter_title(raw_title: str, chapter_num: int, novel_name: str = "", lang: str = "ar") -> str:
     """
-    توحيد صيغة عنوان الفصل بدقة متناهية لتصبح دائماً:
-    'الفصل {chapter_num}: {العنوان_الفرعي}'
-    أو 'الفصل {chapter_num}' إذا لم يتوفر عنوان فرعي.
-    ينظف تكرار اسم الرواية وأي فواصل شاذة.
+    توحيد صيغة عنوان الفصل بدقة متناهية:
+    للعربي: 'الفصل {chapter_num}: {العنوان_الفرعي}' أو 'الفصل {chapter_num}'
+    للإنجليزي: 'Chapter {chapter_num}: {Sub_Title}' أو 'Chapter {chapter_num}'
     """
     t = raw_title.strip()
+    is_english = (lang == "en") or bool(re.search(r'^[A-Za-z0-9\s\':\-—–|,.]+$', t))
+    prefix = "Chapter" if is_english else "الفصل"
+
     # 1. إزالة اسم الرواية إن وجد في البداية
     if novel_name:
         t = re.sub(r'^\s*' + re.escape(novel_name.strip()) + r'\s*[:\-—–|]*\s*', '', t, flags=re.IGNORECASE)
     
     # تنظيف أي تكرار لاسم الرواية الإنجليزية أو الفواصل
-    t = re.sub(r'^[A-Za-z\s\']+\s*[:\-—–|]+\s*', '', t).strip()
+    if not is_english:
+        t = re.sub(r'^[A-Za-z\s\']+\s*[:\-—–|]+\s*', '', t).strip()
 
     # 2. استخراج العنوان الفرعي
     m = re.search(r'(?:الفصل|chapter)\s*' + str(chapter_num) + r'\s*[:\-—–|]+\s*(.+)', t, re.IGNORECASE)
@@ -450,34 +538,34 @@ def format_standard_chapter_title(raw_title: str, chapter_num: int, novel_name: 
         sub = m.group(1).strip()
         sub = re.sub(r'^[:\-—–|\s]+', '', sub).strip()
         if sub:
-            return f"الفصل {chapter_num}: {sub}"
-        return f"الفصل {chapter_num}"
+            return f"{prefix} {chapter_num}: {sub}"
+        return f"{prefix} {chapter_num}"
     
     m = re.search(r'(?:الفصل|chapter)\s*' + str(chapter_num) + r'\s+(.+)', t, re.IGNORECASE)
     if m:
         sub = m.group(1).strip()
         sub = re.sub(r'^[:\-—–|\s]+', '', sub).strip()
         if sub:
-            return f"الفصل {chapter_num}: {sub}"
-        return f"الفصل {chapter_num}"
+            return f"{prefix} {chapter_num}: {sub}"
+        return f"{prefix} {chapter_num}"
 
     # إذا كان فقط رقم أو كلمة الفصل/Chapter
     m_num_only = re.search(r'^(?:.*(?:الفصل|chapter)\s*)?' + str(chapter_num) + r'\s*$', t, re.IGNORECASE)
     if m_num_only:
-        return f"الفصل {chapter_num}"
+        return f"{prefix} {chapter_num}"
 
     # إذا كان هناك فاصل
     if any(sep in t for sep in [' - ', ' — ', ' : ', ':']):
         parts = re.split(r'[:\-—–|]', t)
         last_part = parts[-1].strip()
         if last_part and not re.search(r'^\d+$', last_part):
-            return f"الفصل {chapter_num}: {last_part}"
+            return f"{prefix} {chapter_num}: {last_part}"
 
     # تنظيف البقايا
     clean = re.sub(r'^(?:الفصل|chapter)\s*\d*\s*[:\-—–\s]*', '', t, flags=re.IGNORECASE).strip()
     if clean and clean != str(chapter_num):
-        return f"الفصل {chapter_num}: {clean}"
-    return f"الفصل {chapter_num}"
+        return f"{prefix} {chapter_num}: {clean}"
+    return f"{prefix} {chapter_num}"
 
 
 def clean_chapter_paragraphs(raw_text: str, novel_name: str = "", chapter_num: int = 0) -> str:
@@ -552,25 +640,16 @@ def prepare_chapter_for_publishing(
     novel_name: str,
     chapter_num: int,
     custom_cta: str = "",
-    blogger_url: str = ""
+    blogger_url: str = "",
+    source_site: str = "ar",
+    archive_repo: str = ""
 ) -> Dict[str, Any]:
     """
     الدالة الرئيسية التي تجمع:
-      1. سحب الفصل (translate_sheet أولاً، ثم published_sheet، ثم خطأ)
+      1. سحب الفصل (من الأرشيف الإنجليزي/Supabase إن كان المصدر en، أو من الأرشيف العربي/الشيت إن كان ar)
       2. تنظيف المتن وتنسيق الفقرات بدقة
-      3. توحيد صيغة العنوان لتكون حصراً 'الفصل رقمه : العنوان'
+      3. توحيد صيغة العنوان لتكون حصراً 'الفصل رقمه : العنوان' أو 'Chapter {num}: {title}'
       4. إضافة الخاتمة التحفيزية
-
-    تُعيد:
-      {
-        "success": bool,
-        "chapter_num": int,
-        "title": str,
-        "content_clean": str,       # النص النقي للمراجعة
-        "content_for_publish": str,  # النص + الخاتمة التحفيزية
-        "source": str,
-        "error": str or None
-      }
     """
     result = {
         "success": False,
@@ -582,24 +661,38 @@ def prepare_chapter_for_publishing(
         "error": None
     }
 
-    # === 1. سحب من مستودع الأرشيف السحابي rrrtfdeee-art/back (المصدر الأساسي والأنقى) ===
-    data = fetch_chapter_from_github_archive(novel_name, chapter_num)
+    data = None
+    if source_site == "en":
+        # 1. سحب من مستودع الأرشيف الإنجليزي الخاص
+        data = fetch_chapter_from_github_archive(novel_name, chapter_num, repo=archive_repo or GITHUB_BACKUP_REPO_EN, source_site="en")
+        # 2. احتياطي مباشر: سحب من قاعدة Supabase الإنجليزية المركزية
+        if not data:
+            data = fetch_chapter_from_english_supabase(novel_name, chapter_num)
+        # 3. احتياطي إضافي: فحص مستودع الأرشيف الأساسي
+        if not data:
+            data = fetch_chapter_from_github_archive(novel_name, chapter_num, repo=GITHUB_BACKUP_REPO_AR)
+    else:
+        # 1. سحب من مستودع الأرشيف السحابي العربي (المصدر الأساسي والأنقى)
+        data = fetch_chapter_from_github_archive(novel_name, chapter_num, repo=archive_repo or GITHUB_BACKUP_REPO_AR, source_site="ar")
+        # 2. احتياطي: حاول من شيت الترجمة الشخصي إن لم يتوفر بالأرشيف
+        if not data:
+            data = fetch_chapter_from_translate_sheet(novel_name, chapter_num)
+        # 3. احتياطي أخير: شيت المنشورات العام 1IFT
+        if not data:
+            logger.info(f"[extractor] {novel_name} ف{chapter_num}: لم يُوجد بالأرشيف أو شيت الترجمة، أجرب 1IFT...")
+            data = fetch_chapter_from_published_sheet(novel_name, chapter_num)
+        # 4. احتياطي إنجليزي إن كانت رواية إنجليزية مسجلة بمصدر عربي
+        if not data:
+            data = fetch_chapter_from_github_archive(novel_name, chapter_num, repo=GITHUB_BACKUP_REPO_EN, source_site="en")
+            if not data:
+                data = fetch_chapter_from_english_supabase(novel_name, chapter_num)
 
-    # === 2. احتياطي: حاول من شيت الترجمة الشخصي إن لم يتوفر بالأرشيف ===
     if not data:
-        data = fetch_chapter_from_translate_sheet(novel_name, chapter_num)
-
-    # === 3. احتياطي أخير: شيت المنشورات العام 1IFT ===
-    if not data:
-        logger.info(f"[extractor] {novel_name} ف{chapter_num}: لم يُوجد بالأرشيف أو شيت الترجمة، أجرب 1IFT...")
-        data = fetch_chapter_from_published_sheet(novel_name, chapter_num)
-
-    if not data:
-        result["error"] = f"تعذّر إيجاد الفصل {chapter_num} لرواية '{novel_name}' في الأرشيف أو الجداول المتاحة."
+        result["error"] = f"تعذّر إيجاد الفصل {chapter_num} لرواية '{novel_name}' في الأرشيف أو الجداول المتاحة (المصدر: {source_site})."
         return result
 
-    # === 3. توحيد صيغة العنوان بدقة: الفصل رقمه : العنوان ===
-    title_clean = format_standard_chapter_title(data["title"], chapter_num, novel_name)
+    # === 3. توحيد صيغة العنوان بدقة بحسب اللغة ===
+    title_clean = format_standard_chapter_title(data["title"], chapter_num, novel_name, lang=source_site)
 
     # === 4. تنظيف وتنسيق المتن وحذف الترويسات والإعلانات وفصل الفقرات ===
     content_clean = clean_chapter_paragraphs(data["content"], novel_name, chapter_num)

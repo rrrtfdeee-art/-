@@ -76,6 +76,14 @@ def init_syndication_tables():
         cur.execute("ALTER TABLE syndicated_novels ADD COLUMN account_id INTEGER DEFAULT 0")
     except Exception:
         pass
+    try:
+        cur.execute("ALTER TABLE syndicated_novels ADD COLUMN source_site TEXT DEFAULT 'ar'")
+    except Exception:
+        pass
+    try:
+        cur.execute("ALTER TABLE syndicated_novels ADD COLUMN archive_repo TEXT DEFAULT ''")
+    except Exception:
+        pass
     
     # 3. سجل الفصول المنشورة لتفادي أي تكرار
     cur.execute("""
@@ -220,14 +228,24 @@ def save_synd_setting(key: str, value: str):
 
 # ==================== دوال الروايات ====================
 
-def get_all_syndicated_novels(active_only: bool = False) -> List[Dict[str, Any]]:
+def get_all_syndicated_novels(active_only: bool = False, source_site: Optional[str] = None) -> List[Dict[str, Any]]:
     conn = _get_conn()
     cur = conn.cursor()
-    query = "SELECT * FROM syndicated_novels"
+    conditions = []
+    params = []
     if active_only:
-        query += " WHERE is_active = 1"
+        conditions.append("is_active = 1")
+    if source_site:
+        if source_site == "ar":
+            conditions.append("(source_site = 'ar' OR source_site IS NULL OR source_site = '')")
+        else:
+            conditions.append("source_site = ?")
+            params.append(source_site)
+    query = "SELECT * FROM syndicated_novels"
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY id DESC"
-    cur.execute(query)
+    cur.execute(query, tuple(params))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
@@ -239,6 +257,14 @@ def get_syndicated_novel_by_id(novel_id: int) -> Optional[Dict[str, Any]]:
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else None
+
+def set_novel_source_site(novel_id: int, source_site: str, archive_repo: str = ""):
+    """تحديد مصدر محتوى الرواية (الموقع العربي ar أو الموقع الإنجليزي en)."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE syndicated_novels SET source_site = ?, archive_repo = ? WHERE id = ?", (source_site, archive_repo, novel_id))
+    conn.commit()
+    conn.close()
 
 def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
     conn = _get_conn()
@@ -261,6 +287,8 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
     data.setdefault("custom_cta", "")
     data.setdefault("daily_times", "")
     data.setdefault("account_id", 0)
+    data.setdefault("source_site", "ar")
+    data.setdefault("archive_repo", "")
     data.setdefault("is_active", 1)
     if novel_id:
         # تحديث
@@ -283,7 +311,9 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
             custom_cta = :custom_cta,
             daily_times = :daily_times,
             is_active = :is_active,
-            account_id = :account_id
+            account_id = :account_id,
+            source_site = :source_site,
+            archive_repo = :archive_repo
         WHERE id = :id
         """, data)
         res_id = novel_id
@@ -296,14 +326,14 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
             wattpad_enabled, wattpad_story_id, wattpad_story_url,
             start_chapter, last_synced_chapter, stop_chapter,
             interval_hours, next_run_timestamp, custom_cta, daily_times, is_active,
-            account_id
+            account_id, source_site, archive_repo
         ) VALUES (
             :novel_name, :blogger_url, :blogger_label,
             :rewayat_enabled, :rewayat_novel_id, :rewayat_novel_url,
             :wattpad_enabled, :wattpad_story_id, :wattpad_story_url,
             :start_chapter, :last_synced_chapter, :stop_chapter,
             :interval_hours, :next_run_timestamp, :custom_cta, :daily_times, :is_active,
-            :account_id
+            :account_id, :source_site, :archive_repo
         )
         """, data)
         res_id = cur.lastrowid
