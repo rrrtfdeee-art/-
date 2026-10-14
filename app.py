@@ -165,7 +165,7 @@ st.caption("نظام النشر السحابي الموحد والمستقل ل�
 # محدد التبويبات الرئيسي
 main_nav_tab = st.radio(
     "اختر منصة النشر:",
-    ["🏛️ نادي الروايات (Rewayat Club)", "🟧 واتباد (Wattpad)"],
+    ["🏛️ نادي الروايات (Rewayat Club)", "🟧 واتباد (Wattpad)", "🌐 Novel Updates"],
     index=0,
     horizontal=True,
     label_visibility="collapsed"
@@ -177,3 +177,5 @@ if main_nav_tab == "🏛️ نادي الروايات (Rewayat Club)":
     ui_syndication_tabs.render_rewayat_club_tab()
 elif main_nav_tab == "🟧 واتباد (Wattpad)":
     ui_syndication_tabs.render_wattpad_tab()
+elif main_nav_tab == "🌐 Novel Updates":
+    ui_syndication_tabs.render_novelupdates_tab()

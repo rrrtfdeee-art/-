@@ -84,6 +84,22 @@ def init_syndication_tables():
         cur.execute("ALTER TABLE syndicated_novels ADD COLUMN archive_repo TEXT DEFAULT ''")
     except Exception:
         pass
+    try:
+        cur.execute("ALTER TABLE syndicated_novels ADD COLUMN novelupdates_enabled INTEGER DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        cur.execute("ALTER TABLE syndicated_novels ADD COLUMN novelupdates_series_url TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        cur.execute("ALTER TABLE syndicated_novels ADD COLUMN novelupdates_series_name TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        cur.execute("ALTER TABLE syndicated_novels ADD COLUMN custom_domain TEXT DEFAULT ''")
+    except Exception:
+        pass
     
     # 3. سجل الفصول المنشورة لتفادي أي تكرار
     cur.execute("""
@@ -266,6 +282,16 @@ def set_novel_source_site(novel_id: int, source_site: str, archive_repo: str = "
     conn.commit()
     conn.close()
 
+def set_novel_custom_domain(novel_id: int, custom_domain: str):
+    """تحديث الدومين المخصص للرواية مع تطبيع المسارات."""
+    from novelupdates_poster import normalize_custom_domain
+    clean_domain = normalize_custom_domain(custom_domain)
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE syndicated_novels SET custom_domain = ? WHERE id = ?", (clean_domain, novel_id))
+    conn.commit()
+    conn.close()
+
 def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
     conn = _get_conn()
     cur = conn.cursor()
@@ -289,6 +315,10 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
     data.setdefault("account_id", 0)
     data.setdefault("source_site", "ar")
     data.setdefault("archive_repo", "")
+    data.setdefault("novelupdates_enabled", 0)
+    data.setdefault("novelupdates_series_url", "")
+    data.setdefault("novelupdates_series_name", "")
+    data.setdefault("custom_domain", "")
     data.setdefault("is_active", 1)
     if novel_id:
         # تحديث
@@ -303,6 +333,10 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
             wattpad_enabled = :wattpad_enabled,
             wattpad_story_id = :wattpad_story_id,
             wattpad_story_url = :wattpad_story_url,
+            novelupdates_enabled = :novelupdates_enabled,
+            novelupdates_series_url = :novelupdates_series_url,
+            novelupdates_series_name = :novelupdates_series_name,
+            custom_domain = :custom_domain,
             start_chapter = :start_chapter,
             last_synced_chapter = :last_synced_chapter,
             stop_chapter = :stop_chapter,
@@ -324,6 +358,7 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
             novel_name, blogger_url, blogger_label,
             rewayat_enabled, rewayat_novel_id, rewayat_novel_url,
             wattpad_enabled, wattpad_story_id, wattpad_story_url,
+            novelupdates_enabled, novelupdates_series_url, novelupdates_series_name, custom_domain,
             start_chapter, last_synced_chapter, stop_chapter,
             interval_hours, next_run_timestamp, custom_cta, daily_times, is_active,
             account_id, source_site, archive_repo
@@ -331,6 +366,7 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
             :novel_name, :blogger_url, :blogger_label,
             :rewayat_enabled, :rewayat_novel_id, :rewayat_novel_url,
             :wattpad_enabled, :wattpad_story_id, :wattpad_story_url,
+            :novelupdates_enabled, :novelupdates_series_url, :novelupdates_series_name, :custom_domain,
             :start_chapter, :last_synced_chapter, :stop_chapter,
             :interval_hours, :next_run_timestamp, :custom_cta, :daily_times, :is_active,
             :account_id, :source_site, :archive_repo

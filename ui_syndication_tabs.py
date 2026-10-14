@@ -1653,3 +1653,470 @@ def render_wattpad_tab():
                 st.caption(f"⚠️ {log['error_msg']}")
 
 
+# ==============================================================================
+# تبويب Novel Updates (Release Automation & Custom Domain)
+# ==============================================================================
+
+def render_novelupdates_tab():
+    """
+    تبويب إدارة ونشر إصدارات الفصول على Novel Updates:
+    - يعتمد على بيانات الفصول من latest_chapters.json.
+    - يدعم تخصيص الدومين مع معالجة ذكية للسلاش (/) والتطبيع الكامل.
+    - يدعم حسابات متعددة مع اسم المجموعة والكوكيز/التوكن.
+    - يوفر روابط RSS متوافقة مع زاحف Novel Updates التلقائي.
+    """
+    import novelupdates_poster
+
+    st.markdown("## 🌐 نشر وإدارة إصدارات Novel Updates (Release Automation)")
+    st.caption("أتمتة إرسال روابط وتحديثات الفصول إلى دليل Novel Updates دون الحاجة لملفات الأرشيف أو رفع النصوص.")
+
+    # 1. إدارة حسابات Novel Updates
+    with st.expander("🔐 حسابات ومجموعات Novel Updates (Multi-Account)", expanded=False):
+        nu_accounts = syndication_db.get_all_accounts(platform="novelupdates")
+
+        if nu_accounts:
+            st.markdown("##### 📋 الحسابات والمجموعات المسجلة:")
+            for acc in nu_accounts:
+                col_acc_info, col_acc_act = st.columns([3, 1])
+                with col_acc_info:
+                    default_badge = " 🌟 (افتراضي)" if acc.get("is_default") else ""
+                    grp_name = "غير محدد"
+                    if acc.get("extra_data"):
+                        try:
+                            _ex = json.loads(acc["extra_data"])
+                            grp_name = _ex.get("group_name", "غير محدد")
+                        except Exception:
+                            pass
+                    st.markdown(f"**{acc['account_label']}**{default_badge} — المجموعة: `{grp_name}` | المستخدم: `{acc['username']}`")
+                with col_acc_act:
+                    c_def, c_del = st.columns(2)
+                    with c_def:
+                        if not acc.get("is_default"):
+                            if st.button("⭐", key=f"nu_set_def_{acc['id']}", help="تعيين كافتراضي"):
+                                acc["is_default"] = 1
+                                syndication_db.save_or_update_account(acc)
+                                st.rerun()
+                    with c_del:
+                        if st.button("🗑️", key=f"nu_del_acc_{acc['id']}", help="حذف الحساب"):
+                            syndication_db.delete_account(acc["id"])
+                            st.rerun()
+            st.markdown("---")
+
+        st.markdown("##### ➕ إضافة حساب أو مجموعة Novel Updates جديدة:")
+        col_nu1, col_nu2 = st.columns(2)
+        with col_nu1:
+            new_nu_label = st.text_input("اسم الحساب (تسمية مميزة):", key="new_nu_label", placeholder="مثال: حساب مجموعتي الرئيسي")
+            new_nu_group = st.text_input("اسم مجموعة الترجمة (Group Name على NU):", key="new_nu_group", placeholder="مثال: NovelSkyWorld")
+            new_nu_user = st.text_input("اسم المستخدم أو البريد (Username / Email):", key="new_nu_user")
+        with col_nu2:
+            new_nu_pass = st.text_input("كلمة المرور (Password):", type="password", key="new_nu_pass")
+            new_nu_token = st.text_area("كوكيز الجلسة أو التوكن (Session Cookie / Token):", key="new_nu_token", height=68, placeholder="الصق كوكيز الجلسة من المتصفح لتجاوز حماية Cloudflare")
+            new_nu_default = st.checkbox("تعيين كحساب افتراضي", key="new_nu_default", value=not bool(nu_accounts))
+
+        st.caption("💡 **ملاحظة:** نظراً لحماية Cloudflare على موقع Novel Updates، يفضل إدخال كوكيز الجلسة (من المتصفح بعد تسجيل الدخول) لضمان نجاح الإرسال المباشر.")
+
+        col_s1, col_s2 = st.columns(2)
+        with col_s1:
+            if st.button("💾 حفظ بيانات الحساب والمجموعة", key="save_new_nu_acc", use_container_width=True):
+                if new_nu_label.strip() and (new_nu_group.strip() or new_nu_user.strip() or new_nu_token.strip()):
+                    extra_dict = {"group_name": new_nu_group.strip()}
+                    syndication_db.save_or_update_account({
+                        "account_label": new_nu_label.strip(),
+                        "platform": "novelupdates",
+                        "username": new_nu_user.strip(),
+                        "token": new_nu_token.strip(),
+                        "password": new_nu_pass.strip(),
+                        "extra_data": json.dumps(extra_dict),
+                        "is_default": 1 if new_nu_default else 0
+                    })
+                    st.success("✅ تم حفظ حساب Novel Updates بنجاح!")
+                    st.rerun()
+                else:
+                    st.error("يرجى إدخال اسم الحساب واسم المجموعة أو المستخدم.")
+        with col_s2:
+            if st.button("🔍 فحص الاتصال بـ Novel Updates", key="test_new_nu_conn", use_container_width=True):
+                test_cli = novelupdates_poster.NovelUpdatesClient(
+                    username=new_nu_user.strip(),
+                    password=new_nu_pass.strip(),
+                    token=new_nu_token.strip(),
+                    group_name=new_nu_group.strip()
+                )
+                chk = test_cli.test_connection()
+                if chk.get("success"):
+                    st.success(f"✅ {chk.get('message')}")
+                else:
+                    st.warning(f"⚠️ {chk.get('message')}")
+
+    # 2. إضافة رواية جديدة لنظام Novel Updates
+    with st.expander("➕ إضافة رواية جديدة لجدولة Novel Updates", expanded=False):
+        nu_c1, nu_c2 = st.columns(2)
+        with nu_c1:
+            nu_novel_name = st.text_input(
+                "📖 اسم الرواية (باللغة الإنجليزية):",
+                placeholder="مثال: After Severing Ties, The Prince’s Family Regrets It For Life",
+                key="nu_add_name"
+            )
+            nu_series_url = st.text_input(
+                "🔗 رابط أو اسم الرواية على موقع Novel Updates:",
+                placeholder="https://www.novelupdates.com/series/after-severing-ties-.../",
+                key="nu_add_nu_url"
+            )
+        with nu_c2:
+            nu_site_url = st.text_input(
+                "🌐 رابط الرواية على موقعك الأصلي (Site Novel Link):",
+                placeholder="https://en.novelskyworld.com/p/when-entire-sect-read-my-thoughts-plot.html",
+                key="nu_add_site_url"
+            )
+            nu_custom_domain = st.text_input(
+                "🎯 تخصيص الدومين لروابط الفصول (Custom Domain):",
+                placeholder="https://en.novelskyworld.com أو novelskyworld.com/",
+                help="يمكنك كتابة الدومين بأي شكل تريده (مع سلاش / أو بدونها)، وسيقوم النظام بتطبيعه وتركيب مسار الفصول عليه بذكاء تام.",
+                key="nu_add_custom_domain"
+            )
+
+        if nu_custom_domain.strip():
+            clean_dom_preview = novelupdates_poster.normalize_custom_domain(nu_custom_domain.strip())
+            st.caption(f"🔍 **معاينة الدومين بعد التطبيع الذكي:** `{clean_dom_preview}` (مثال الرابط: `{clean_dom_preview}/2026/10/chapter-16.html`)")
+
+        nu_ch1, nu_ch2, nu_ch3 = st.columns(3)
+        with nu_ch1:
+            nu_start_ch = st.number_input("رقم بداية الفصول:", min_value=1, value=1, step=1, key="nu_add_start")
+        with nu_ch2:
+            nu_last_ch = st.number_input("آخر فصل تم نشره سابقاً على NU:", min_value=0, value=0, step=1, key="nu_add_last")
+        with nu_ch3:
+            nu_stop_ch = st.number_input("التوقف عند الفصل:", min_value=1, value=100, step=1, key="nu_add_stop")
+
+        nu_sched_cfg = render_chapter_time_windows_selector(
+            key_prefix="nu_add_sched",
+            default_times="",
+            next_chap_num=int(nu_last_ch) + 1,
+            default_interval=12.0
+        )
+
+        # اختيار الحساب
+        nu_avail_accs = syndication_db.get_all_accounts(platform="novelupdates")
+        chosen_nu_acc_id = 0
+        if nu_avail_accs:
+            nu_acc_map = {f"{a['account_label']} ({a['username']}){' ⭐' if a.get('is_default') else ''}": a['id'] for a in nu_avail_accs}
+            def_nu_idx = 0
+            for idx_n, a in enumerate(nu_avail_accs):
+                if a.get('is_default'):
+                    def_nu_idx = idx_n
+                    break
+            chosen_nu_label = st.selectbox("👤 حساب Novel Updates المربوط للنشر:", list(nu_acc_map.keys()), index=def_nu_idx, key="nu_add_acc_sel")
+            chosen_nu_acc_id = nu_acc_map[chosen_nu_label]
+
+        if st.button("🚀 حفظ الرواية وتفعيل الجدولة لـ Novel Updates", key="nu_save_btn", type="primary", use_container_width=True):
+            target_nname = nu_novel_name.strip()
+            target_nu_url = nu_series_url.strip()
+            target_site_url = nu_site_url.strip()
+            target_dom = novelupdates_poster.normalize_custom_domain(nu_custom_domain.strip())
+            
+            clean_series_name = novelupdates_poster.extract_series_identifier(target_nu_url) or target_nname
+
+            if not target_nname:
+                st.error("❌ يرجى إدخال اسم الرواية بالإنجليزية.")
+            elif not target_nu_url:
+                st.error("❌ يرجى إدخال رابط أو اسم السلسلة على موقع Novel Updates.")
+            else:
+                with st.spinner("⏳ جاري حفظ الرواية وضبط الجدولة لـ Novel Updates..."):
+                    nu_mode = nu_sched_cfg["mode"]
+                    nu_hours = nu_sched_cfg["selected_hours"]
+                    nu_interval_val = nu_sched_cfg["interval_hours"]
+                    nu_rep_mode = nu_sched_cfg["repeat_mode"]
+
+                    final_stop = int(nu_stop_ch)
+                    if nu_mode == "daily_times" and nu_hours:
+                        if nu_rep_mode == "only_these":
+                            final_stop = max(int(nu_start_ch), int(nu_last_ch) + len(nu_hours))
+                        seq_ts = syndication_db.compute_sequential_slot_timestamps(nu_hours, max(1, final_stop - int(nu_last_ch)))
+                        first_run_ts = seq_ts[0] if seq_ts else (time.time() + 3600.0)
+                        daily_times_json = json.dumps(nu_hours)
+                    elif nu_mode == "start_now":
+                        first_run_ts = time.time()
+                        daily_times_json = ""
+                    else:
+                        first_run_ts = time.time() + float(nu_interval_val) * 3600.0
+                        daily_times_json = ""
+
+                    syndication_db.save_or_update_syndicated_novel({
+                        "novel_name": target_nname,
+                        "blogger_url": target_site_url,
+                        "blogger_label": target_nname,
+                        "rewayat_enabled": 0,
+                        "rewayat_novel_id": "",
+                        "rewayat_novel_url": "",
+                        "wattpad_enabled": 0,
+                        "wattpad_story_id": "",
+                        "wattpad_story_url": "",
+                        "novelupdates_enabled": 1,
+                        "novelupdates_series_url": target_nu_url,
+                        "novelupdates_series_name": clean_series_name,
+                        "custom_domain": target_dom,
+                        "start_chapter": int(nu_start_ch),
+                        "last_synced_chapter": int(nu_last_ch),
+                        "stop_chapter": final_stop,
+                        "interval_hours": float(nu_interval_val),
+                        "next_run_timestamp": float(first_run_ts),
+                        "custom_cta": "",
+                        "daily_times": daily_times_json,
+                        "account_id": chosen_nu_acc_id,
+                        "source_site": "en",
+                        "archive_repo": "rrrtfdeee-art/back-en",
+                        "is_active": 1
+                    })
+
+                    st.balloons()
+                    st.success(f"🎉 تم بنجاح تسجيل رواية '{target_nname}' في نظام Novel Updates وتفعيل الجدولة التلقائية!")
+                    st.rerun()
+
+    # 3. عرض الروايات المربوطة بـ Novel Updates
+    st.markdown("### 📚 الروايات المسجلة لإصدارات Novel Updates")
+    all_nu_novels = [n for n in syndication_db.get_all_syndicated_novels() if n.get("novelupdates_enabled") == 1]
+    
+    if not all_nu_novels:
+        st.info("لا توجد روايات مسجلة لـ Novel Updates حتى الآن. استخدم النموذج أعلاه لإضافة أول رواية.")
+    else:
+        for nov in all_nu_novels:
+            with st.container():
+                col_info, col_status, col_actions = st.columns([3, 2, 1.5])
+                with col_info:
+                    st.markdown(f"**📖 {nov['novel_name']}**")
+                    linked_nu_acc = syndication_db.get_account_for_novel(nov["id"])
+                    acc_label = linked_nu_acc["account_label"] if linked_nu_acc else "الحساب الافتراضي"
+                    c_dom = nov.get("custom_domain") or "الدومين الافتراضي"
+                    st.caption(f"سلسلة NU: `{nov.get('novelupdates_series_name') or nov['novel_name']}` | الدومين المخصص: **{c_dom}** | الحساب: **{acc_label}**")
+                with col_status:
+                    target_ch = nov["last_synced_chapter"] + 1
+                    st.markdown(f"📊 آخر إصدار تم إرساله: **c{nov['last_synced_chapter']}** / التوقف عند: **c{nov['stop_chapter']}**")
+                    next_run = nov.get("next_run_timestamp", 0.0)
+                    now_ts = time.time()
+                    nov_daily_list = []
+                    if nov.get("daily_times"):
+                        try:
+                            nov_daily_list = json.loads(nov["daily_times"]) if isinstance(nov["daily_times"], str) else nov["daily_times"]
+                        except Exception:
+                            nov_daily_list = []
+                    if not nov["is_active"]:
+                        st.caption("⏸️ **النشر متوقف:** اضغط 'استئناف' أو اختر موعداً للبدء.")
+                    elif next_run and next_run > now_ts:
+                        rem_hours = (next_run - now_ts) / 3600.0
+                        dt_label = format_schedule_time_label(next_run)
+                        st.caption(f"⏳ **موعد الإصدار c{target_ch}:** {dt_label} (بعد {rem_hours:.1f} ساعة)")
+                    elif next_run and next_run <= now_ts:
+                        st.caption(f"🟢 **الإصدار c{target_ch}:** حان موعده وجاهز للإرسال في الدورة الحالية")
+                    else:
+                        st.caption("⏸️ غير مجدول حالياً.")
+                with col_actions:
+                    if st.button("⚡ نشر فوراً", key=f"fast_pub_nu_{nov['id']}", help="إرسال الإصدار القادم فوراً لـ Novel Updates"):
+                        with st.spinner(f"⏳ جاري إرسال الإصدار c{target_ch} إلى Novel Updates..."):
+                            import syndication_daemon
+                            res_pub = syndication_daemon.publish_now_immediate(nov["id"])
+                            if res_pub.get("success"):
+                                st.success(f"🎉 {res_pub.get('message')}")
+                            else:
+                                st.error(f"❌ تعذر النشر: {res_pub.get('message')}")
+                            time.sleep(1.5)
+                            st.rerun()
+                    if st.button("🗑️ حذف", key=f"del_nu_nov_{nov['id']}", type="secondary"):
+                        with st.spinner("⏳ جاري حذف الرواية..."):
+                            syndication_db.delete_syndicated_novel(nov["id"], delete_from_sheet=True)
+                        st.success(f"✅ تم حذف '{nov['novel_name']}' بنجاح!")
+                        time.sleep(1)
+                        st.rerun()
+
+                # لوحة التحكم والإدارة الشاملة
+                with st.expander(f"🎮 لوحة التحكم والإدارة الشاملة ({nov['novel_name']})", expanded=False):
+                    # اختيار الحساب
+                    st.markdown("##### 👤 الحساب المرتبط بـ Novel Updates:")
+                    avail_nu_accs = syndication_db.get_all_accounts(platform="novelupdates")
+                    if avail_nu_accs:
+                        nu_acc_opts = {f"{a['account_label']} ({a['username']})": a['id'] for a in avail_nu_accs}
+                        curr_nu_acc_id = nov.get("account_id", 0)
+                        curr_nu_idx = 0
+                        for idx_a, a in enumerate(avail_nu_accs):
+                            if a["id"] == curr_nu_acc_id:
+                                curr_nu_idx = idx_a
+                                break
+                        sel_nu_label = st.selectbox("اختر الحساب:", list(nu_acc_opts.keys()), index=curr_nu_idx, key=f"nu_acc_chg_{nov['id']}")
+                        sel_nu_id = nu_acc_opts[sel_nu_label]
+                        if sel_nu_id != curr_nu_acc_id:
+                            if st.button("💾 حفظ ربط الحساب", key=f"nu_save_acc_{nov['id']}"):
+                                syndication_db.set_novel_account(nov["id"], sel_nu_id)
+                                st.success(f"تم ربط الرواية بحساب: {sel_nu_label}")
+                                st.rerun()
+                    st.markdown("---")
+
+                    # تخصيص الدومين ومعالجة السلاش الذكية
+                    st.markdown("##### 🎯 تخصيص الدومين (Custom Domain):")
+                    curr_dom = nov.get("custom_domain", "")
+                    col_d1, col_d2 = st.columns([3, 1])
+                    with col_d1:
+                        new_dom_val = st.text_input(
+                            "الدومين المخصص لروابط الفصول:",
+                            value=curr_dom,
+                            key=f"nu_edit_dom_{nov['id']}",
+                            placeholder="مثال: https://en.novelskyworld.com أو mydomain.com/"
+                        )
+                    with col_d2:
+                        st.write("")
+                        st.write("")
+                        if st.button("💾 حفظ الدومين", key=f"nu_save_dom_btn_{nov['id']}"):
+                            clean_dom = novelupdates_poster.normalize_custom_domain(new_dom_val)
+                            syndication_db.set_novel_custom_domain(nov["id"], clean_dom)
+                            st.success(f"✅ تم تحديث وتطبيع الدومين المخصص: `{clean_dom or 'الافتراضي'}`")
+                            st.rerun()
+                    
+                    if new_dom_val.strip():
+                        norm_prev = novelupdates_poster.normalize_custom_domain(new_dom_val)
+                        st.caption(f"🌐 الرابط الناتج للفصل: `{novelupdates_poster.format_release_link('https://en.novelskyworld.com/2026/10/chapter-16.html', norm_prev)}`")
+                    st.markdown("---")
+
+                    # 📋 رابط تغذية RSS المباشر لزاحف Novel Updates الرسمي
+                    st.markdown("##### 📡 رابط تغذية RSS الرسمي لـ Novel Updates:")
+                    st.caption("يوفر هذا الرابط طريقة القبول الآلي 100% لمجموعتك في Novel Updates؛ حيث يقوم زاحف الموقع بسحب كل فصل جديد تلقائياً كل 20 دقيقة:")
+                    feed_slug = (nov.get("novelupdates_series_name") or nov["novel_name"]).replace(" ", "-").lower()
+                    rss_preview_url = f"https://raw.githubusercontent.com/rrrtfdeee-art/nsw-en-public/main/data/novels/{feed_slug}.json"
+                    st.code(rss_preview_url, language="text")
+                    st.caption("💡 يمكنك أيضاً تسجيل رابط خلاصة فصول موقعك في إعدادات مجموعتك على Novel Updates.")
+                    st.markdown("---")
+
+                    # المواعيد والجدولة
+                    st.markdown("##### ⚙️ إعدادات وتوقيت نشر الإصدارات بالساعة والدقيقة:")
+                    c_nucfg1, c_nucfg2 = st.columns(2)
+                    with c_nucfg1:
+                        nu_new_stop = st.number_input("🛑 التوقف عند الفصل:", min_value=1, value=int(nov.get("stop_chapter", 100)), step=1, key=f"nu_edit_stop_{nov['id']}")
+                    with c_nucfg2:
+                        nu_new_active = st.selectbox("🚦 حالة النشر التلقائي:", [1, 0], index=0 if nov.get("is_active", 1) == 1 else 1, format_func=lambda x: "🟢 نشط" if x == 1 else "🔴 متوقف", key=f"nu_edit_act_{nov['id']}")
+
+                    nu_edit_sched = render_chapter_time_windows_selector(
+                        key_prefix=f"nu_cfg_tw_{nov['id']}",
+                        default_times=nov.get("daily_times", ""),
+                        next_chap_num=int(nov.get("last_synced_chapter", 0)) + 1,
+                        default_interval=float(nov.get("interval_hours", 12.0))
+                    )
+
+                    if st.button("💾 حفظ الإعدادات والتوقيتات فوراً", key=f"nu_save_cfg_{nov['id']}", type="primary", use_container_width=True):
+                        e_mode = nu_edit_sched["mode"]
+                        e_hours = nu_edit_sched["selected_hours"]
+                        e_interval = nu_edit_sched["interval_hours"]
+                        e_rep = nu_edit_sched["repeat_mode"]
+
+                        f_stop = int(nu_new_stop)
+                        last_s = int(nov.get("last_synced_chapter", 0))
+                        if e_mode == "daily_times" and e_hours:
+                            if e_rep == "only_these":
+                                f_stop = max(1, last_s + len(e_hours))
+                            seq_ts = syndication_db.compute_sequential_slot_timestamps(e_hours, max(1, f_stop - last_s))
+                            nov["next_run_timestamp"] = seq_ts[0] if seq_ts else (time.time() + 3600.0)
+                            nov["daily_times"] = json.dumps(e_hours)
+                        elif e_mode == "start_now":
+                            nov["next_run_timestamp"] = time.time()
+                            nov["daily_times"] = ""
+                        else:
+                            nov["next_run_timestamp"] = time.time() + float(e_interval) * 3600.0
+                            nov["daily_times"] = ""
+
+                        nov["stop_chapter"] = f_stop
+                        nov["interval_hours"] = float(e_interval)
+                        nov["is_active"] = int(nu_new_active)
+                        syndication_db.save_or_update_syndicated_novel(nov)
+                        st.success("✅ تم حفظ التوقيتات والإعدادات بنجاح!")
+                        st.rerun()
+
+                    st.markdown("---")
+                    st.markdown("##### 🚨 حذف الرواية:")
+                    col_ndel1, col_ndel2 = st.columns([2, 1])
+                    with col_ndel1:
+                        nu_conf_del = st.checkbox(f"أؤكد رغبتي بحذف '{nov['novel_name']}' نهائياً", key=f"nu_conf_del_{nov['id']}")
+                    with col_ndel2:
+                        if st.button("🗑️ حذف الرواية نهائياً", key=f"nu_del_all_{nov['id']}", type="secondary", use_container_width=True):
+                            if nu_conf_del:
+                                syndication_db.delete_syndicated_novel(nov["id"], delete_from_sheet=True)
+                                st.success("تم حذف الرواية بنجاح!")
+                                st.rerun()
+                            else:
+                                st.error("يرجى تفعيل مربع التأكيد أولاً.")
+                st.markdown("---")
+
+    # 4. معاينة واختبار إصدار Novel Updates
+    st.markdown("### 👁️ معاينة واختبار إرسال إصدار (Release Preview)")
+    with st.expander("🔍 معاينة بيانات الإصدار قبل الإرسال", expanded=False):
+        all_nu_names = [n["novel_name"] for n in syndication_db.get_all_syndicated_novels() if n.get("novelupdates_enabled") == 1]
+        if not all_nu_names:
+            st.info("أضف رواية أولاً من النموذج أعلاه للمعاينة.")
+        else:
+            col_pv1, col_pv2 = st.columns([2, 1])
+            with col_pv1:
+                nu_pv_novel = st.selectbox("📚 اختر الرواية:", all_nu_names, key="nu_pv_novel_sel")
+            with col_pv2:
+                nu_pv_chap = st.number_input("رقم الفصل للمعاينة:", min_value=1, value=1, step=1, key="nu_pv_chap_sel")
+
+            if st.button("🔍 جلب ومعاينة بيانات الإصدار", key="nu_pv_fetch_btn", use_container_width=True):
+                all_novs = syndication_db.get_all_syndicated_novels()
+                target_nov = next((n for n in all_novs if n["novel_name"] == nu_pv_novel), None)
+                c_dom = target_nov.get("custom_domain", "") if target_nov else ""
+                
+                with st.spinner("⏳ جاري سحب بيانات الفصل من latest_chapters.json وتطبيق الدومين..."):
+                    ch_info = novelupdates_poster.fetch_chapter_release_info(
+                        novel_name_or_link=target_nov.get("blogger_url") or nu_pv_novel if target_nov else nu_pv_novel,
+                        chapter_num=int(nu_pv_chap),
+                        custom_domain=c_dom
+                    )
+                    st.session_state["nu_preview_data"] = ch_info
+                    st.session_state["nu_preview_meta"] = {
+                        "novel": nu_pv_novel,
+                        "chapter": int(nu_pv_chap),
+                        "nov_cfg": target_nov
+                    }
+
+            if "nu_preview_data" in st.session_state and st.session_state.get("nu_preview_meta", {}).get("novel") == nu_pv_novel:
+                ch_res = st.session_state["nu_preview_data"]
+                meta = st.session_state["nu_preview_meta"]
+                nov_cfg = meta["nov_cfg"]
+
+                if ch_res.get("success"):
+                    st.success("✅ تم استخراج بيانات الفصل بنجاح من التغذية العامة!")
+                    col_m1, col_m2 = st.columns(2)
+                    with col_m1:
+                        st.markdown(f"**📌 اسم السلسلة (Series):** `{nov_cfg.get('novelupdates_series_name') or nov_cfg['novel_name']}`")
+                        st.markdown(f"**🏷️ كود الإصدار (Release):** `{ch_res['release_code']}`")
+                    with col_m2:
+                        st.markdown(f"**🔗 رابط الإصدار الناتج (Link to Release):**")
+                        st.code(ch_res["release_url"], language="text")
+                    
+                    if ch_res.get("raw_url") != ch_res.get("release_url"):
+                        st.caption(f"🌐 الرابط الأصلي قبل تخصيص الدومين: `{ch_res.get('raw_url')}`")
+
+                    st.markdown("---")
+                    st.markdown("##### 🚀 الإرسال الفعلي المباشر لـ Novel Updates:")
+                    if st.button("📤 إرسال هذا الإصدار الآن إلى Novel Updates", key="nu_live_send_btn", type="primary"):
+                        with st.spinner("⏳ جاري إرسال الإصدار إلى Novel Updates..."):
+                            import syndication_daemon
+                            res_pub = syndication_daemon.publish_now_immediate(nov_cfg["id"])
+                            if res_pub.get("success"):
+                                st.balloons()
+                                st.success(f"🎉 {res_pub.get('message')}")
+                                st.session_state.pop("nu_preview_data", None)
+                                st.rerun()
+                            else:
+                                st.error(f"❌ تعذر الإرسال: {res_pub.get('message')}")
+                else:
+                    st.error(f"❌ {ch_res.get('message', 'تعذر جلب بيانات الفصل')}")
+
+    # 5. سجل النشر الأخير (Novel Updates)
+    st.markdown("### 📋 سجل النشر الأخير (Novel Updates)")
+    nu_logs = [l for l in syndication_db.get_recent_syndication_logs(limit=25) if l.get("platform") == "novelupdates"]
+    if not nu_logs:
+        st.info("لا توجد سجلات نشر لـ Novel Updates بعد.")
+    else:
+        for log in nu_logs:
+            icon = "✅" if log["status"] == "SUCCESS" else "❌"
+            st.markdown(f"{icon} **{log.get('novel_name','؟')}** — الفصل `{log['chapter_num']}` — `{log['published_at']}`")
+            if log.get("post_url"):
+                st.caption(f"🔗 {log['post_url']}")
+            if log.get("error_msg"):
+                st.caption(f"⚠️ {log['error_msg']}")
+
+
+

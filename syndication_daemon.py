@@ -363,22 +363,24 @@ def run_syndication_cycle():
             if target_ch > stop_ch:
                 continue  # تم بلوغ آخر فصل محدد
 
-            # 2. استخراج وتجهيز الفصل
-            extracted = syndication_extractor.prepare_chapter_for_publishing(
-                novel_name=nov["novel_name"],
-                chapter_num=target_ch,
-                custom_cta=nov.get("custom_cta", ""),
-                blogger_url=nov.get("blogger_url", ""),
-                source_site=nov.get("source_site", "ar"),
-                archive_repo=nov.get("archive_repo", "")
-            )
+            # 2. استخراج وتجهيز الفصل (فقط للمنصات التي تتطلب محتوى كـ نادي الروايات وواتباد)
+            extracted = {}
+            if nov.get("rewayat_enabled") or nov.get("wattpad_enabled"):
+                extracted = syndication_extractor.prepare_chapter_for_publishing(
+                    novel_name=nov["novel_name"],
+                    chapter_num=target_ch,
+                    custom_cta=nov.get("custom_cta", ""),
+                    blogger_url=nov.get("blogger_url", ""),
+                    source_site=nov.get("source_site", "ar"),
+                    archive_repo=nov.get("archive_repo", "")
+                )
 
-            if not extracted.get("success"):
-                # تأجيل الفحص 30 دقيقة بدلاً من إرهاق السيرفر والشيت كل 60 ثانية إذا لم يتوفر الفصل بعد
-                logger.info(f"Chapter {target_ch} for {nov['novel_name']} not available yet in sheet. Retrying in 30 min.")
-                nov["next_run_timestamp"] = time.time() + 1800
-                syndication_db.save_or_update_syndicated_novel(nov)
-                continue
+                if not extracted.get("success"):
+                    # تأجيل الفحص 30 دقيقة بدلاً من إرهاق السيرفر والشيت كل 60 ثانية إذا لم يتوفر الفصل بعد
+                    logger.info(f"Chapter {target_ch} for {nov['novel_name']} not available yet in sheet. Retrying in 30 min.")
+                    nov["next_run_timestamp"] = time.time() + 1800
+                    syndication_db.save_or_update_syndicated_novel(nov)
+                    continue
 
             success_rc = False
             success_wp = False
@@ -458,8 +460,69 @@ def run_syndication_cycle():
                         logger.error(f"Error publishing WP for {nov['novel_name']}: {e}")
                         wp_res = {"success": False, "error": str(e)}
 
-            # 5. إذا تم النشر بنجاح على منصة واحدة على الأقل
-            if success_rc or success_wp:
+            # 5. النشر في Novel Updates (إذا كان مفعلاً)
+            success_nu = False
+            nu_res = {}
+            if nov.get("novelupdates_enabled"):
+                try:
+                    import novelupdates_poster
+                    nov_nu_acc = None
+                    if nov.get("account_id"):
+                        nov_nu_acc = syndication_db.get_account_by_id(nov["account_id"])
+                    if not nov_nu_acc or nov_nu_acc.get("platform") != "novelupdates":
+                        nov_nu_acc = syndication_db.get_default_account("novelupdates")
+                    
+                    nu_user = nov_nu_acc.get("username", "") if nov_nu_acc else ""
+                    nu_pass = nov_nu_acc.get("password", "") if nov_nu_acc else ""
+                    nu_token = nov_nu_acc.get("token", "") if nov_nu_acc else ""
+                    nu_group = ""
+                    if nov_nu_acc and nov_nu_acc.get("extra_data"):
+                        try:
+                            _ex = json.loads(nov_nu_acc["extra_data"])
+                            nu_group = _ex.get("group_name", "")
+                        except Exception:
+                            pass
+                    
+                    c_info = novelupdates_poster.fetch_chapter_release_info(
+                        novel_name_or_link=nov.get("blogger_url") or nov["novel_name"],
+                        chapter_num=target_ch,
+                        custom_domain=nov.get("custom_domain", "")
+                    )
+                    
+                    if c_info.get("success"):
+                        nu_series_id = nov.get("novelupdates_series_name") or nov.get("novelupdates_series_url") or nov["novel_name"]
+                        nu_client = novelupdates_poster.NovelUpdatesClient(
+                            username=nu_user, password=nu_pass, token=nu_token, group_name=nu_group
+                        )
+                        nu_res = nu_client.publish_release(
+                            series_name=nu_series_id,
+                            chapter_num=target_ch,
+                            release_url=c_info["release_url"],
+                            group_name=nu_group,
+                            release_date=c_info.get("date", "")
+                        )
+                        if nu_res.get("success"):
+                            success_nu = True
+                            syndication_db.log_syndication_event(
+                                novel_id=nov["id"], chapter_num=target_ch, platform="novelupdates",
+                                status="SUCCESS", post_url=c_info["release_url"]
+                            )
+                        else:
+                            syndication_db.log_syndication_event(
+                                novel_id=nov["id"], chapter_num=target_ch, platform="novelupdates",
+                                status="FAILED", error_msg=nu_res.get("error", "")
+                            )
+                    else:
+                        syndication_db.log_syndication_event(
+                            novel_id=nov["id"], chapter_num=target_ch, platform="novelupdates",
+                            status="FAILED", error_msg=c_info.get("message", "فصل غير متوفر في latest_chapters.json")
+                        )
+                except Exception as e_nu:
+                    logger.error(f"Error publishing NovelUpdates for {nov['novel_name']}: {e_nu}")
+                    nu_res = {"success": False, "error": str(e_nu)}
+
+            # 6. إذا تم النشر بنجاح على منصة واحدة على الأقل
+            if success_rc or success_wp or success_nu:
                 nov["last_synced_chapter"] = target_ch
                 daily_list = []
                 if nov.get("daily_times"):
@@ -550,20 +613,22 @@ def publish_now_immediate(novel_id: int) -> Dict[str, Any]:
     target_ch = int(nov.get("last_synced_chapter", 0)) + 1
     n_name = nov["novel_name"]
 
-    extracted = syndication_extractor.prepare_chapter_for_publishing(
-        novel_name=n_name,
-        chapter_num=target_ch,
-        custom_cta=nov.get("custom_cta", ""),
-        blogger_url=nov.get("blogger_url", ""),
-        source_site=nov.get("source_site", "ar"),
-        archive_repo=nov.get("archive_repo", "")
-    )
-    if not extracted.get("success"):
-        return {
-            "success": False,
-            "chapter_num": target_ch,
-            "message": f"الفصل {target_ch} غير متوفر في الأرشيف السحابي (المصدر: {nov.get('source_site', 'ar')}). تأكد من توفره هناك أولاً."
-        }
+    extracted = {}
+    if nov.get("rewayat_enabled") or nov.get("wattpad_enabled"):
+        extracted = syndication_extractor.prepare_chapter_for_publishing(
+            novel_name=n_name,
+            chapter_num=target_ch,
+            custom_cta=nov.get("custom_cta", ""),
+            blogger_url=nov.get("blogger_url", ""),
+            source_site=nov.get("source_site", "ar"),
+            archive_repo=nov.get("archive_repo", "")
+        )
+        if not extracted.get("success"):
+            return {
+                "success": False,
+                "chapter_num": target_ch,
+                "message": f"الفصل {target_ch} غير متوفر في الأرشيف السحابي (المصدر: {nov.get('source_site', 'ar')}). تأكد من توفره هناك أولاً."
+            }
 
     success = False
     messages = []
@@ -634,6 +699,72 @@ def publish_now_immediate(novel_id: int) -> Dict[str, Any]:
         except Exception as e:
             messages.append(f"استثناء بواتباد: {e}")
 
+    # 3. Novel Updates
+    if nov.get("novelupdates_enabled"):
+        try:
+            import novelupdates_poster
+            nov_nu_acc = None
+            if nov.get("account_id"):
+                nov_nu_acc = syndication_db.get_account_by_id(nov["account_id"])
+            if not nov_nu_acc or nov_nu_acc.get("platform") != "novelupdates":
+                nov_nu_acc = syndication_db.get_default_account("novelupdates")
+
+            nu_user = nov_nu_acc.get("username", "") if nov_nu_acc else ""
+            nu_pass = nov_nu_acc.get("password", "") if nov_nu_acc else ""
+            nu_token = nov_nu_acc.get("token", "") if nov_nu_acc else ""
+            nu_group = ""
+            if nov_nu_acc and nov_nu_acc.get("extra_data"):
+                try:
+                    _ex = json.loads(nov_nu_acc["extra_data"])
+                    nu_group = _ex.get("group_name", "")
+                except Exception:
+                    pass
+
+            c_info = novelupdates_poster.fetch_chapter_release_info(
+                novel_name_or_link=nov.get("blogger_url") or nov["novel_name"],
+                chapter_num=target_ch,
+                custom_domain=nov.get("custom_domain", "")
+            )
+
+            if c_info.get("success"):
+                nu_series_id = nov.get("novelupdates_series_name") or nov.get("novelupdates_series_url") or nov["novel_name"]
+                nu_client = novelupdates_poster.NovelUpdatesClient(
+                    username=nu_user, password=nu_pass, token=nu_token, group_name=nu_group
+                )
+                nu_res = nu_client.publish_release(
+                    series_name=nu_series_id,
+                    chapter_num=target_ch,
+                    release_url=c_info["release_url"],
+                    group_name=nu_group,
+                    release_date=c_info.get("date", "")
+                )
+                if nu_res.get("success"):
+                    success = True
+                    nu_url = c_info["release_url"]
+                    if not post_url:
+                        post_url = nu_url
+                    messages.append(f"Novel Updates: أُرسل بنجاح ({nu_url})")
+                    syndication_db.log_syndication_event(
+                        novel_id=nov["id"], chapter_num=target_ch, platform="novelupdates",
+                        status="SUCCESS", post_url=nu_url
+                    )
+                else:
+                    err = nu_res.get("error", "فشل الإرسال لـ Novel Updates")
+                    messages.append(f"Novel Updates: {err}")
+                    syndication_db.log_syndication_event(
+                        novel_id=nov["id"], chapter_num=target_ch, platform="novelupdates",
+                        status="FAILED", error_msg=err
+                    )
+            else:
+                err = c_info.get("message", "فصل غير متوفر في latest_chapters.json")
+                messages.append(f"Novel Updates: {err}")
+                syndication_db.log_syndication_event(
+                    novel_id=nov["id"], chapter_num=target_ch, platform="novelupdates",
+                    status="FAILED", error_msg=err
+                )
+        except Exception as e_nu:
+            messages.append(f"استثناء بـ Novel Updates: {e_nu}")
+
     if success:
         nov["last_synced_chapter"] = target_ch
         daily_times = []
@@ -648,7 +779,7 @@ def publish_now_immediate(novel_id: int) -> Dict[str, Any]:
         else:
             nov["next_run_timestamp"] = time.time() + float(nov.get("interval_hours", 12.0)) * 3600.0
 
-        plat_target = "wattpad" if nov.get("wattpad_enabled") else ("rewayat_club" if nov.get("rewayat_enabled") else "all")
+        plat_target = "novelupdates" if nov.get("novelupdates_enabled") else ("wattpad" if nov.get("wattpad_enabled") else ("rewayat_club" if nov.get("rewayat_enabled") else "all"))
         syndication_db.save_or_update_syndicated_novel(nov)
         syndication_db.update_chapter_schedule_status(
             novel_name=n_name,
