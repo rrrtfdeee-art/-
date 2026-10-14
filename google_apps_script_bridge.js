@@ -167,6 +167,12 @@ function doPost(e) {
     if (action === "save_novel") {
       return createJsonResponse(handleSaveSyndicatedNovel(requestData), 200);
     }
+    if (action === "delete_novel") {
+      return createJsonResponse(handleDeleteSyndicatedNovel(requestData), 200);
+    }
+    if (action === "delete_schedules") {
+      return createJsonResponse(handleDeleteSchedulesBatch(requestData), 200);
+    }
     if (action === "save_schedules") {
       return createJsonResponse(handleSaveSchedulesBatch(requestData), 200);
     }
@@ -1078,7 +1084,7 @@ function handleSaveSyndicatedNovel(req) {
       "novel_name", "blogger_url", "blogger_label", "rewayat_enabled", "rewayat_novel_id",
       "rewayat_novel_url", "wattpad_enabled", "wattpad_story_id", "wattpad_story_url",
       "start_chapter", "last_synced_chapter", "stop_chapter", "interval_hours",
-      "next_run_timestamp", "custom_cta", "is_active", "daily_times"
+      "next_run_timestamp", "custom_cta", "is_active", "daily_times", "account_id"
     ];
     var sheet = getOrCreateSheetTab(ss, "SyndicatedNovels", headers);
     var nov = req.novel || {};
@@ -1091,7 +1097,7 @@ function handleSaveSyndicatedNovel(req) {
     var lastRow = sheet.getLastRow();
     var targetRow = -1;
     if (lastRow > 1) {
-      var data = sheet.getRange(2, 1, lastRow - 1, Math.min(sheet.getLastColumn(), 17)).getValues();
+      var data = sheet.getRange(2, 1, lastRow - 1, Math.min(sheet.getLastColumn(), 18)).getValues();
       for (var i = 0; i < data.length; i++) {
         var rowName = String(data[i][0] || "").trim();
         var rowRid = data[i].length > 4 ? String(data[i][4] || "").trim() : "";
@@ -1121,7 +1127,8 @@ function handleSaveSyndicatedNovel(req) {
       Number(nov.next_run_timestamp || 0.0),
       String(nov.custom_cta || ""),
       nov.is_active !== undefined ? Number(nov.is_active) : 1,
-      String(nov.daily_times || "")
+      String(nov.daily_times || ""),
+      Number(nov.account_id || 0)
     ];
 
     if (targetRow > 0) {
@@ -1131,6 +1138,110 @@ function handleSaveSyndicatedNovel(req) {
     }
     SpreadsheetApp.flush();
     return { success: true, novel_name: nName, row: targetRow > 0 ? targetRow : sheet.getLastRow() };
+  } catch (err) {
+    return { success: false, error: err.toString() };
+  }
+}
+
+/**
+ * دالة حذف الرواية نهائياً من Google Sheet (من تبويب الروايات ومن تبويب الجدولة)
+ */
+function handleDeleteSyndicatedNovel(req) {
+  try {
+    var ssId = req.spreadsheet_id || DEFAULT_SYNDICATION_SPREADSHEET_ID;
+    var ss = SpreadsheetApp.openById(ssId);
+    var nName = String(req.novel_name || "").trim().toLowerCase();
+    var rId = String(req.rewayat_novel_id || "").trim();
+    var wId = cleanIdString(req.wattpad_story_id);
+    var platTarget = String(req.platform || "").trim().toLowerCase();
+
+    var deletedFromNovels = 0;
+    var deletedFromSchedules = 0;
+
+    // 1. حذف صف الرواية نهائياً من تبويب SyndicatedNovels (حذف عكسي من الأسفل للأعلى لضمان ثبات أرقام الأسطر)
+    var novSheet = ss.getSheetByName("SyndicatedNovels");
+    if (novSheet && novSheet.getLastRow() > 1) {
+      var novData = novSheet.getRange(2, 1, novSheet.getLastRow() - 1, Math.min(novSheet.getLastColumn(), 18)).getValues();
+      for (var i = novData.length - 1; i >= 0; i--) {
+        var rowName = String(novData[i][0] || "").trim().toLowerCase();
+        var rowRid = novData[i].length > 4 ? String(novData[i][4] || "").trim() : "";
+        var rowWid = novData[i].length > 7 ? cleanIdString(novData[i][7]) : "";
+
+        var match = false;
+        if (rowName === nName) {
+          if (rId && rowRid === rId) match = true;
+          else if (wId && rowWid === wId) match = true;
+          else if (!rId && !wId) match = true;
+        }
+
+        if (match) {
+          novSheet.deleteRow(i + 2);
+          deletedFromNovels++;
+        }
+      }
+    }
+
+    // 2. حذف الفصول المجدولة للرواية من تبويب SyndicationSchedule
+    var schedSheet = ss.getSheetByName("SyndicationSchedule") || ss.getSheetByName("الورقة1");
+    if (schedSheet && schedSheet.getLastRow() > 1) {
+      var schedData = schedSheet.getRange(2, 1, schedSheet.getLastRow() - 1, Math.min(schedSheet.getLastColumn(), 5)).getValues();
+      for (var j = schedData.length - 1; j >= 0; j--) {
+        var sName = String(schedData[j][0] || "").trim().toLowerCase();
+        var sPlat = schedData[j].length > 4 ? String(schedData[j][4] || "").trim().toLowerCase() : "all";
+
+        if (sName === nName) {
+          if (!platTarget || platTarget === "all" || sPlat === "all" || sPlat === platTarget) {
+            schedSheet.deleteRow(j + 2);
+            deletedFromSchedules++;
+          }
+        }
+      }
+    }
+
+    SpreadsheetApp.flush();
+    return {
+      success: true,
+      novel_name: req.novel_name,
+      deleted_from_novels: deletedFromNovels,
+      deleted_from_schedules: deletedFromSchedules
+    };
+  } catch (err) {
+    return { success: false, error: err.toString() };
+  }
+}
+
+/**
+ * دالة حذف الفصول المجدولة للرواية من شيت الجدولة السحابي
+ */
+function handleDeleteSchedulesBatch(req) {
+  try {
+    var ssId = req.spreadsheet_id || DEFAULT_SYNDICATION_SPREADSHEET_ID;
+    var ss = SpreadsheetApp.openById(ssId);
+    var nName = String(req.novel_name || "").trim().toLowerCase();
+    var platTarget = String(req.platform || "").trim().toLowerCase();
+    var onlyPending = Boolean(req.only_pending);
+
+    var schedSheet = ss.getSheetByName("SyndicationSchedule") || ss.getSheetByName("الورقة1");
+    var deletedCount = 0;
+    if (schedSheet && schedSheet.getLastRow() > 1) {
+      var schedData = schedSheet.getRange(2, 1, schedSheet.getLastRow() - 1, Math.min(schedSheet.getLastColumn(), 5)).getValues();
+      for (var j = schedData.length - 1; j >= 0; j--) {
+        var sName = String(schedData[j][0] || "").trim().toLowerCase();
+        var sStatus = schedData[j].length > 3 ? String(schedData[j][3] || "").trim().toUpperCase() : "PENDING";
+        var sPlat = schedData[j].length > 4 ? String(schedData[j][4] || "").trim().toLowerCase() : "all";
+
+        if (sName === nName) {
+          if (onlyPending && sStatus === "PUBLISHED") continue;
+          if (!platTarget || platTarget === "all" || sPlat === "all" || sPlat === platTarget) {
+            schedSheet.deleteRow(j + 2);
+            deletedCount++;
+          }
+        }
+      }
+    }
+
+    SpreadsheetApp.flush();
+    return { success: true, deleted: deletedCount };
   } catch (err) {
     return { success: false, error: err.toString() };
   }

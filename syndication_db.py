@@ -72,6 +72,10 @@ def init_syndication_tables():
         cur.execute("ALTER TABLE syndicated_novels ADD COLUMN daily_times TEXT DEFAULT ''")
     except Exception:
         pass
+    try:
+        cur.execute("ALTER TABLE syndicated_novels ADD COLUMN account_id INTEGER DEFAULT 0")
+    except Exception:
+        pass
     
     # 3. سجل الفصول المنشورة لتفادي أي تكرار
     cur.execute("""
@@ -119,6 +123,21 @@ def init_syndication_tables():
         selected_hours TEXT DEFAULT '[]',
         start_date TEXT DEFAULT '',
         is_active INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # 6. جدول الحسابات المتعددة لكل منصة
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS syndication_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_label TEXT NOT NULL,
+        platform TEXT NOT NULL DEFAULT 'rewayat_club',
+        username TEXT DEFAULT '',
+        token TEXT DEFAULT '',
+        password TEXT DEFAULT '',
+        extra_data TEXT DEFAULT '{}',
+        is_default INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -226,8 +245,23 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
     cur = conn.cursor()
     
     novel_id = data.get("id")
+    data.setdefault("blogger_url", "")
+    data.setdefault("blogger_label", "")
+    data.setdefault("rewayat_enabled", 1)
+    data.setdefault("rewayat_novel_id", "")
+    data.setdefault("rewayat_novel_url", "")
+    data.setdefault("wattpad_enabled", 0)
+    data.setdefault("wattpad_story_id", "")
+    data.setdefault("wattpad_story_url", "")
+    data.setdefault("start_chapter", 1)
+    data.setdefault("last_synced_chapter", 0)
+    data.setdefault("stop_chapter", 9999)
+    data.setdefault("interval_hours", 12.0)
     data.setdefault("next_run_timestamp", 0.0)
+    data.setdefault("custom_cta", "")
     data.setdefault("daily_times", "")
+    data.setdefault("account_id", 0)
+    data.setdefault("is_active", 1)
     if novel_id:
         # تحديث
         cur.execute("""
@@ -248,7 +282,8 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
             next_run_timestamp = :next_run_timestamp,
             custom_cta = :custom_cta,
             daily_times = :daily_times,
-            is_active = :is_active
+            is_active = :is_active,
+            account_id = :account_id
         WHERE id = :id
         """, data)
         res_id = novel_id
@@ -260,13 +295,15 @@ def save_or_update_syndicated_novel(data: Dict[str, Any]) -> int:
             rewayat_enabled, rewayat_novel_id, rewayat_novel_url,
             wattpad_enabled, wattpad_story_id, wattpad_story_url,
             start_chapter, last_synced_chapter, stop_chapter,
-            interval_hours, next_run_timestamp, custom_cta, daily_times, is_active
+            interval_hours, next_run_timestamp, custom_cta, daily_times, is_active,
+            account_id
         ) VALUES (
             :novel_name, :blogger_url, :blogger_label,
             :rewayat_enabled, :rewayat_novel_id, :rewayat_novel_url,
             :wattpad_enabled, :wattpad_story_id, :wattpad_story_url,
             :start_chapter, :last_synced_chapter, :stop_chapter,
-            :interval_hours, :next_run_timestamp, :custom_cta, :daily_times, :is_active
+            :interval_hours, :next_run_timestamp, :custom_cta, :daily_times, :is_active,
+            :account_id
         )
         """, data)
         res_id = cur.lastrowid
@@ -315,6 +352,140 @@ def delete_syndicated_novel(novel_id: int, delete_from_sheet: bool = True):
             delete_novel_from_sheet(novel_name, rewayat_novel_id=r_id, wattpad_story_id=w_id)
         except Exception as ex_sh_nov:
             logger.warning(f"Failed to delete novel from SyndicatedNovels tab: {ex_sh_nov}")
+
+
+# ==================== إدارة الحسابات المتعددة (Multi-Account Management) ====================
+
+def get_all_accounts(platform: Optional[str] = None) -> List[Dict[str, Any]]:
+    """جلب كافة الحسابات، مع إمكانية الفلترة بحسب المنصة."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    if platform:
+        cur.execute("SELECT * FROM syndication_accounts WHERE platform = ? ORDER BY is_default DESC, id ASC", (platform,))
+    else:
+        cur.execute("SELECT * FROM syndication_accounts ORDER BY platform ASC, is_default DESC, id ASC")
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+def get_account_by_id(account_id: int) -> Optional[Dict[str, Any]]:
+    """جلب حساب بمعرفه."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM syndication_accounts WHERE id = ?", (account_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def save_or_update_account(data: Dict[str, Any]) -> int:
+    """حفظ أو تحديث حساب."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    acc_id = data.get("id")
+    if acc_id:
+        cur.execute("""
+        UPDATE syndication_accounts SET
+            account_label = :account_label,
+            platform = :platform,
+            username = :username,
+            token = :token,
+            password = :password,
+            extra_data = :extra_data,
+            is_default = :is_default
+        WHERE id = :id
+        """, data)
+        res_id = acc_id
+    else:
+        cur.execute("""
+        INSERT INTO syndication_accounts (
+            account_label, platform, username, token, password, extra_data, is_default
+        ) VALUES (
+            :account_label, :platform, :username, :token, :password, :extra_data, :is_default
+        )
+        """, data)
+        res_id = cur.lastrowid
+    # إذا كان الحساب الافتراضي، نلغي الافتراضي من الحسابات الأخرى لنفس المنصة
+    if data.get("is_default"):
+        cur.execute("UPDATE syndication_accounts SET is_default = 0 WHERE platform = ? AND id != ?",
+                    (data["platform"], res_id))
+    conn.commit()
+    conn.close()
+    return res_id
+
+def delete_account(account_id: int):
+    """حذف حساب. الروايات المرتبطة به تفقد ارتباطها (account_id=0)."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE syndicated_novels SET account_id = 0 WHERE account_id = ?", (account_id,))
+    cur.execute("DELETE FROM syndication_accounts WHERE id = ?", (account_id,))
+    conn.commit()
+    conn.close()
+
+def get_default_account(platform: str) -> Optional[Dict[str, Any]]:
+    """جلب الحساب الافتراضي لمنصة معينة."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM syndication_accounts WHERE platform = ? AND is_default = 1 LIMIT 1", (platform,))
+    row = cur.fetchone()
+    if not row:
+        cur.execute("SELECT * FROM syndication_accounts WHERE platform = ? ORDER BY id ASC LIMIT 1", (platform,))
+        row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def get_account_for_novel(novel_id: int) -> Optional[Dict[str, Any]]:
+    """جلب الحساب المرتبط برواية معينة."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT account_id FROM syndicated_novels WHERE id = ?", (novel_id,))
+    row = cur.fetchone()
+    conn.close()
+    if row and row["account_id"]:
+        return get_account_by_id(row["account_id"])
+    return None
+
+def set_novel_account(novel_id: int, account_id: int):
+    """ربط رواية بحساب محدد."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE syndicated_novels SET account_id = ? WHERE id = ?", (account_id, novel_id))
+    conn.commit()
+    conn.close()
+
+def migrate_settings_to_accounts():
+    """ترحيل بيانات الحسابات القديمة (من syndication_settings) إلى جدول الحسابات الجديد."""
+    existing = get_all_accounts()
+    if existing:
+        return  # حسابات موجودة مسبقاً
+    
+    # ترحيل حساب نادي الروايات
+    rc_user = get_synd_setting("rewayat_username", "")
+    rc_token = get_synd_setting("rewayat_token", "")
+    if rc_user or rc_token:
+        save_or_update_account({
+            "account_label": rc_user or "حساب نادي الروايات",
+            "platform": "rewayat_club",
+            "username": rc_user,
+            "token": rc_token,
+            "password": "",
+            "extra_data": "{}",
+            "is_default": 1
+        })
+    
+    # ترحيل حساب واتباد
+    wp_user = get_synd_setting("wattpad_username", "")
+    wp_pass = get_synd_setting("wattpad_password", "")
+    wp_token = get_synd_setting("wattpad_token", "")
+    if wp_user or wp_pass or wp_token:
+        save_or_update_account({
+            "account_label": wp_user or "حساب واتباد",
+            "platform": "wattpad",
+            "username": wp_user,
+            "token": wp_token,
+            "password": wp_pass,
+            "extra_data": "{}",
+            "is_default": 1
+        })
 
 
 # ==================== دوال السجلات (Logs) ====================
@@ -906,10 +1077,26 @@ def sync_all_novels_to_sheet(spreadsheet_id: Optional[str] = None) -> bool:
 
 def delete_novel_from_sheet(novel_name: str, rewayat_novel_id: str = "", wattpad_story_id: str = "", spreadsheet_id: Optional[str] = None) -> bool:
     """حذف سطر الرواية من تبويب SyndicatedNovels في Google Sheet."""
+    ssid = spreadsheet_id or get_schedule_spreadsheet_id()
+    # 1. إرسال طلب الحذف السحابي الفوري عبر Google Apps Script WebApp (يعمل 24/7 دون الحاجة لملف credentials)
+    try:
+        payload = {
+            "action": "delete_novel",
+            "spreadsheet_id": ssid,
+            "novel_name": novel_name,
+            "rewayat_novel_id": rewayat_novel_id,
+            "wattpad_story_id": wattpad_story_id
+        }
+        res = requests.post(GAS_WEBAPP_URL, json=payload, timeout=12)
+        if res.status_code == 200 and res.json().get("success"):
+            logger.info(f"✅ Deleted novel '{novel_name}' from Google Sheet via GAS WebApp.")
+            return True
+    except Exception as e_gas:
+        logger.warning(f"GAS delete_novel notice: {e_gas}")
+
     service = _get_sheets_service()
     if not service:
         return False
-    ssid = spreadsheet_id or get_schedule_spreadsheet_id()
     try:
         res = service.spreadsheets().values().get(
             spreadsheetId=ssid,
@@ -1381,9 +1568,24 @@ def delete_chapter_schedule(novel_name: str, chapter_num: int, spreadsheet_id: O
 def delete_novel_schedules_from_sheet(novel_name: str, only_pending: bool = False, platform: Optional[str] = None, spreadsheet_id: Optional[str] = None) -> bool:
     """حذف صفوف الرواية من شيت الجدولة السحابي في Google Sheet بحسب المنصة."""
     ssid = spreadsheet_id or get_schedule_spreadsheet_id()
+    # 1. إرسال طلب حذف الفصول المجدولة للرواية عبر Google Apps Script WebApp
+    try:
+        payload = {
+            "action": "delete_schedules",
+            "spreadsheet_id": ssid,
+            "novel_name": novel_name,
+            "only_pending": only_pending,
+            "platform": platform or "all"
+        }
+        res = requests.post(GAS_WEBAPP_URL, json=payload, timeout=12)
+        if res.status_code == 200 and res.json().get("success"):
+            logger.info(f"✅ Deleted schedules for '{novel_name}' from Google Sheet via GAS WebApp.")
+    except Exception as e_gas:
+        logger.warning(f"GAS delete_schedules notice: {e_gas}")
+
     service = _get_sheets_service()
     if not service:
-        return False
+        return True
     try:
         tab_name = ensure_schedule_tab_exists(service, ssid)
         res = service.spreadsheets().values().get(

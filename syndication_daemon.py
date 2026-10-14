@@ -35,6 +35,53 @@ def _get_platform_credentials():
     wp_pass = os.getenv("WATTPAD_PASSWORD", "").strip() or syndication_db.get_synd_setting("wattpad_password", "")
     return rc_token, wp_token, wp_user, wp_pass
 
+def _get_novel_credentials(nov: Dict[str, Any], platform: str):
+    """
+    استخراج بيانات اعتماد الحساب المرتبط بالرواية المحددة أو الحساب الافتراضي للمنصة،
+    مع إمكانية الرجوع التلقائي للإعدادات العامة والمتغيرات البيئية (Fallback).
+    """
+    token = ""
+    user = ""
+    pwd = ""
+
+    # 1. فحص الحساب المربوط بالرواية مباشرة عبر account_id
+    acc = None
+    if nov and nov.get("id"):
+        try:
+            acc = syndication_db.get_account_for_novel(nov["id"])
+            if acc and platform and acc.get("platform") != platform:
+                acc = None
+        except Exception:
+            acc = None
+
+    # 2. إذا لم يكن هناك حساب مرتبط، نأخذ الحساب الافتراضي للمنصة
+    if not acc:
+        try:
+            acc = syndication_db.get_default_account(platform)
+        except Exception:
+            acc = None
+
+    if acc:
+        token = str(acc.get("token") or "").strip()
+        user = str(acc.get("username") or "").strip()
+        pwd = str(acc.get("password") or "").strip()
+
+    # 3. Fallback للإعدادات العامة والمتغيرات البيئية
+    if platform == "rewayat_club":
+        if not token:
+            token = os.getenv("REWAYAT_CLUB_TOKEN", "").strip() or syndication_db.get_synd_setting("rewayat_token", "")
+        if not user:
+            user = syndication_db.get_synd_setting("rewayat_username", "")
+    elif platform == "wattpad":
+        if not token:
+            token = os.getenv("WATTPAD_TOKEN", "").strip() or syndication_db.get_synd_setting("wattpad_token", "")
+        if not user:
+            user = os.getenv("WATTPAD_USERNAME", "").strip() or syndication_db.get_synd_setting("wattpad_username", "")
+        if not pwd:
+            pwd = os.getenv("WATTPAD_PASSWORD", "").strip() or syndication_db.get_synd_setting("wattpad_password", "")
+
+    return token, user, pwd
+
 def process_scheduled_chapters_cycle(now: float):
     """
     فحص ونشر الفصول التي حان موعدها من جدول الجدولة المتقدمة في Google Sheet وقاعدة البيانات.
@@ -102,10 +149,11 @@ def process_scheduled_chapters_cycle(now: float):
             err_messages = []
 
             # 1. نادي الروايات
-            if plat_target in ("all", "rewayat_club") and nov.get("rewayat_enabled") and nov.get("rewayat_novel_id") and rc_token:
+            nov_rc_token, nov_rc_user, _ = _get_novel_credentials(nov, "rewayat_club")
+            if plat_target in ("all", "rewayat_club") and nov.get("rewayat_enabled") and nov.get("rewayat_novel_id") and nov_rc_token:
                 try:
                     time.sleep(random.uniform(2.0, 5.0))  # محاكاة سلوك وتأخير التصفح البشري
-                    rc_client = rewayat_club_api.RewayatClubClient(token=rc_token)
+                    rc_client = rewayat_club_api.RewayatClubClient(token=nov_rc_token, username=nov_rc_user)
                     rc_content = extracted.get("content_rewayat_club") or extracted["content_for_publish"]
                     rc_res = rc_client.publish_chapter(
                         novel_id=nov["rewayat_novel_id"],
@@ -131,11 +179,12 @@ def process_scheduled_chapters_cycle(now: float):
                     err_messages.append(str(e_rc))
 
             # 2. واتباد
+            nov_wp_token, nov_wp_user, nov_wp_pass = _get_novel_credentials(nov, "wattpad")
             if plat_target in ("all", "wattpad") and nov.get("wattpad_enabled") and nov.get("wattpad_story_id"):
-                if wp_token or (wp_user and wp_pass):
+                if nov_wp_token or (nov_wp_user and nov_wp_pass):
                     try:
                         time.sleep(random.uniform(3.0, 7.0))  # محاكاة سلوك وتأخير التصفح البشري
-                        wp_client = wattpad_poster.WattpadClient(token=wp_token, username=wp_user, password=wp_pass)
+                        wp_client = wattpad_poster.WattpadClient(token=nov_wp_token, username=nov_wp_user, password=nov_wp_pass)
                         wp_content = extracted.get("content_wattpad") or extracted["content_for_publish"]
                         wp_res = wp_client.publish_chapter_to_story(
                             story_id=nov["wattpad_story_id"],
@@ -278,9 +327,13 @@ def run_syndication_cycle():
             # 2. الاستعلام الحي التلقائي عن آخر فصل منشور على المنصة (Live Autonomous Chapter Sync)
             # بدلاً من الثقة بقيمة محلية قد تتغير أو تتصفر، نسأل المنصة مباشرة: ما هو آخر فصل نُشر؟
             live_ch = None
-            if nov.get("rewayat_enabled") and nov.get("rewayat_novel_id") and rc_token:
+            # جلب بيانات الحساب المربوط بالرواية المحددة تلقائياً
+            nov_rc_token, nov_rc_user, _ = _get_novel_credentials(nov, "rewayat_club")
+            nov_wp_token, nov_wp_user, nov_wp_pass = _get_novel_credentials(nov, "wattpad")
+
+            if nov.get("rewayat_enabled") and nov.get("rewayat_novel_id") and nov_rc_token:
                 try:
-                    rc_temp = rewayat_club_api.RewayatClubClient(token=rc_token)
+                    rc_temp = rewayat_club_api.RewayatClubClient(token=nov_rc_token, username=nov_rc_user)
                     live_rc = rc_temp.get_latest_chapter_number(nov["rewayat_novel_id"])
                     if live_rc is not None and live_rc > 0:
                         live_ch = live_rc
@@ -289,7 +342,7 @@ def run_syndication_cycle():
 
             if nov.get("wattpad_enabled") and nov.get("wattpad_story_id"):
                 try:
-                    wp_temp = wattpad_poster.WattpadClient(token=wp_token, username=wp_user, password=wp_pass)
+                    wp_temp = wattpad_poster.WattpadClient(token=nov_wp_token, username=nov_wp_user, password=nov_wp_pass)
                     live_wp = wp_temp.get_latest_chapter_number(nov["wattpad_story_id"])
                     if live_wp is not None and live_wp > 0:
                         live_ch = live_wp
@@ -327,10 +380,10 @@ def run_syndication_cycle():
             success_wp = False
 
             # 3. النشر في نادي الروايات (إذا كان مفعلاً)
-            if nov.get("rewayat_enabled") and nov.get("rewayat_novel_id") and rc_token:
+            if nov.get("rewayat_enabled") and nov.get("rewayat_novel_id") and nov_rc_token:
                 try:
                     time.sleep(random.uniform(2.5, 6.0))  # محاكاة السلوك البشري
-                    rc_client = rewayat_club_api.RewayatClubClient(token=rc_token)
+                    rc_client = rewayat_club_api.RewayatClubClient(token=nov_rc_token, username=nov_rc_user)
                     rc_content = extracted.get("content_rewayat_club") or extracted["content_for_publish"]
                     rc_res = rc_client.publish_chapter(
                         novel_id=nov["rewayat_novel_id"],
@@ -360,7 +413,7 @@ def run_syndication_cycle():
 
             # 4. النشر في واتباد (إذا كان مفعلاً)
             if nov.get("wattpad_enabled") and nov.get("wattpad_story_id"):
-                if not wp_token and not (wp_user and wp_pass):
+                if not nov_wp_token and not (nov_wp_user and nov_wp_pass):
                     wp_res = {"success": False, "error": "لم يتم حفظ توكن أو بيانات حساب واتباد في إعدادات المنظومة"}
                     syndication_db.log_syndication_event(
                         novel_id=nov["id"],
@@ -372,7 +425,7 @@ def run_syndication_cycle():
                 else:
                     try:
                         time.sleep(random.uniform(3.5, 8.0))  # محاكاة السلوك البشري
-                        wp_client = wattpad_poster.WattpadClient(token=wp_token, username=wp_user, password=wp_pass)
+                        wp_client = wattpad_poster.WattpadClient(token=nov_wp_token, username=nov_wp_user, password=nov_wp_pass)
                         wp_content = extracted.get("content_wattpad") or extracted["content_for_publish"]
                         wp_res = wp_client.publish_chapter_to_story(
                             story_id=nov["wattpad_story_id"],
@@ -511,12 +564,13 @@ def publish_now_immediate(novel_id: int) -> Dict[str, Any]:
     post_url = ""
 
     # 1. نادي الروايات
+    nov_rc_token, nov_rc_user, _ = _get_novel_credentials(nov, "rewayat_club")
     if nov.get("rewayat_enabled") and nov.get("rewayat_novel_id"):
-        if not rc_token:
-            messages.append("توكن نادي الروايات غير مسجل في الإعدادات.")
+        if not nov_rc_token:
+            messages.append("توكن نادي الروايات غير مسجل في الحساب أو الإعدادات.")
         else:
             try:
-                rc_client = rewayat_club_api.RewayatClubClient(token=rc_token)
+                rc_client = rewayat_club_api.RewayatClubClient(token=nov_rc_token, username=nov_rc_user)
                 rc_content = extracted.get("content_rewayat_club") or extracted["content_for_publish"]
                 rc_res = rc_client.publish_chapter(
                     novel_id=nov["rewayat_novel_id"],
@@ -543,9 +597,10 @@ def publish_now_immediate(novel_id: int) -> Dict[str, Any]:
                 messages.append(f"استثناء بنادي الروايات: {e}")
 
     # 2. واتباد
+    nov_wp_token, nov_wp_user, nov_wp_pass = _get_novel_credentials(nov, "wattpad")
     if nov.get("wattpad_enabled") and nov.get("wattpad_story_id"):
         try:
-            wp_client = wattpad_poster.WattpadClient(token=wp_token, username=wp_user, password=wp_pass)
+            wp_client = wattpad_poster.WattpadClient(token=nov_wp_token, username=nov_wp_user, password=nov_wp_pass)
             wp_content = extracted.get("content_wattpad") or extracted["content_clean"]
             wp_res = wp_client.publish_chapter_to_story(
                 story_id=nov["wattpad_story_id"],

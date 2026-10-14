@@ -223,13 +223,16 @@
                 <textarea id="claudeGeneratedPromptArea" readonly style="height: 160px; font-family: 'Segoe UI', Tahoma, monospace; font-size: 11.5px; background: #11111b; color: #cdd6f4; border: 1px solid #45475a; border-radius: 6px; padding: 10px; resize: vertical; width: 100%; box-sizing: border-box;"></textarea>
             </div>
 
-            <!-- مربع إدخال استجابة Claude وحفظها بالشيت -->
+            <!-- مربع إدخال استجابة Qwen/Claude وحفظها بالشيت -->
             <div id="claudeResponseBox" style="display: none; background: #181825; padding: 14px; border-radius: 6px; border: 1px dashed #fab387;">
                 <label style="color: #fab387; font-size: 12px; font-weight: bold; display: block; margin-bottom: 6px;">
-                    📥 الصق رد Claude (JSON) هنا لتطبيقه وحفظه بالشيت فوراً:
+                    📥 الصق مخرجات استخراج المصطلحات من Qwen أو Claude هنا (JSON):
                 </label>
                 <textarea id="claudeJsonInput" style="height: 120px; font-family: monospace; font-size: 11px; background: #11111b; color: #a6e3a1; border: 1px solid #fab387; border-radius: 6px; padding: 10px; resize: vertical; width: 100%; box-sizing: border-box;" placeholder='[{"OriginalTerm": "井底之蛙", "ArabicTranslation": "قاصر النظر كضفدع في قاع بئر", "Category": "Proverb / Idiom", "Gender": "غير محدد", "Notes": "مثل صيني شهير عن ضيق الأفق وسعة العالم"}]'></textarea>
-                <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 10px;">
+                <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 10px; flex-wrap: wrap;">
+                    <button type="button" onclick="refineGlossaryWithGeminiFlash()" id="btnRefineFlash" style="background: linear-gradient(135deg, #38bdf8, #0284c7); color: #fff; font-weight: bold; padding: 10px 18px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px;">
+                        ✨ تدقيق وتعريب المقابل عبر Gemini Flash (المرحلة 1B)
+                    </button>
                     <button type="button" onclick="applyAndSaveClaudeGlossary()" id="btnSaveClaudeJson" style="background: linear-gradient(135deg, #10b981, #059669); color: #fff; font-weight: bold; padding: 10px 22px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px;">
                         💾 اعتماد وحفظ القاموس في الشيت المركزي (1oqK...)
                     </button>
@@ -2225,6 +2228,8 @@
             glossarySection += "⚠️ قواعد الجنس والضمائر الإلزامية:\n";
             glossarySection += "- للشخصية (أنثى): يجب استخدام ضمائر وأفعال التأنيث حصراً (قالت، عيناها، نظرت، هي، لها). يُمنع تذكير المؤنث منعاً باتاً!\n";
             glossarySection += "- للشخصية (ذكر): يجب استخدام ضمائر وأفعال التذكير حصراً (قال، عيناه، نظر، هو، له). يُمنع تأنيث المذكر منعاً باتاً!\n";
+            glossarySection += "⚠️ قاعدة مرونة الرتب والمناصب (Lean Identity Rule):\n";
+            glossarySection += "- الرتب النبيلة والعسكرية ومقامات الزراعة (مثل بارون، كونت، دوق، تلميذ، شيخ) تتغير ديناميكياً مع تتابع الأحداث: اعتمد دائماً الرتبة المذكورة في سياق هذا الفصل الحالي ولا تجبر الشخصية على أي لقب قديم!\n";
             glossarySection += "قائمة المصطلحات والشخصيات المعتمدة في هذا الفصل:\n";
             matchedTerms.forEach(t => {
                 let extra = [];
@@ -2423,6 +2428,57 @@ ${text}`;
                     });
                 }
             });
+
+            // 🛡️ صمام الأمان والتحقق الصارم قبل النشر (Pre-Publish Quality Gate)
+            let validationErrors = [];
+            const tagsToCheck = ['system', 'rift', 'doc', 'letter', 'tip', 'note', 'cultivation'];
+
+            chapters.forEach((chap, idx) => {
+                const cNum = chap.chapNum || chap.index || (idx + 1);
+                const title = (chap.title || "").trim();
+                const content = (chap.content || "").trim();
+
+                // 1. فحص العنوان
+                if (!title || title.length < 2) {
+                    validationErrors.push(`❌ فصل [${cNum}]: عنوان الفصل مفقود!`);
+                }
+
+                // 2. فحص الطول الأدنى
+                if (content.length < 500) {
+                    validationErrors.push(`⚠️ فصل [${cNum}]: متن الفصل قصير جداً (${content.length} حرف فقط)! قد يكون الفصل مبتوراً.`);
+                }
+
+                // 3. فحص بقايا الحروف الصينية غير المترجمة
+                const zhMatches = (content.match(/[\u4e00-\u9fa5]/g) || []).length;
+                if (zhMatches > 20) {
+                    validationErrors.push(`⚠️ فصل [${cNum}]: يحتوي على ${zhMatches} حرفاً صينياً غير مترجم!`);
+                }
+
+                // 4. فحص توازن وسوم الـ BBCode
+                tagsToCheck.forEach(t => {
+                    const op = (content.match(new RegExp(`\\[${t}[^\\]]*\\]`, 'gi')) || []).length;
+                    const cl = (content.match(new RegExp(`\\[\\/${t}\\]`, 'gi')) || []).length;
+                    if (op !== cl) {
+                        validationErrors.push(`❌ فصل [${cNum}]: عدم توازن في الوسم [${t}] (فُتح ${op} وأُغلق ${cl}). هذا سيكسر تصميم صفحة القراءة!`);
+                    }
+                });
+
+                // 5. فحص تسريب روابط المحرر الداخلي
+                if (content.includes("blogger.com/blog/post/edit")) {
+                    validationErrors.push(`❌ فصل [${cNum}]: تم رصد رابط تحرير خاص ببلوجر في المتن!`);
+                }
+            });
+
+            if (validationErrors.length > 0) {
+                const errReport = "⚠️ [تنبيه صمام الأمان قبل النشر]: تم رصد الملاحظات التالية:\n\n" +
+                    validationErrors.slice(0, 8).join("\n") +
+                    (validationErrors.length > 8 ? `\n...و ${validationErrors.length - 8} أخطاء أخرى.` : "") +
+                    "\n\nهل ترغب بمتابعة النشر رغم هذه الملاحظات أم الإلغاء للمراجعة؟";
+                if (!confirm(errReport)) {
+                    logMsg("🛑 تم إلغاء عملية النشر بواسطة صمام الأمان للمراجعة.");
+                    return;
+                }
+            }
 
             const confirmMsg = `📊 تقرير جاهزية النشر لرواية "${novelName}":\n\n` +
                 `🔄 فصول منشورة سابقاً (سيتم إرسال أمر تعديل لتحديثها في مكانها دون تكرار): ${chaptersToUpdate.length} فصلاً\n` +
@@ -3429,7 +3485,102 @@ ${termsListing}
         });
     }
 
+    async function refineGlossaryWithGeminiFlash() {
+        const rawJson = document.getElementById('claudeJsonInput').value.trim();
+        if (!rawJson) return alert("⚠️ يرجى لصق مخرجات استخراج المصطلحات أولاً في الصندوق ليقوم Gemini Flash بتدقيقها!");
 
+        let termsList = [];
+        try {
+            let clean = rawJson;
+            if (clean.includes("```json")) {
+                clean = clean.split("```json")[1].split("```")[0].trim();
+            } else if (clean.includes("```")) {
+                clean = clean.split("```")[1].split("```")[0].trim();
+            }
+            termsList = JSON.parse(clean);
+            if (!Array.isArray(termsList) || termsList.length === 0) throw new Error("مصفوفة غير صالحة أو فارغة");
+        } catch(e) {
+            return alert("❌ فشل قراءة JSON المصطلحات: " + e.message);
+        }
+
+        const btnRefine = document.getElementById('btnRefineFlash');
+        if (btnRefine) {
+            btnRefine.disabled = true;
+            btnRefine.innerText = "جاري التدقيق البلاغي عبر Gemini Flash... ⏳";
+        }
+        logMsg(`✨ [المرحلة 1B] إرسال ${termsList.length} مصطلحاً لـ Gemini Flash لتدقيق التعريب وصياغة المقابل البلاغي الفصيح...`);
+
+        const flashModel = "gemini-3.6-flash"; // Flash حصراً
+        const prompt = `أنت كبير المحررين اللغويين والمتخصص في الأدب والفانتازيا العالمية.
+أمامك قائمة مصطلحات مستخرجة من رواية مع تعريب مبدئي مقترح.
+المهمة: راجع التعريب العربي لكل مصطلح:
+- إذا كان التعريب المبدئي دقيقاً وفصيحاً اعتمده كما هو.
+- إذا كان ركيكاً أو حرفياً، استبدله بتعريب بليغ وفخم ومناسب لأجواء الرواية (خصوصاً أسماء المهارات، الرتب، والأمثال).
+- حافظ على دقة الأسماء الصوتية للأشخاص بما يناسب الأذن العربية السليمة.
+- بطاقة الشخصية يجب أن تكون محايدة ومجردة بدون تثبيت رتب أو مناصب متغيرة في الحبكة.
+- لا تغير الحقول الأخرى ولا تغير الأسماء الأصلية.
+
+قائمة المصطلحات للمراجعة والتدقيق:
+${JSON.stringify(termsList, null, 2)}
+
+أرجع النتيجة حصراً بصيغة JSON نظيفة بنفس الهيكل مع تحديث المقابل العربي في حقل 'ArabicTranslation':
+\`\`\`json
+[
+  {
+    "OriginalTerm": "...",
+    "ArabicTranslation": "التعريب البليغ المعتمد",
+    "Category": "...",
+    "Gender": "...",
+    "Notes": "..."
+  }
+]
+\`\`\``;
+
+        let refinedOutput = null;
+        for (let i = 0; i < API_KEYS.length; i++) {
+            const keyIdx = (currentKeyIndex + i) % API_KEYS.length;
+            const apiKey = API_KEYS[keyIdx];
+            if (disabledClientKeys.has(apiKey)) continue;
+
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${flashModel}:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+
+                if (response.status === 429 || response.status === 403) {
+                    disabledClientKeys.add(apiKey);
+                    continue;
+                }
+
+                const data = await response.json();
+                if (data.candidates && data.candidates[0]?.content?.parts[0]?.text) {
+                    currentKeyIndex = (keyIdx + 1) % API_KEYS.length;
+                    let text = data.candidates[0].content.parts[0].text.trim();
+                    if (text.includes("```json")) text = text.split("```json")[1].split("```")[0].trim();
+                    else if (text.includes("```")) text = text.split("```")[1].split("```")[0].trim();
+                    refinedOutput = JSON.parse(text);
+                    break;
+                }
+            } catch(e) {
+                console.warn("Flash refine error with key", e);
+            }
+        }
+
+        if (btnRefine) {
+            btnRefine.disabled = false;
+            btnRefine.innerText = "✨ تدقيق وتعريب المقابل عبر Gemini Flash (المرحلة 1B)";
+        }
+
+        if (refinedOutput && Array.isArray(refinedOutput)) {
+            document.getElementById('claudeJsonInput').value = JSON.stringify(refinedOutput, null, 2);
+            logMsg(`🎉 اكتمل تدقيق التعريب عبر Gemini Flash بنجاح (${refinedOutput.length} مصطلحاً)! اضغط زر الحفظ لاعتمادها.`);
+            alert(`🎉 تم تدقيق وتعريب ${refinedOutput.length} مصطلحاً بنجاح عبر Gemini Flash!\n\nتم تحديث الصندوق بالنتائج البلاغية المصقولة. يمكنك الآن مراجعتها أو الضغط على زر الحفظ لاعتمادها في الشيت المركزي.`);
+        } else {
+            alert("⚠️ تعذر تدقيق المصطلحات عبر Gemini Flash، يرجى التحقق من المفاتيح أو الاتصال.");
+        }
+    }
 
     async function triggerQueueReformatAndUnify() {
         const novelName = document.getElementById('novelNameInput').value.trim();

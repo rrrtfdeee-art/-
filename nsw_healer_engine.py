@@ -1249,7 +1249,7 @@ def filter_glossary_for_chapter(raw_chinese_text: str, glossary_terms: List[Dict
 
 
 def format_glossary_for_prompt(glossary_terms: List[Dict[str, str]]) -> str:
-    """تنسيق القاموس ككتلة شروط إلزامية للذكاء الاصطناعي مع التمييز الصارم بين القاموس والوسوم."""
+    """تنسيق القاموس ككتلة شروط إلزامية للذكاء الاصطناعي مع التمييز الصارم بين القاموس والوسوم وبطاقات الهوية المرنة."""
     if not glossary_terms:
         return ""
     lines = [
@@ -1258,6 +1258,8 @@ def format_glossary_for_prompt(glossary_terms: List[Dict[str, str]]) -> str:
         "⚠️ قواعد الجنس والضمائر الإلزامية:",
         "- للشخصية (أنثى): يجب استخدام ضمائر وأفعال التأنيث حصراً (قالت، عيناها، نظرت، هي، لها). يُمنع تذكير المؤنث منعاً باتاً!",
         "- للشخصية (ذكر): يجب استخدام ضمائر وأفعال التذكير حصراً (قال، عيناه، نظر، هو، له). يُمنع تأنيث المذكر منعاً باتاً!",
+        "⚠️ قاعدة مرونة الرتب والمناصب (Lean Identity Rule):",
+        "- الرتب العسكرية والمقامات النبيلة ومراتب الزراعة (مثل بارون، كونت، دوق، تلميذ، شيخ) تتغير ديناميكياً مع تتابع الحبكة: اعتمد دائماً الرتبة المذكورة في سياق الفصل الحالي ولا تجبر الشخصية على أي لقب قديم!",
         "المصطلحات المعتمدة في هذا الفصل:"
     ]
     for t in glossary_terms:
@@ -1269,6 +1271,131 @@ def format_glossary_for_prompt(glossary_terms: List[Dict[str, str]]) -> str:
         extra_str = f" [{', '.join(extra)}]" if extra else ""
         lines.append(f"• {t['original']} ➔ {t['arabic']}{extra_str}")
     return "\n".join(lines)
+
+
+def stage_0_two_step_glossary_mining(raw_content: str, novel_name: str, existing_terms: Optional[List[Dict[str, str]]] = None) -> List[Dict[str, str]]:
+    """
+    المرحلة 0: التعدين المزدوج للقاموس (فصل استخراج القاموس تماماً عن الترجمة):
+    1. تمرير الفصل إلى نموذج استخراج الكيانات (Qwen/Gemini) لاستخراج المصطلحات الجديدة فقط ببطاقة هوية مجردة وبدون تكرار.
+    2. تمرير المصطلحات الجديدة إلى Gemini Flash حصراً لتدقيق وتعريب المقابل العربي بأسلوب بليغ وفخم.
+    """
+    logger.info(f"⛏️ [المرحلة 0/3] بدء التعدين المزدوج لمصطلحات الفصل لرواية '{novel_name}'...")
+    known_originals = set()
+    if existing_terms:
+        for t in existing_terms:
+            o = t.get("original", "").strip().lower()
+            if o:
+                known_originals.add(o)
+
+    # الخطوة 1A: استخراج الكيانات والأسماء الجديدة فقط مع بطاقة هوية مجردة (Lean Identity)
+    extract_prompt = (
+        f"أنت خبير استخراج وتعدين مصطلحات الروايات الفانتازية والآسيوية لرواية [{novel_name}].\n"
+        "المهمة: اقرأ هذا الفصل واستخرج فقط المصطلحات والكيانات الجديدة التي تظهر لأول مرة:\n"
+        "1. أسماء الشخصيات والأعلام الجديدة مع تحديد الجنس (ذكر / أنثى / غير محدد).\n"
+        "2. أسماء المواقع الجغرافية، العوائل، الطوائف، والمؤسسات.\n"
+        "3. المهارات والتقنيات القتالية وفنون السحر والمستويات.\n"
+        "4. الأمثال الشعبية والتعبيرات البلاغية (Idioms).\n\n"
+        "⛔ قواعد صارمة لمنع الهلوسة والضجيج:\n"
+        "- لا تستخرج الكلمات العامة والشائعة (مثل: ملك، سيف، جندي، حارس، غرفة، فندق).\n"
+        "- بطاقة الشخصية يجب أن تكون عامة ومحايدة تماماً بدون تثبيت رتب أو مناصب مؤقتة قد تتغير لاحقاً في الحبكة (مثل: بارون، دوق، تلميذ خارجي).\n"
+        "- إذا لم يتضح جنس الشخصية اتركه فارغاً.\n\n"
+        "أرجع النتيجة حصراً بصيغة JSON نظيفة:\n"
+        "```json\n"
+        "[\n"
+        "  {\n"
+        '    "orig": "الاسم الأصلي بلغة النص",\n'
+        '    "suggested_ar": "التعريب المبدئي المقترح",\n'
+        '    "category": "Character / Location / Organization / Technique / Idiom",\n'
+        '    "gender": "ذكر / أنثى / غير محدد",\n'
+        '    "note": "وصف مقتضب ومحايد جداً"\n'
+        "  }\n"
+        "]\n"
+        "```\n\n"
+        f"نص الفصل:\n{raw_content[:25000]}"
+    )
+
+    from gemini_analyzer import call_gemini_api
+    raw_res = call_gemini_api(extract_prompt, model_name="gemini-3.5-flash-lite", timeout=90)
+    if not raw_res:
+        return []
+
+    clean_json = raw_res.strip()
+    if "```json" in clean_json:
+        clean_json = clean_json.split("```json")[1].split("```")[0].strip()
+    elif "```" in clean_json:
+        clean_json = clean_json.split("```")[1].split("```")[0].strip()
+
+    extracted_terms = []
+    try:
+        extracted_terms = json.loads(clean_json)
+    except Exception:
+        match = re.search(r'\[[\s\S]*\]', raw_res)
+        if match:
+            try:
+                extracted_terms = json.loads(match.group(0))
+            except Exception:
+                pass
+
+    if not isinstance(extracted_terms, list) or not extracted_terms:
+        logger.info("ℹ️ لم يتم العثور على مصطلحات جديدة غير مألوفة في هذا الفصل.")
+        return []
+
+    # تصفية المصطلحات التي سبق تسجيلها
+    new_candidates = []
+    for item in extracted_terms:
+        orig = item.get("orig", "").strip()
+        if orig and orig.lower() not in known_originals:
+            new_candidates.append(item)
+            known_originals.add(orig.lower())
+
+    if not new_candidates:
+        return []
+
+    # الخطوة 1B: تدقيق وتعريب المقابل بواسطة Gemini Flash حصراً
+    refine_prompt = (
+        "أنت كبير المحررين اللغويين والمتخصص في الأدب والفانتازيا العالمية.\n"
+        "أمامك قائمة مصطلحات مستخرجة من رواية مع تعريب مبدئي مقترح.\n"
+        "المهمة: راجع التعريب العربي لكل مصطلح:\n"
+        "- إذا كان التعريب المبدئي دقيقاً وفصيحاً اعتمده كما هو.\n"
+        "- إذا كان ركيكاً أو حرفياً، استبدله بتعريب بليغ وفخم ومناسب لأجواء الرواية (خصوصاً أسماء المهارات، الرتب، والأمثال).\n"
+        "- حافظ على دقة الأسماء الصوتية للأشخاص بما يناسب الأذن العربية السليمة.\n"
+        "- لا تغير الحقول الأخرى.\n\n"
+        f"قائمة المصطلحات للمراجعة:\n{json.dumps(new_candidates, ensure_ascii=False, indent=2)}\n\n"
+        "أرجع النتيجة حصراً بصيغة JSON بنفس الهيكل مع تحديث 'arabic':\n"
+        "```json\n"
+        "[\n"
+        '  {"original": "...", "arabic": "التعريب البليغ المعتمد", "category": "...", "gender": "...", "notes": "..."}\n'
+        "]\n"
+        "```"
+    )
+
+    refined_res = call_gemini_api(refine_prompt, model_name="gemini-3.6-flash", timeout=90)
+    final_terms = []
+    if refined_res:
+        r_json = refined_res.strip()
+        if "```json" in r_json:
+            r_json = r_json.split("```json")[1].split("```")[0].strip()
+        elif "```" in r_json:
+            r_json = r_json.split("```")[1].split("```")[0].strip()
+        try:
+            parsed_final = json.loads(r_json)
+            if isinstance(parsed_final, list):
+                final_terms = parsed_final
+        except Exception:
+            pass
+
+    if not final_terms:
+        # استخدام المخرجات الأولية كاحتياط
+        final_terms = [{
+            "original": c.get("orig", ""),
+            "arabic": c.get("suggested_ar", ""),
+            "category": c.get("category", ""),
+            "gender": c.get("gender", ""),
+            "notes": c.get("note", "")
+        } for c in new_candidates]
+
+    logger.info(f"✅ [المرحلة 0] تم تعدين وتدقيق {len(final_terms)} مصطلحاً جديداً بنجاح عبر التعدين المزدوج.")
+    return final_terms
 
 
 
@@ -1331,15 +1458,11 @@ def stage_1_initial_translate(raw_title: str, raw_content: str, novel_name: str,
         "   - احقن [tip]...[/tip] للتلميحات الإرشادية.\n"
         "   - احقن [note]...[/note] لهوامش وملاحظات الشرح الضرورية.\n"
         "5. استخراج عنوان الفصل بصيغة: 'الفصل [رقم]: [عنوان الفصل المترجم]'.\n"
-        "6. كشف المصطلحات الجديدة: إذا ظهرت في الفصل شخصيات أو أماكن جديدة غير موجودة بالقاموس المرفق، اذكرها في حقل new_entities.\n"
-        "7. إرجاع النتيجة حصراً بصيغة JSON بدون أي مقدمات:\n"
+        "6. إرجاع النتيجة حصراً بصيغة JSON بدون أي مقدمات:\n"
         "```json\n"
         "{\n"
         '  "translated_title": "الفصل ...: ...",\n'
-        '  "translated_content": "المتن المترجم كاملاً مع وسوم BBCode...",\n'
-        '  "new_entities": [\n'
-        '    {"chinese": "اسم صيني جديد", "arabic": "التعريب المقترح", "category": "شخصية/مكان/تقنية", "gender": "ذكر/أنثى/غير محدد"}\n'
-        '  ]\n'
+        '  "translated_content": "المتن المترجم كاملاً مع وسوم BBCode..."\n'
         "}\n"
         "```"
     )
@@ -1562,6 +1685,62 @@ def convert_bb_nodes_to_royal_html(text: str) -> str:
     return html_out
 
 
+def validate_chapter_before_publish(
+    chapter_title: str,
+    chapter_content: str,
+    publish_date: Optional[str] = None,
+    prev_publish_date: Optional[str] = None,
+    min_arabic_chars: int = 1000,
+    check_links: bool = True
+) -> Tuple[bool, List[str]]:
+    """
+    صمام أمان ما قبل النشر (Pre-Publish Quality Gate):
+    1. فحص طول النص وخلوه من البتر.
+    2. فحص بقايا المقاطع الأجنبية غير المترجمة (نسبة الصيني/الأجنبي).
+    3. فحص التسلسل الزمني الصارم (تاريخ النشر لا يسبق الفصل السابق).
+    4. فحص توازن وسوم الـ BBCode لمنع انكسار واجهة Blogger.
+    5. فحص وجود العنوان وعدم وجود روابط تحرير مسربة.
+    """
+    errors = []
+
+    # 1. فحص الطول واكتمال المتن
+    ar_chars = count_arabic_chars(chapter_content)
+    if ar_chars < min_arabic_chars:
+        errors.append(f"طول الفصل قصير جداً ({ar_chars} حرف عربي، الحد الأدنى: {min_arabic_chars})")
+
+    zh_chars = len(re.findall(r'[\u4e00-\u9fa5]', chapter_content or ""))
+    if zh_chars > 20:
+        errors.append(f"يحتوي الفصل على {zh_chars} حرفاً صينياً غير مترجم!")
+
+    # 2. فحص التسلسل الزمني الصارم
+    if publish_date and prev_publish_date:
+        try:
+            curr_dt = parse_any_datetime(publish_date)
+            prev_dt = parse_any_datetime(prev_publish_date)
+            if curr_dt and prev_dt and curr_dt <= prev_dt:
+                errors.append(f"خطأ زمني: تاريخ الفصل ({publish_date}) يسبق أو يطابق الفصل السابق ({prev_publish_date})!")
+        except Exception as e_dt:
+            errors.append(f"خطأ في قراءة التواريخ: {e_dt}")
+
+    # 3. فحص توازن وسوم BBCode
+    tags_to_check = ['system', 'rift', 'doc', 'letter', 'tip', 'note', 'cultivation']
+    for tag in tags_to_check:
+        open_count = len(re.findall(rf'\[{tag}[^\]]*\]', chapter_content or "", re.IGNORECASE))
+        close_count = len(re.findall(rf'\[/{tag}\]', chapter_content or "", re.IGNORECASE))
+        if open_count != close_count:
+            errors.append(f"عدم توازن في الوسم [{tag}]: فُتح {open_count} وأُغلق {close_count}! هذا سيكسر تصميم الصفحة.")
+
+    # 4. فحص تسريب روابط المحرر الداخلي
+    if "blogger.com/blog/post/edit" in (chapter_content or ""):
+        errors.append("تم رصد رابط تحرير خاص ببلوجر في المتن!")
+
+    if not chapter_title or len(chapter_title.strip()) < 3:
+        errors.append("عنوان الفصل مفقود أو غير مكتمل!")
+
+    is_valid = len(errors) == 0
+    return is_valid, errors
+
+
 def build_royal_chapter_html(novel_name: str, standard_title: str, translated_content: str) -> str:
     """بناء الهيكل الملكي الكامل للفصل المنشور."""
     converted = convert_bb_nodes_to_royal_html(translated_content)
@@ -1590,6 +1769,11 @@ def build_royal_chapter_html(novel_name: str, standard_title: str, translated_co
 
 def patch_blogger_post_in_place(post_id: str, new_html: str, published_date: Optional[str] = None) -> Dict[str, Any]:
     """تعديل محتوى التدوينة في مكانها مباشرة عبر Blogger API مع الحفاظ على التوقيت الزمني الأصلي."""
+    # فحص سريع لوسوم المتن
+    is_valid, validation_errors = validate_chapter_before_publish("تعديل مباشر", new_html, published_date)
+    if not is_valid:
+        logger.warning(f"⚠️ تنبيهات صمام الأمان لمنشور {post_id}: {validation_errors}")
+
     logger.info(f"🚀 إرسال طلب تعديل المنشور الحي [PostID: {post_id}] على Blogger...")
     payload = {
         "action": "updatePostContent",

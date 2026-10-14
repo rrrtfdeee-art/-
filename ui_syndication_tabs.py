@@ -203,35 +203,84 @@ def render_rewayat_club_tab():
                 st.error(f"خطأ: {ex_trig}")
 
     
-    # 1. إعدادات حساب نادي الروايات
-    with st.expander("🔐 بيانات حساب نادي الروايات (Authentication)", expanded=False):
-        col_u, col_p = st.columns(2)
-        stored_user = syndication_db.get_synd_setting("rewayat_username", "")
-        stored_token = syndication_db.get_synd_setting("rewayat_token", "")
+    # 1. إدارة حسابات نادي الروايات (دعم حسابات متعددة)
+    with st.expander("🔐 حسابات نادي الروايات (Multi-Account)", expanded=False):
+        # ترحيل الحسابات القديمة إلى الجدول الجديد تلقائياً
+        syndication_db.migrate_settings_to_accounts()
         
+        rc_accounts = syndication_db.get_all_accounts(platform="rewayat_club")
+        
+        # عرض الحسابات الموجودة
+        if rc_accounts:
+            st.markdown("##### 📋 الحسابات المسجلة:")
+            for acc in rc_accounts:
+                col_acc_info, col_acc_act = st.columns([3, 1])
+                with col_acc_info:
+                    default_badge = " 🌟 (افتراضي)" if acc.get("is_default") else ""
+                    st.markdown(f"**{acc['account_label']}**{default_badge} — المستخدم: `{acc['username']}`")
+                with col_acc_act:
+                    c_def, c_del = st.columns(2)
+                    with c_def:
+                        if not acc.get("is_default"):
+                            if st.button("⭐", key=f"rc_set_def_{acc['id']}", help="تعيين كافتراضي"):
+                                acc["is_default"] = 1
+                                syndication_db.save_or_update_account(acc)
+                                st.rerun()
+                    with c_del:
+                        if st.button("🗑️", key=f"rc_del_acc_{acc['id']}", help="حذف الحساب"):
+                            syndication_db.delete_account(acc["id"])
+                            st.rerun()
+            st.markdown("---")
+        
+        # نموذج إضافة حساب جديد
+        st.markdown("##### ➕ إضافة حساب جديد:")
+        col_u, col_p = st.columns(2)
         with col_u:
-            rewayat_user = st.text_input("اسم المستخدم / البريد:", value=stored_user, key="rc_user")
+            new_rc_label = st.text_input("اسم الحساب (تسمية مميزة):", key="new_rc_label", placeholder="مثال: حسابي الرئيسي")
+            new_rc_user = st.text_input("اسم المستخدم / البريد:", key="new_rc_user")
         with col_p:
-            rewayat_token = st.text_input("رمز التوكن أو كلمة المرور (Bearer Token / Password):", value=stored_token, type="password", key="rc_token")
-            
+            new_rc_token = st.text_input("رمز التوكن (Bearer Token):", type="password", key="new_rc_token")
+            new_rc_default = st.checkbox("تعيين كحساب افتراضي", key="new_rc_default", value=not bool(rc_accounts))
+        
         col_s1, col_s2 = st.columns(2)
         with col_s1:
-            if st.button("💾 حفظ بيانات الحساب", key="save_rc_creds", use_container_width=True):
-                syndication_db.save_synd_setting("rewayat_username", rewayat_user.strip())
-                syndication_db.save_synd_setting("rewayat_token", rewayat_token.strip())
-                st.success("تم حفظ بيانات الدخول لنادي الروايات بنجاح.")
-        with col_s2:
-            if st.button("🔍 فحص الاتصال بالحساب", key="test_rc_conn", use_container_width=True):
-                import rewayat_club_api
-                client = rewayat_club_api.RewayatClubClient(
-                    token=rewayat_token.strip() or stored_token,
-                    username=rewayat_user.strip() or stored_user
-                )
-                chk = client.test_connection()
-                if chk.get("success"):
-                    st.success(f"✅ {chk.get('message')}")
+            if st.button("💾 حفظ الحساب الجديد", key="save_new_rc_acc", use_container_width=True):
+                if new_rc_label.strip() and (new_rc_user.strip() or new_rc_token.strip()):
+                    syndication_db.save_or_update_account({
+                        "account_label": new_rc_label.strip(),
+                        "platform": "rewayat_club",
+                        "username": new_rc_user.strip(),
+                        "token": new_rc_token.strip(),
+                        "password": "",
+                        "extra_data": "{}",
+                        "is_default": 1 if new_rc_default else 0
+                    })
+                    # حفظ في الإعدادات القديمة أيضاً للتوافق
+                    if new_rc_default or not rc_accounts:
+                        syndication_db.save_synd_setting("rewayat_username", new_rc_user.strip())
+                        syndication_db.save_synd_setting("rewayat_token", new_rc_token.strip())
+                    st.success("✅ تم حفظ الحساب بنجاح!")
+                    st.rerun()
                 else:
-                    st.warning(f"⚠️ {chk.get('message')}")
+                    st.error("يرجى إدخال اسم الحساب واسم المستخدم أو التوكن.")
+        with col_s2:
+            if st.button("🔍 فحص الاتصال", key="test_new_rc_conn", use_container_width=True):
+                test_token = new_rc_token.strip()
+                test_user = new_rc_user.strip()
+                if not test_token and not test_user and rc_accounts:
+                    def_acc = rc_accounts[0]
+                    test_token = def_acc.get("token", "")
+                    test_user = def_acc.get("username", "")
+                if test_token or test_user:
+                    import rewayat_club_api
+                    client = rewayat_club_api.RewayatClubClient(token=test_token, username=test_user)
+                    chk = client.test_connection()
+                    if chk.get("success"):
+                        st.success(f"✅ {chk.get('message')}")
+                    else:
+                        st.warning(f"⚠️ {chk.get('message')}")
+                else:
+                    st.warning("أدخل بيانات الحساب أولاً.")
 
     # 2. إضافة رواية جديدة وجدولة فصولها (بالروابط فقط أو بالتخصيص الكامل)
     with st.expander("➕ إضافة رواية جديدة وجدولة فصولها في Google Sheet", expanded=True):
@@ -313,6 +362,19 @@ def render_rewayat_club_tab():
             cta_default = "✨ استمتعتم بالفصل؟ لدعم استمرار الترجمة ومتابعة الفصول المتقدمة فور صدورها، تفضلوا بزيارة موقعنا الأصلي عبر الرابط في خانة الدعم/بطاقة الرواية ✨"
             custom_cta = st.text_area("💬 التعليق التحفيزي الثابت لنهاية كل فصل (التوجيه لخانة الدعم):", value=cta_default, height=70, key="rc_uni_cta")
 
+        # اختيار حساب النشر للرواية
+        rc_avail_accs = syndication_db.get_all_accounts(platform="rewayat_club")
+        chosen_rc_acc_id = 0
+        if rc_avail_accs:
+            rc_acc_map = {f"{a['account_label']} ({a['username']}){' ⭐' if a.get('is_default') else ''}": a['id'] for a in rc_avail_accs}
+            def_idx = 0
+            for idx_a, a in enumerate(rc_avail_accs):
+                if a.get('is_default'):
+                    def_idx = idx_a
+                    break
+            chosen_rc_label = st.selectbox("👤 حساب نادي الروايات المربوط للنشر:", list(rc_acc_map.keys()), index=def_idx, key="rc_add_acc_sel")
+            chosen_rc_acc_id = rc_acc_map[chosen_rc_label]
+
         if st.button("🚀 حفظ الرواية وتفعيل النشر التلقائي", key="rc_uni_save_btn", type="primary", use_container_width=True):
             # إذا ضغط المستخدم حفظ مباشرة مع توفر الرابط السريع فقط دون ملء يدوي، نقوم بالاستنتاج التلقائي السريع فوراً
             target_name = n_name.strip()
@@ -387,6 +449,7 @@ def render_rewayat_club_tab():
                         "next_run_timestamp": float(first_run_ts),
                         "custom_cta": custom_cta.strip(),
                         "daily_times": daily_times_json,
+                        "account_id": chosen_rc_acc_id,
                         "is_active": 1
                     })
 
@@ -420,7 +483,10 @@ def render_rewayat_club_tab():
                 col_info, col_status, col_actions = st.columns([3, 2, 1.5])
                 with col_info:
                     st.markdown(f"**📖 {nov['novel_name']}**")
-                    st.caption(f"معرف نادي الروايات: `{nov['rewayat_novel_id'] or 'غير محدد'}` | المصدر: `{nov['blogger_label']}`")
+                    # عرض الحساب المرتبط
+                    linked_acc = syndication_db.get_account_for_novel(nov['id'])
+                    acc_label = linked_acc['account_label'] if linked_acc else 'الحساب الافتراضي'
+                    st.caption(f"معرف نادي الروايات: `{nov['rewayat_novel_id'] or 'غير محدد'}` | المصدر: `{nov['blogger_label']}` | الحساب: **{acc_label}**")
                 with col_status:
                     target_ch = nov['last_synced_chapter'] + 1
                     st.markdown(f"📊 آخر فصل تم نشره: **{nov['last_synced_chapter']}** / التوقف عند: **{nov['stop_chapter']}**")
@@ -462,13 +528,42 @@ def render_rewayat_club_tab():
                                 st.error(f"❌ تعذر النشر: {res_pub.get('message')}")
                             time.sleep(1.5)
                             st.rerun()
-                    if st.button("🗑️ حذف", key=f"del_rc_nov_{nov['id']}"):
-                        syndication_db.delete_syndicated_novel(nov["id"])
-                        st.success(f"تم حذف {nov['novel_name']}")
+                    if st.button("🗑️ حذف", key=f"del_rc_nov_{nov['id']}", type="secondary"):
+                        with st.spinner("⏳ جاري حذف الرواية من الشيت والقاعدة..."):
+                            syndication_db.delete_syndicated_novel(nov["id"], delete_from_sheet=True)
+                        st.success(f"✅ تم حذف '{nov['novel_name']}' من الشيت والقاعدة بنجاح!")
+                        time.sleep(1)
                         st.rerun()
 
                 # لوحة التحكم والإدارة الشاملة للرواية
                 with st.expander(f"🎮 لوحة التحكم والإدارة الشاملة ({nov['novel_name']})", expanded=False):
+                    # اختيار الحساب المرتبط بالرواية
+                    st.markdown("##### 👤 الحساب المرتبط بالرواية:")
+                    avail_accounts = syndication_db.get_all_accounts(platform="rewayat_club")
+                    if avail_accounts:
+                        acc_options = {f"{a['account_label']} ({a['username']})": a['id'] for a in avail_accounts}
+                        acc_options_list = list(acc_options.keys())
+                        current_acc_id = nov.get('account_id', 0)
+                        current_idx = 0
+                        for idx_a, a in enumerate(avail_accounts):
+                            if a['id'] == current_acc_id:
+                                current_idx = idx_a
+                                break
+                        selected_acc_label = st.selectbox(
+                            "اختر الحساب لنشر هذه الرواية عليه:",
+                            acc_options_list,
+                            index=current_idx,
+                            key=f"rc_acc_sel_{nov['id']}"
+                        )
+                        selected_acc_id = acc_options[selected_acc_label]
+                        if selected_acc_id != current_acc_id:
+                            if st.button("💾 حفظ ربط الحساب", key=f"rc_save_acc_{nov['id']}"):
+                                syndication_db.set_novel_account(nov['id'], selected_acc_id)
+                                st.success(f"تم ربط الرواية بالحساب: {selected_acc_label}")
+                                st.rerun()
+                    else:
+                        st.info("لا توجد حسابات مسجلة. أضف حساباً من قسم 'حسابات نادي الروايات' أعلاه.")
+                    st.markdown("---")
                     st.markdown("##### ⚙️ إعدادات الرواية وتحديد توقيت نشر الفصول بالساعة والدقيقة:")
                     st.caption("حدد وقت نشر فصل واحد أو 2 أو 3 (أو أكثر) بالساعة والدقيقة عبر النوافذ أدناه، مع الحفظ السحابي الفوري في Google Sheet.")
                     c_cfg1, c_cfg2 = st.columns([1, 1])
@@ -892,54 +987,69 @@ def render_wattpad_tab():
             except Exception as ex_trig:
                 st.error(f"خطأ: {ex_trig}")
     
-    # 1. إعدادات حساب واتباد
-    with st.expander("🔐 بيانات حساب واتباد والدخول التلقائي (Wattpad Auto-Login)", expanded=False):
-        col_u, col_pwd, col_p = st.columns(3)
-        stored_w_user = syndication_db.get_synd_setting("wattpad_username", "")
-        stored_w_pass = syndication_db.get_synd_setting("wattpad_password", "")
-        stored_w_token = syndication_db.get_synd_setting("wattpad_token", "")
+    # 1. إدارة حسابات واتباد (دعم حسابات متعددة)
+    with st.expander("🔐 حسابات واتباد (Multi-Account)", expanded=False):
+        syndication_db.migrate_settings_to_accounts()
         
+        wp_accounts = syndication_db.get_all_accounts(platform="wattpad")
+        
+        if wp_accounts:
+            st.markdown("##### 📋 الحسابات المسجلة:")
+            for acc in wp_accounts:
+                col_acc_info, col_acc_act = st.columns([3, 1])
+                with col_acc_info:
+                    default_badge = " 🌟 (افتراضي)" if acc.get("is_default") else ""
+                    st.markdown(f"**{acc['account_label']}**{default_badge} — المستخدم: `{acc['username']}`")
+                with col_acc_act:
+                    c_def, c_del = st.columns(2)
+                    with c_def:
+                        if not acc.get("is_default"):
+                            if st.button("⭐", key=f"wp_set_def_{acc['id']}", help="تعيين كافتراضي"):
+                                acc["is_default"] = 1
+                                syndication_db.save_or_update_account(acc)
+                                st.rerun()
+                    with c_del:
+                        if st.button("🗑️", key=f"wp_del_acc_{acc['id']}", help="حذف الحساب"):
+                            syndication_db.delete_account(acc["id"])
+                            st.rerun()
+            st.markdown("---")
+        
+        st.markdown("##### ➕ إضافة حساب واتباد جديد:")
+        col_u, col_pwd, col_p = st.columns(3)
         with col_u:
-            wattpad_user = st.text_input("اسم المستخدم / الإيميل:", value=stored_w_user, key="wp_user")
+            new_wp_label = st.text_input("اسم الحساب (تسمية مميزة):", key="new_wp_label", placeholder="مثال: حسابي الرئيسي")
+            new_wp_user = st.text_input("اسم المستخدم / الإيميل:", key="new_wp_user")
         with col_pwd:
-            wattpad_pass = st.text_input("كلمة المرور (للتسجيل الذاتي):", value=stored_w_pass, type="password", key="wp_pwd")
+            new_wp_pass = st.text_input("كلمة المرور:", type="password", key="new_wp_pwd")
         with col_p:
-            wattpad_token = st.text_input("رمز التوكن (يُجلب تلقائياً):", value=stored_w_token, type="password", key="wp_token")
-        st.caption("💡 **الدخول التلقائي الذاتي:** عند إدخال اسم المستخدم وكلمة المرور، يقوم النظام بالدخول التلقائي وتجديد التوكن ذاتياً دون الحاجة لنسخه يدوياً في كل جلسة.")
-            
-        col_w1, col_w2, col_w3 = st.columns(3)
+            new_wp_token = st.text_input("رمز التوكن:", type="password", key="new_wp_token")
+            new_wp_default = st.checkbox("تعيين كحساب افتراضي", key="new_wp_default", value=not bool(wp_accounts))
+        st.caption("💡 عند إدخال اسم المستخدم وكلمة المرور، يقوم النظام بالدخول التلقائي وتجديد التوكن ذاتياً.")
+        
+        col_w1, col_w2 = st.columns(2)
         with col_w1:
-            if st.button("💾 حفظ البيانات", key="save_wp_creds", use_container_width=True):
-                syndication_db.save_synd_setting("wattpad_username", wattpad_user.strip())
-                syndication_db.save_synd_setting("wattpad_password", wattpad_pass.strip())
-                syndication_db.save_synd_setting("wattpad_token", wattpad_token.strip())
-                st.success("تم حفظ بيانات الدخول لواتباد بنجاح.")
-        with col_w2:
-            if st.button("🔄 تسجيل دخول وتجديد التوكن", key="wp_auto_login_btn", use_container_width=True):
-                import wattpad_poster
-                w_client = wattpad_poster.WattpadClient(
-                    username=wattpad_user.strip() or stored_w_user,
-                    password=wattpad_pass.strip() or stored_w_pass
-                )
-                login_res = w_client.auto_login()
-                if login_res.get("success"):
-                    st.success(f"✅ {login_res.get('message')}")
+            if st.button("💾 حفظ الحساب الجديد", key="save_new_wp_acc", use_container_width=True):
+                if new_wp_label.strip() and (new_wp_user.strip() or new_wp_token.strip()):
+                    syndication_db.save_or_update_account({
+                        "account_label": new_wp_label.strip(),
+                        "platform": "wattpad",
+                        "username": new_wp_user.strip(),
+                        "token": new_wp_token.strip(),
+                        "password": new_wp_pass.strip(),
+                        "extra_data": "{}",
+                        "is_default": 1 if new_wp_default else 0
+                    })
+                    if new_wp_default or not wp_accounts:
+                        syndication_db.save_synd_setting("wattpad_username", new_wp_user.strip())
+                        syndication_db.save_synd_setting("wattpad_password", new_wp_pass.strip())
+                        syndication_db.save_synd_setting("wattpad_token", new_wp_token.strip())
+                    st.success("✅ تم حفظ الحساب بنجاح!")
                     st.rerun()
                 else:
-                    st.error(f"❌ {login_res.get('message')}")
-        with col_w3:
-            if st.button("🔍 فحص الاتصال والحساب", key="test_wp_conn", use_container_width=True):
-                import wattpad_poster
-                w_client = wattpad_poster.WattpadClient(
-                    token=wattpad_token.strip() or stored_w_token,
-                    username=wattpad_user.strip() or stored_w_user,
-                    password=wattpad_pass.strip() or stored_w_pass
-                )
-                w_chk = w_client.test_connection()
-                if w_chk.get("success"):
-                    st.success(f"✅ {w_chk.get('message')}")
-                else:
-                    st.warning(f"⚠️ {w_chk.get('message')}")
+                    st.error("يرجى إدخال اسم الحساب واسم المستخدم أو التوكن.")
+        with col_w2:
+            if st.button("🔍 فحص الاتصال", key="test_new_wp_conn", use_container_width=True):
+                st.info("فحص الاتصال بواتباد يتطلب تسجيل الدخول الكامل. سيتم الفحص عند النشر.")
 
     # 2. إضافة قصة جديدة لواتباد وجدولة فصولها في Google Sheet (بالروابط فقط أو بالتخصيص الكامل)
     with st.expander("➕ إضافة قصة جديدة وجدولة فصولها في Google Sheet", expanded=True):
@@ -1019,6 +1129,19 @@ def render_wattpad_tab():
             w_cta_default = "✨ استمتعتم بالفصل؟ لمتابعة أحدث الفصول الحصرية والمتقدمة فور صدورها، تفضلوا بزيارة موقعنا الأصلي عبر الرابط في بايو الحساب (Bio) 🔗 ✨"
             w_custom_cta = st.text_area("💬 التعليق التحفيزي لنهاية كل فصل في واتباد (التوجيه للبايو):", value=w_cta_default, height=70, key="wp_uni_cta")
 
+        # اختيار حساب واتباد لنشر القصة
+        wp_avail_accs = syndication_db.get_all_accounts(platform="wattpad")
+        chosen_wp_acc_id = 0
+        if wp_avail_accs:
+            wp_acc_map = {f"{a['account_label']} ({a['username']}){' ⭐' if a.get('is_default') else ''}": a['id'] for a in wp_avail_accs}
+            def_w_idx = 0
+            for idx_w, a in enumerate(wp_avail_accs):
+                if a.get('is_default'):
+                    def_w_idx = idx_w
+                    break
+            chosen_wp_label = st.selectbox("👤 حساب واتباد المربوط للنشر:", list(wp_acc_map.keys()), index=def_w_idx, key="wp_add_acc_sel")
+            chosen_wp_acc_id = wp_acc_map[chosen_wp_label]
+
         if st.button("🚀 حفظ الرواية وتفعيل النشر التلقائي لواتباد", key="wp_uni_save_btn", type="primary", use_container_width=True):
             target_wname = w_name.strip()
             target_wid = w_story_id.strip()
@@ -1095,6 +1218,7 @@ def render_wattpad_tab():
                         "next_run_timestamp": float(first_run_ts),
                         "custom_cta": w_custom_cta.strip(),
                         "daily_times": daily_times_json,
+                        "account_id": chosen_wp_acc_id,
                         "is_active": 1
                     })
 
@@ -1130,7 +1254,9 @@ def render_wattpad_tab():
                     w_disp_id = str(nov['wattpad_story_id'] or 'غير محدد')
                     if w_disp_id.endswith(".0"):
                         w_disp_id = w_disp_id[:-2]
-                    st.caption(f"معرف قصة واتباد: `{w_disp_id}` | المصدر: `{nov['blogger_label']}`")
+                    linked_wp_acc = syndication_db.get_account_for_novel(nov['id'])
+                    acc_wp_label = linked_wp_acc['account_label'] if linked_wp_acc else 'الحساب الافتراضي'
+                    st.caption(f"معرف قصة واتباد: `{w_disp_id}` | المصدر: `{nov['blogger_label']}` | الحساب: **{acc_wp_label}**")
                 with col_status:
                     target_ch = nov['last_synced_chapter'] + 1
                     st.markdown(f"📊 آخر فصل تم نشره: **{nov['last_synced_chapter']}** / التوقف عند: **{nov['stop_chapter']}**")
@@ -1172,13 +1298,42 @@ def render_wattpad_tab():
                                 st.error(f"❌ تعذر النشر: {res_pub.get('message')}")
                             time.sleep(1.5)
                             st.rerun()
-                    if st.button("🗑️ حذف", key=f"del_wp_nov_{nov['id']}"):
-                        syndication_db.delete_syndicated_novel(nov["id"])
-                        st.success(f"تم حذف {nov['novel_name']}")
+                    if st.button("🗑️ حذف", key=f"del_wp_nov_{nov['id']}", type="secondary"):
+                        with st.spinner("⏳ جاري حذف الرواية من الشيت والقاعدة..."):
+                            syndication_db.delete_syndicated_novel(nov["id"], delete_from_sheet=True)
+                        st.success(f"✅ تم حذف '{nov['novel_name']}' من الشيت والقاعدة بنجاح!")
+                        time.sleep(1)
                         st.rerun()
 
                 # لوحة التحكم والإدارة الشاملة لقصة واتباد
                 with st.expander(f"🎮 لوحة التحكم والإدارة الشاملة ({nov['novel_name']})", expanded=False):
+                    # اختيار الحساب المرتبط بالقصة على واتباد
+                    st.markdown("##### 👤 الحساب المرتبط بالقصة على واتباد:")
+                    avail_wp_accounts = syndication_db.get_all_accounts(platform="wattpad")
+                    if avail_wp_accounts:
+                        wp_acc_options = {f"{a['account_label']} ({a['username']})": a['id'] for a in avail_wp_accounts}
+                        wp_acc_options_list = list(wp_acc_options.keys())
+                        current_wp_acc_id = nov.get('account_id', 0)
+                        current_wp_idx = 0
+                        for idx_w, a in enumerate(avail_wp_accounts):
+                            if a['id'] == current_wp_acc_id:
+                                current_wp_idx = idx_w
+                                break
+                        selected_wp_label = st.selectbox(
+                            "اختر حساب واتباد لنشر هذه القصة عليه:",
+                            wp_acc_options_list,
+                            index=current_wp_idx,
+                            key=f"wp_acc_sel_{nov['id']}"
+                        )
+                        selected_wp_acc_id = wp_acc_options[selected_wp_label]
+                        if selected_wp_acc_id != current_wp_acc_id:
+                            if st.button("💾 حفظ ربط الحساب", key=f"wp_save_acc_{nov['id']}"):
+                                syndication_db.set_novel_account(nov['id'], selected_wp_acc_id)
+                                st.success(f"تم ربط القصة بحساب واتباد: {selected_wp_label}")
+                                st.rerun()
+                    else:
+                        st.info("لا توجد حسابات واتباد مسجلة. أضف حساباً من قسم 'حسابات واتباد' أعلاه.")
+                    st.markdown("---")
                     st.markdown("##### ⚙️ إعدادات قصة واتباد وتحديد توقيت نشر الفصول بالساعة والدقيقة:")
                     st.caption("حدد وقت نشر فصل واحد أو 2 أو 3 (أو أكثر) بالساعة والدقيقة عبر النوافذ أدناه، مع الحفظ السحابي الفوري في Google Sheet.")
                     c_wcfg1, c_wcfg2 = st.columns([1, 1])
