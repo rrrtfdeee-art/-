@@ -953,5 +953,89 @@ def inspect_novel_links(
 
         res["success"] = bool(clean_story_id)
 
+    # 4. معالجة منصة Novel Updates
+    elif platform == "novelupdates":
+        import novelupdates_poster
+        clean_nu = clean_p_url
+        clean_site = clean_b_url
+
+        # 1. استخراج المعرف واسم السلسلة من رابط Novel Updates أو الاسم المدخل
+        series_slug = ""
+        series_title_cand = ""
+        if "novelupdates.com/series/" in clean_nu:
+            part = clean_nu.split("novelupdates.com/series/")[-1].strip("/").split("/")[0].split("?")[0]
+            series_slug = part.strip()
+            series_title_cand = series_slug.replace("-", " ").title()
+        elif clean_nu:
+            series_slug = clean_nu.strip().rstrip("/")
+            series_title_cand = series_slug.replace("-", " ").title()
+
+        res["clean_id"] = series_slug
+        res["series_url"] = clean_nu if clean_nu.startswith("http") else (f"https://www.novelupdates.com/series/{series_slug}/" if series_slug else "")
+
+        # 2. استخراج وتطبيع الدومين المخصص من رابط الموقع
+        custom_domain = ""
+        if clean_site:
+            try:
+                p_site = urllib.parse.urlparse(clean_site)
+                if p_site.netloc:
+                    custom_domain = f"{p_site.scheme or 'https'}://{p_site.netloc}"
+                else:
+                    custom_domain = clean_site.split("/")[0]
+            except Exception:
+                custom_domain = clean_site
+            if custom_domain:
+                custom_domain = novelupdates_poster.normalize_custom_domain(custom_domain)
+        res["custom_domain"] = custom_domain
+
+        # 3. مطابقة الرواية مع latest_chapters.json لمعرفة الاسم الكامل وأحدث الفصول المنشورة
+        matched_title = ""
+        matched_link = ""
+        max_ch = 0
+        try:
+            feed = novelupdates_poster.get_latest_chapters_feed()
+            ref_str = f"{series_slug} {site_title} {clean_site}".lower()
+            tokens = set(re.findall(r'[a-zA-Z]{3,}', ref_str))
+
+            for item in feed:
+                i_title = item.get("novelTitle", "")
+                i_link = item.get("novelLink", "")
+                try:
+                    i_num = int(item.get("num", 0))
+                except (ValueError, TypeError):
+                    i_num = 0
+
+                is_match = False
+                if clean_site and (clean_site.rstrip("/?") in i_link or i_link.rstrip("/?") in clean_site):
+                    is_match = True
+                elif tokens:
+                    t_title = set(re.findall(r'[a-zA-Z]{3,}', i_title.lower()))
+                    if len(tokens.intersection(t_title)) >= 2:
+                        is_match = True
+
+                if is_match:
+                    if not matched_title:
+                        matched_title = i_title
+                    if not matched_link:
+                        matched_link = i_link
+                    if i_num > max_ch:
+                        max_ch = i_num
+        except Exception as e_feed:
+            logger.warning(f"[inspect_novel_links] Error checking latest_chapters.json: {e_feed}")
+
+        chosen_name = matched_title or site_title or series_title_cand or (f"Series {series_slug}" if series_slug else "")
+        res["novel_name"] = chosen_name
+        res["blogger_label"] = chosen_name
+        if not res["blogger_url"] and matched_link:
+            res["blogger_url"] = matched_link
+            if not res["custom_domain"]:
+                res["custom_domain"] = novelupdates_poster.normalize_custom_domain(matched_link)
+
+        res["start_chapter"] = 1
+        res["last_chapter"] = 0
+        res["stop_chapter"] = max_ch if max_ch > 0 else 50
+        res["success"] = bool(clean_nu or clean_site or matched_title)
+
     return res
+
 

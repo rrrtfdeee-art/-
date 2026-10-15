@@ -1748,7 +1748,102 @@ def render_novelupdates_tab():
                     st.warning(f"⚠️ {chk.get('message')}")
 
     # 2. إضافة رواية جديدة لنظام Novel Updates
-    with st.expander("➕ إضافة رواية جديدة لجدولة Novel Updates", expanded=False):
+    with st.expander("➕ إضافة رواية جديدة وجدولة فصولها لـ Novel Updates", expanded=True):
+        st.markdown("##### 🔗 1️⃣ الإضافة السريعة بالروابط (رابط Novel Updates + رابط الموقع):")
+        st.caption("أدخل رابط الرواية على Novel Updates ورابطها في موقعك ليقوم السيرفر باستنتاج اسم السلسلة، تخصيص الدومين، واستخراج عدد الفصول في latest_chapters.json تلقائياً!")
+
+        col_nu_url1, col_nu_url2 = st.columns(2)
+        with col_nu_url1:
+            nu_quick_series_url = st.text_input(
+                "🆔 رابط أو معرّف السلسلة على Novel Updates:",
+                placeholder="https://www.novelupdates.com/series/when-the-entire-sect-read-my-thoughts/ أو اسم الرواية",
+                key="nu_quick_series_url"
+            )
+        with col_nu_url2:
+            nu_quick_site_url = st.text_input(
+                "🌐 رابط صفحة الرواية في الموقع الأصلي (المدونة / Novelskyworld):",
+                placeholder="https://en.novelskyworld.com/p/... أو رابط الموقع",
+                key="nu_quick_site_url"
+            )
+
+        col_nubtn1, col_nubtn2 = st.columns([2, 2])
+        with col_nubtn1:
+            if st.button("🔍 فحص واستيراد بيانات الرواية تلقائياً", key="nu_auto_fill_btn", use_container_width=True):
+                if not nu_quick_series_url.strip() and not nu_quick_site_url.strip():
+                    st.error("❌ يرجى إدخال رابط الرواية على Novel Updates أو رابط الموقع أولاً.")
+                else:
+                    with st.spinner("⏳ جاري فحص الروابط واستخراج بيانات الرواية تلقائياً..."):
+                        ins_nu = syndication_extractor.inspect_novel_links(
+                            platform="novelupdates",
+                            platform_url=nu_quick_series_url.strip(),
+                            blogger_url=nu_quick_site_url.strip()
+                        )
+                        if ins_nu.get("novel_name"):
+                            st.session_state["nu_add_name"] = ins_nu["novel_name"]
+                        if ins_nu.get("series_url") or nu_quick_series_url.strip():
+                            st.session_state["nu_add_nu_url"] = ins_nu.get("series_url") or nu_quick_series_url.strip()
+                        if ins_nu.get("blogger_url"):
+                            st.session_state["nu_add_site_url"] = ins_nu["blogger_url"]
+                        if ins_nu.get("custom_domain"):
+                            st.session_state["nu_add_custom_domain"] = ins_nu["custom_domain"]
+                        if "last_chapter" in ins_nu:
+                            st.session_state["nu_add_last"] = int(ins_nu["last_chapter"])
+                            st.session_state["nu_add_start"] = 1
+                            st.session_state["nu_add_stop"] = int(ins_nu.get("stop_chapter", 100))
+                        st.success(f"✅ تم استخراج بيانات '{ins_nu.get('novel_name')}' بنجاح! الدومين: `{ins_nu.get('custom_domain')}` — الفصول المتاحة: `{ins_nu.get('stop_chapter')}`")
+                        st.rerun()
+
+        with col_nubtn2:
+            if st.button("⚡ إضافة وجدولة مباشرة بهذه الروابط", key="nu_quick_direct_add_btn", use_container_width=True):
+                if not nu_quick_series_url.strip() and not nu_quick_site_url.strip():
+                    st.error("❌ يرجى إدخال رابط الرواية على Novel Updates أو رابط الموقع أولاً.")
+                else:
+                    with st.spinner("⏳ جاري استخراج البيانات وحفظ الرواية فوراً..."):
+                        ins_nu = syndication_extractor.inspect_novel_links(
+                            platform="novelupdates",
+                            platform_url=nu_quick_series_url.strip(),
+                            blogger_url=nu_quick_site_url.strip()
+                        )
+                        target_name = ins_nu.get("novel_name") or nu_quick_series_url.strip()
+                        target_url = ins_nu.get("series_url") or nu_quick_series_url.strip()
+                        target_site = ins_nu.get("blogger_url") or nu_quick_site_url.strip()
+                        target_dom = ins_nu.get("custom_domain") or novelupdates_poster.normalize_custom_domain(target_site)
+                        stop_num = int(ins_nu.get("stop_chapter", 50))
+
+                        # الحساب الافتراضي
+                        def_acc = syndication_db.get_default_account("novelupdates")
+                        acc_id = def_acc["id"] if def_acc else 0
+
+                        syndication_db.save_or_update_syndicated_novel({
+                            "novel_name": target_name,
+                            "blogger_url": target_site,
+                            "blogger_label": target_name,
+                            "rewayat_enabled": 0,
+                            "rewayat_novel_id": "",
+                            "rewayat_novel_url": "",
+                            "wattpad_enabled": 0,
+                            "wattpad_story_id": "",
+                            "wattpad_story_url": "",
+                            "novelupdates_enabled": 1,
+                            "novelupdates_series_url": target_url,
+                            "novelupdates_series_name": target_name,
+                            "custom_domain": target_dom,
+                            "account_id": acc_id,
+                            "source_site": "en",
+                            "start_chapter": 1,
+                            "last_synced_chapter": 0,
+                            "stop_chapter": stop_num,
+                            "interval_hours": 12.0,
+                            "is_active": 1,
+                            "next_run_timestamp": time.time(),
+                            "daily_times": ""
+                        })
+                        st.success(f"🎉 تم حفظ وجدولة '{target_name}' بنجاح عبر الروابط المباشرة!")
+                        time.sleep(1)
+                        st.rerun()
+
+        st.markdown("---")
+        st.markdown("##### ⚙️ 2️⃣ خيارات التخصيص والجدولة (يمكنك تعديل أي حقل بحرية):")
         nu_c1, nu_c2 = st.columns(2)
         with nu_c1:
             nu_novel_name = st.text_input(
@@ -1778,13 +1873,20 @@ def render_novelupdates_tab():
             clean_dom_preview = novelupdates_poster.normalize_custom_domain(nu_custom_domain.strip())
             st.caption(f"🔍 **معاينة الدومين بعد التطبيع الذكي:** `{clean_dom_preview}` (مثال الرابط: `{clean_dom_preview}/2026/10/chapter-16.html`)")
 
+        if "nu_add_start" not in st.session_state:
+            st.session_state["nu_add_start"] = 1
+        if "nu_add_last" not in st.session_state:
+            st.session_state["nu_add_last"] = 0
+        if "nu_add_stop" not in st.session_state:
+            st.session_state["nu_add_stop"] = 100
+
         nu_ch1, nu_ch2, nu_ch3 = st.columns(3)
         with nu_ch1:
-            nu_start_ch = st.number_input("رقم بداية الفصول:", min_value=1, value=1, step=1, key="nu_add_start")
+            nu_start_ch = st.number_input("رقم بداية الفصول:", min_value=1, step=1, key="nu_add_start")
         with nu_ch2:
-            nu_last_ch = st.number_input("آخر فصل تم نشره سابقاً على NU:", min_value=0, value=0, step=1, key="nu_add_last")
+            nu_last_ch = st.number_input("آخر فصل تم نشره سابقاً على NU:", min_value=0, step=1, key="nu_add_last")
         with nu_ch3:
-            nu_stop_ch = st.number_input("التوقف عند الفصل:", min_value=1, value=100, step=1, key="nu_add_stop")
+            nu_stop_ch = st.number_input("التوقف عند الفصل:", min_value=1, step=1, key="nu_add_stop")
 
         nu_sched_cfg = render_chapter_time_windows_selector(
             key_prefix="nu_add_sched",
@@ -1812,10 +1914,23 @@ def render_novelupdates_tab():
             target_site_url = nu_site_url.strip()
             target_dom = novelupdates_poster.normalize_custom_domain(nu_custom_domain.strip())
             
+            # إذا كانت الحقول فارغة لكن المستخدم وضع روابط في قسم الإضافة السريعة أعلاه:
+            if not target_nname and (nu_quick_series_url.strip() or nu_quick_site_url.strip()):
+                ins_fb = syndication_extractor.inspect_novel_links(
+                    platform="novelupdates",
+                    platform_url=nu_quick_series_url.strip(),
+                    blogger_url=nu_quick_site_url.strip()
+                )
+                target_nname = ins_fb.get("novel_name") or target_nname
+                target_nu_url = target_nu_url or ins_fb.get("series_url") or nu_quick_series_url.strip()
+                target_site_url = target_site_url or ins_fb.get("blogger_url") or nu_quick_site_url.strip()
+                if not target_dom:
+                    target_dom = ins_fb.get("custom_domain") or novelupdates_poster.normalize_custom_domain(target_site_url)
+
             clean_series_name = novelupdates_poster.extract_series_identifier(target_nu_url) or target_nname
 
             if not target_nname:
-                st.error("❌ يرجى إدخال اسم الرواية بالإنجليزية.")
+                st.error("❌ يرجى إدخال اسم الرواية بالإنجليزية أو فحص الروابط أولاً.")
             elif not target_nu_url:
                 st.error("❌ يرجى إدخال رابط أو اسم السلسلة على موقع Novel Updates.")
             else:
