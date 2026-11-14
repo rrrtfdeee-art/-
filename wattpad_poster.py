@@ -131,8 +131,72 @@ class WattpadClient:
 
         return {"success": False, "message": "تعذر التحقق من حساب واتباد."}
 
+    def _extract_chapter_number_from_title(self, text: str) -> Optional[int]:
+        """استخراج رقم الفصل الفعلي من عنوان الجزء في واتباد بدقة."""
+        import re
+        if not text:
+            return None
+        text_clean = str(text).strip()
+        patterns = [
+            r"(?:الفصل|chapter|part|جزء)\s*[:\-#]?\s*(\d+)",
+            r"^(\d+)\s*[:\-—–|]",
+            r"[:\-—–|]\s*(\d+)$",
+            r"^(\d+)$"
+        ]
+        for pat in patterns:
+            m = re.search(pat, text_clean, re.IGNORECASE)
+            if m:
+                try:
+                    return int(m.group(1))
+                except (ValueError, TypeError):
+                    continue
+        return None
+
+    def find_existing_part(self, story_id: str, chapter_num: int) -> Optional[Dict[str, Any]]:
+        """
+        التحقق الصارم من وجود الفصل مسبقاً داخل أجزاء قصة واتباد لمنع تكرار النشر.
+        يفحص رقم الفصل الفعلي المستخرج من العنوان والمطابقة الاسمية.
+        """
+        clean_id = str(story_id).strip()
+        if "wattpad.com/story/" in clean_id:
+            part = clean_id.split("wattpad.com/story/")[-1]
+            clean_id = part.split("-")[0].split("/")[0].split("?")[0]
+        if not clean_id:
+            return None
+
+        url = f"{BASE_WATTPAD_API}/stories/{clean_id}?fields=id,title,parts(id,title)"
+        try:
+            res = self.session.get(url, timeout=12)
+            if res.status_code == 200:
+                parts = res.json().get("parts", [])
+                target_num = int(chapter_num)
+                for p in parts:
+                    p_title = p.get("title", "")
+                    p_num = self._extract_chapter_number_from_title(p_title)
+                    if p_num == target_num:
+                        p_id = p.get("id")
+                        return {
+                            "id": p_id,
+                            "title": p_title,
+                            "url": f"https://www.wattpad.com/{p_id}" if p_id else f"https://www.wattpad.com/story/{clean_id}"
+                        }
+                    # مطابقة مباشرة بالاسم العربي أو الإنجليزي
+                    if f"الفصل {target_num}" in p_title or f"chapter {target_num}" in p_title.lower():
+                        p_id = p.get("id")
+                        return {
+                            "id": p_id,
+                            "title": p_title,
+                            "url": f"https://www.wattpad.com/{p_id}" if p_id else f"https://www.wattpad.com/story/{clean_id}"
+                        }
+        except Exception as e:
+            logger.warning(f"[wattpad] Error in find_existing_part for story {clean_id}: {e}")
+        return None
+
     def get_latest_chapter_number(self, story_id: str) -> Optional[int]:
-        """استعلام عدد الأجزاء/الفصول المنشورة حالياً في قصة واتباد عبر API المباشر."""
+        """
+        استعلام أحدث رقم فصل منشور فعلياً في قصة واتباد:
+        يستخرج الأرقام الحقيقية من عناوين الأجزاء بدلاً من الاعتماد على طول المصفوفة (len).
+        """
         clean_id = str(story_id).strip()
         if "wattpad.com/story/" in clean_id:
             part = clean_id.split("wattpad.com/story/")[-1]
@@ -144,6 +208,17 @@ class WattpadClient:
             res = self.session.get(url, timeout=12)
             if res.status_code == 200:
                 parts = res.json().get("parts", [])
+                if not parts:
+                    return 0
+
+                extracted_numbers = []
+                for p in parts:
+                    num = self._extract_chapter_number_from_title(p.get("title", ""))
+                    if num is not None and num > 0:
+                        extracted_numbers.append(num)
+
+                if extracted_numbers:
+                    return max(extracted_numbers)
                 return len(parts)
         except Exception as e:
             logger.warning(f"Error fetching latest chapter count for Wattpad story {clean_id}: {e}")
@@ -152,7 +227,8 @@ class WattpadClient:
     def publish_chapter_to_story(self, story_id: str, chapter_num: int, title: str, content: str) -> Dict[str, Any]:
         """
         إضافة جزء/فصل جديد داخل قصة واتباد ونشره عبر نقطة النهاية الرسمية apiv2/newstory.
-        تأكد: draft=0, publish=1 لنشر فوري (وليس مسودة).
+        - فحص استباقي لمنع التكرار نهائياً (find_existing_part).
+        - إعادة فحص ذكية عند حدوث 500/502/504 أو Timeout لتفادي النشر المزدوج.
         """
         if not self.token and (self.username or self.password):
             self.auto_login()
@@ -161,7 +237,6 @@ class WattpadClient:
             return {"success": False, "error": "يرجى إدخال وحفظ التوكن أو بيانات الحساب في واتباد أولاً."}
 
         clean_story_id = str(story_id).strip()
-        # تنظيف إذا تم إدخال رابط قصة واتباد كامل
         if "wattpad.com/story/" in clean_story_id:
             part = clean_story_id.split("wattpad.com/story/")[-1]
             clean_story_id = part.split("-")[0].split("/")[0].split("?")[0]
@@ -170,8 +245,20 @@ class WattpadClient:
         except Exception:
             pass
 
+        # 1. فحص استباقي لمنع التكرار قبل إرسال طلب الإنشاء
+        existing_part = self.find_existing_part(clean_story_id, chapter_num)
+        if existing_part:
+            logger.info(f"[wattpad] Chapter {chapter_num} already exists in story {clean_story_id} (Part ID: {existing_part['id']}). Skipping POST.")
+            return {
+                "success": True,
+                "chapter_num": chapter_num,
+                "post_url": existing_part["url"],
+                "part_id": existing_part["id"],
+                "already_exists": True,
+                "message": f"الفصل {chapter_num} منشور مسبقاً على قصة واتباد."
+            }
+
         part_title = title.strip() or f"الفصل {chapter_num}"
-        # تنسيق المحتوى بـ HTML صحيح
         raw_text = content.strip()
         if not raw_text.startswith("<p>"):
             paras = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
@@ -181,7 +268,6 @@ class WattpadClient:
         else:
             formatted_content = raw_text
 
-        # تنظيف رمز التوكن المجرد
         pure_token = self.token
         if pure_token.lower().startswith("bearer "):
             pure_token = pure_token[7:].strip()
@@ -218,7 +304,25 @@ class WattpadClient:
             )
 
         try:
-            res = _do_post(publish_flag="1", draft_flag="0")
+            res = None
+            try:
+                res = _do_post(publish_flag="1", draft_flag="0")
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e_net:
+                # واتباد ينشئ الجزء في الخلفية أحياناً قبل انتهاء مهلة الشبكة
+                logger.warning(f"[wattpad] Network/timeout error ({e_net}). Verifying if part was created in background...")
+                import time as _t
+                _t.sleep(3)
+                verified = self.find_existing_part(clean_story_id, chapter_num)
+                if verified:
+                    return {
+                        "success": True,
+                        "chapter_num": chapter_num,
+                        "post_url": verified["url"],
+                        "part_id": verified["id"],
+                        "already_exists": True,
+                        "message": f"تم التحقق: الفصل {chapter_num} أُنشئ بنجاح في الخلفية على واتباد رغم انقطاع الاتصال."
+                    }
+                raise e_net
 
             # تجديد الجلسة تلقائياً عند انتهاء صلاحية التوكن
             if res.status_code in [401, 403]:
@@ -227,8 +331,23 @@ class WattpadClient:
                     pure_token = self.token.replace("Bearer ", "").replace("token ", "").strip()
                     res = _do_post(publish_flag="1", draft_flag="0")
 
-            # إذا أرجع سيرفر واتباد خطأ 500 في النشر الفوري، نحاول الإنشاء كمسودة ثم نشرها
-            if res.status_code == 500:
+            # فحص تلقائي عند حدوث خطأ 500/502/504 لأن واتباد ينشئ الجزء أحياناً رغم رسالة الخطأ
+            if res.status_code in [500, 502, 503, 504]:
+                logger.warning(f"[wattpad] HTTP {res.status_code} received. Checking if part was created in background...")
+                import time as _t
+                _t.sleep(3)
+                verified = self.find_existing_part(clean_story_id, chapter_num)
+                if verified:
+                    return {
+                        "success": True,
+                        "chapter_num": chapter_num,
+                        "post_url": verified["url"],
+                        "part_id": verified["id"],
+                        "already_exists": True,
+                        "message": f"تم التحقق: الفصل {chapter_num} منشور بنجاح على واتباد في الخلفية رغم استجابة {res.status_code}."
+                    }
+
+                # محاولة الإنشاء كمسودة ثم نشرها كبديل أخير
                 logger.warning("[wattpad] 500 on direct publish, retrying draft then publish fallback...")
                 res_draft = _do_post(publish_flag="0", draft_flag="1")
                 if res_draft.status_code in [200, 201]:
@@ -236,7 +355,6 @@ class WattpadClient:
                         d_data = res_draft.json()
                         p_id = d_data.get("id")
                         if p_id:
-                            # طلب تفعيل ونشر المسودة
                             pub_url = f"https://www.wattpad.com/apiv2/storypart/{p_id}/publish"
                             requests.post(pub_url, headers=_build_headers(), timeout=20)
                             res = res_draft

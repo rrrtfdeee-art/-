@@ -26,10 +26,27 @@ logger = logging.getLogger("SyndicationDaemon")
 
 _DAEMON_RUNNING = False
 _DAEMON_THREAD = None
+_CYCLE_LOCK = threading.Lock()
+_MEMORY_PUBLISH_CACHE: Dict[str, float] = {}
+
+def _make_cache_key(novel_name: str, chapter_num: int, platform: str) -> str:
+    return f"{str(novel_name).strip().lower()}::{int(chapter_num)}::{str(platform).strip().lower()}"
+
+def _is_recently_published_in_memory(novel_name: str, chapter_num: int, platform: str, ttl_hours: float = 24.0) -> bool:
+    key = _make_cache_key(novel_name, chapter_num, platform)
+    ts = _MEMORY_PUBLISH_CACHE.get(key)
+    if ts and (time.time() - ts < ttl_hours * 3600):
+        return True
+    return False
+
+def _mark_published_in_memory(novel_name: str, chapter_num: int, platform: str):
+    key = _make_cache_key(novel_name, chapter_num, platform)
+    _MEMORY_PUBLISH_CACHE[key] = time.time()
 
 def _get_platform_credentials():
     """استخراج بيانات الاعتماد من المتغيرات البيئية أولاً مع Fallback لقاعدة الإعدادات."""
-    rc_token = os.getenv("REWAYAT_CLUB_TOKEN", "").strip() or syndication_db.get_synd_setting("rewayat_token", "")
+    rc_token = os.getenv("REWAYAT_TOKEN", "").strip() or os.getenv("REWAYAT_CLUB_TOKEN", "").strip() or syndication_db.get_synd_setting("rewayat_token", "")
+    rc_user = os.getenv("REWAYAT_USERNAME", "").strip() or syndication_db.get_synd_setting("rewayat_username", "")
     wp_token = os.getenv("WATTPAD_TOKEN", "").strip() or syndication_db.get_synd_setting("wattpad_token", "")
     wp_user = os.getenv("WATTPAD_USERNAME", "").strip() or syndication_db.get_synd_setting("wattpad_username", "")
     wp_pass = os.getenv("WATTPAD_PASSWORD", "").strip() or syndication_db.get_synd_setting("wattpad_password", "")
@@ -131,6 +148,23 @@ def process_scheduled_chapters_cycle(now: float):
             if not nov:
                 continue
 
+            # 1. فحص كاش الذاكرة وسجل قاعدة البيانات لمنع أي تكرار نهائياً
+            if _is_recently_published_in_memory(n_name, target_ch, plat_target):
+                logger.info(f"[daemon] Chapter {target_ch} for {n_name} ({plat_target}) already in memory cache. Skipping.")
+                continue
+            if nov.get("id") and syndication_db.has_successful_publish_log(nov["id"], target_ch, plat_target):
+                logger.info(f"[daemon] Chapter {target_ch} for {n_name} ({plat_target}) already logged SUCCESS in DB. Skipping.")
+                syndication_db.update_chapter_schedule_status(novel_name=n_name, chapter_num=target_ch, status="PUBLISHED")
+                continue
+
+            # 2. حجز الفصل بحالة PUBLISHING قبل بدء طلبات الشبكة
+            syndication_db.update_chapter_schedule_status(novel_name=n_name, chapter_num=target_ch, status="PUBLISHING")
+            if from_supabase and item.get("id"):
+                try:
+                    supabase_db._request("PATCH", f"syndicated_chapter_schedules?id=eq.{item['id']}", data={"status": "PUBLISHING"})
+                except Exception:
+                    pass
+
             extracted = syndication_extractor.prepare_chapter_for_publishing(
                 novel_name=n_name,
                 chapter_num=target_ch,
@@ -212,6 +246,7 @@ def process_scheduled_chapters_cycle(now: float):
                         err_messages.append(str(e_wp))
 
             if success_rc or success_wp:
+                _mark_published_in_memory(n_name, target_ch, plat_target)
                 combined_url = " | ".join(filter(None, [rc_post_url, wp_post_url]))
                 if from_supabase and item.get("id"):
                     supabase_db.mark_schedule_published(item["id"], post_url=combined_url)
@@ -276,7 +311,17 @@ def process_scheduled_chapters_cycle(now: float):
             logger.error(f"Error in process_scheduled_chapters_cycle for item {item}: {ex_item}")
 
 def run_syndication_cycle():
-    """تنفيذ دورة فحص واحدة لكافة الروايات النشطة في النظام."""
+    """تنفيذ دورة فحص واحدة لكافة الروايات النشطة في النظام مع قفل تزامن لمنع التداخل."""
+    global _CYCLE_LOCK
+    if not _CYCLE_LOCK.acquire(blocking=False):
+        logger.info("[daemon] Previous syndication cycle still active. Skipping overlapping cycle.")
+        return
+    try:
+        _do_run_syndication_cycle()
+    finally:
+        _CYCLE_LOCK.release()
+
+def _do_run_syndication_cycle():
     now = time.time()
 
     # مزامنة سحابية تلقائية من Google Sheet لضمان توفر الروايات والمواعيد حتى عند ريستارت الحاوية
@@ -351,17 +396,26 @@ def run_syndication_cycle():
                 except Exception as e_wp_sync:
                     logger.warning(f"Could not live query Wattpad chapter count: {e_wp_sync}")
 
-            if live_ch is not None and live_ch != nov.get("last_synced_chapter"):
-                logger.info(f"Auto-synced last_synced_chapter for {nov['novel_name']} from live platform: {nov.get('last_synced_chapter')} -> {live_ch}")
+            current_last = int(nov.get("last_synced_chapter") or 0)
+            if live_ch is not None and live_ch > current_last:
+                logger.info(f"Auto-synced last_synced_chapter for {nov['novel_name']} ascending: {current_last} -> {live_ch}")
                 nov["last_synced_chapter"] = live_ch
                 syndication_db.save_or_update_syndicated_novel(nov)
 
-            last_ch = nov.get("last_synced_chapter", 0)
-            stop_ch = nov.get("stop_chapter", 9999)
+            last_ch = int(nov.get("last_synced_chapter") or 0)
+            stop_ch = int(nov.get("stop_chapter") or 9999)
             target_ch = last_ch + 1
 
             if target_ch > stop_ch:
                 continue  # تم بلوغ آخر فصل محدد
+
+            # فحص كاش الذاكرة وسجل قاعدة البيانات لمنع تكرار نشر الفصل ذاتياً
+            if _is_recently_published_in_memory(nov["novel_name"], target_ch, "all"):
+                logger.info(f"[daemon] Chapter {target_ch} for {nov['novel_name']} already published (memory cache). Skipping.")
+                continue
+            if nov.get("id") and syndication_db.has_successful_publish_log(nov["id"], target_ch):
+                logger.info(f"[daemon] Chapter {target_ch} for {nov['novel_name']} already logged SUCCESS in DB. Skipping.")
+                continue
 
             # 2. استخراج وتجهيز الفصل (فقط للمنصات التي تتطلب محتوى كـ نادي الروايات وواتباد)
             extracted = {}
@@ -523,6 +577,7 @@ def run_syndication_cycle():
 
             # 6. إذا تم النشر بنجاح على منصة واحدة على الأقل
             if success_rc or success_wp or success_nu:
+                _mark_published_in_memory(nov["novel_name"], target_ch, "all")
                 nov["last_synced_chapter"] = target_ch
                 daily_list = []
                 if nov.get("daily_times"):

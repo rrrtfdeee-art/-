@@ -8,6 +8,7 @@ rewayat_club_api.py — وسيط النشر والتفاعل الرسمي مع �
 - Header: Authorization: Token {token_hex}
 """
 
+import os
 import requests
 import logging
 from typing import Dict, Any, Optional
@@ -25,8 +26,8 @@ DEFAULT_HEADERS = {
 
 class RewayatClubClient:
     def __init__(self, token: str = "", username: str = "", password: str = ""):
-        self.token = token.strip()
-        self.username = username.strip()
+        self.token = token.strip() or os.getenv("REWAYAT_TOKEN", "").strip() or os.getenv("REWAYAT_CLUB_TOKEN", "").strip()
+        self.username = username.strip() or os.getenv("REWAYAT_USERNAME", "").strip()
         self.session = requests.Session()
         self.session.headers.update(DEFAULT_HEADERS)
         if self.token:
@@ -63,10 +64,47 @@ class RewayatClubClient:
         except Exception as e:
             return {"success": False, "message": f"خطأ اتصال: {str(e)}"}
 
+    def chapter_exists(self, novel_id: str, chapter_num: int) -> bool:
+        """
+        التحقق الصارم مما إذا كان الفصل موجوداً مسبقاً على نادي الروايات لتفادي التكرار.
+        """
+        clean_slug = str(novel_id).strip()
+        if "rewayat.club/novel/" in clean_slug:
+            clean_slug = clean_slug.split("rewayat.club/novel/")[-1].split("/")[0].split("?")[0]
+        clean_slug = clean_slug.rstrip("/")
+
+        # 1. فحص عبر API
+        try:
+            chk_url = f"{BASE_API_URL}/chapters/{clean_slug}/?number={chapter_num}"
+            res = self.session.get(chk_url, timeout=8)
+            if res.status_code == 200:
+                data = res.json()
+                results = data.get("results", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                for item in results:
+                    try:
+                        if int(item.get("number")) == int(chapter_num):
+                            return True
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # 2. فحص عبر الويب المباشر
+        try:
+            web_url = f"{BASE_WEB_URL}/novel/{clean_slug}/{chapter_num}"
+            res_web = self.session.get(web_url, timeout=8)
+            if res_web.status_code == 200 and "404" not in res_web.text[:500]:
+                return True
+        except Exception:
+            pass
+
+        return False
+
     def publish_chapter(self, novel_id: str, chapter_num: int, title: str, content: str, schedule_date: Optional[str] = None) -> Dict[str, Any]:
         """
         نشر الفصل عبر الـ API الرسمي المطابق 100% لواجهة نادي الروايات:
         POST /api/chapters/{slug}/create/
+        مع فحص استباقي لمنع التكرار (chapter_exists).
         """
         if not self.token:
             return {"success": False, "error": "يرجى إدخال وحفظ التوكن (Token) أولاً."}
@@ -76,6 +114,18 @@ class RewayatClubClient:
         if "rewayat.club/novel/" in clean_slug:
             clean_slug = clean_slug.split("rewayat.club/novel/")[-1].split("/")[0].split("?")[0]
         clean_slug = clean_slug.rstrip("/")
+
+        # 1. فحص مسبق: إذا كان الفصل موجوداً بالفعل لا نرسل طلب إنشاء
+        if self.chapter_exists(clean_slug, chapter_num):
+            live_url = f"{BASE_WEB_URL}/novel/{clean_slug}/{chapter_num}"
+            logger.info(f"[rewayat] Chapter {chapter_num} already exists for {clean_slug}. Skipping POST.")
+            return {
+                "success": True,
+                "chapter_num": chapter_num,
+                "post_url": live_url,
+                "already_exists": True,
+                "message": f"الفصل {chapter_num} منشور مسبقاً على نادي الروايات."
+            }
 
         endpoint = f"{BASE_API_URL}/chapters/{clean_slug}/create/"
 
@@ -87,7 +137,6 @@ class RewayatClubClient:
         else:
             formatted_content = raw_text
 
-        # تجهيز FormData مطابق للـ Nuxt implementation
         form_data = {
             "number": str(chapter_num),
             "title": str(title).strip(),
@@ -97,7 +146,6 @@ class RewayatClubClient:
             form_data["date"] = schedule_date
 
         try:
-            # نمرر data=form_data بدون تحديد يدوي للـ boundary ليتولى requests تجهيز multipart/form-data
             res = self.session.post(endpoint, data=form_data, timeout=25)
             
             if res.status_code in [200, 201]:
@@ -134,20 +182,28 @@ class RewayatClubClient:
             return {"success": False, "error": f"استثناء أثناء محاولة النشر: {str(e)}"}
 
     def get_latest_chapter_number(self, novel_id: str, baseline_hint: int = 0) -> Optional[int]:
-        """استعلام أحدث رقم فصل منشور على نادي الروايات في السلسلة المتصلة الحقيقية مع تجاهل أي فصول شاذة."""
+        """
+        استعلام أحدث رقم فصل منشور على نادي الروايات:
+        يدعم تصفح كل صفحات الفصول (Pagination حتى 2000+ فصل) لمنع تراجع رقم آخر فصل في الروايات الطويلة.
+        """
         clean_slug = novel_id.strip()
         if "rewayat.club/novel/" in clean_slug:
             clean_slug = clean_slug.split("rewayat.club/novel/")[-1].split("/")[0].split("?")[0]
         clean_slug = clean_slug.rstrip("/")
 
         endpoint = f"{BASE_API_URL}/chapters/{clean_slug}/?limit=100"
-        try:
-            res = self.session.get(endpoint, timeout=12)
-            if res.status_code == 200:
+        valid_nums = []
+        page = 1
+        max_pages = 25  # يدعم حتى 2500 فصل (25 * 100)
+
+        while endpoint and page <= max_pages:
+            try:
+                res = self.session.get(endpoint, timeout=12)
+                if res.status_code != 200:
+                    break
                 data = res.json()
-                results = data.get("results", [])
+                results = data.get("results", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
                 if results:
-                    valid_nums = []
                     for item in results:
                         try:
                             n = int(item.get("number"))
@@ -155,21 +211,24 @@ class RewayatClubClient:
                                 valid_nums.append(n)
                         except Exception:
                             pass
-                    if valid_nums:
-                        sorted_nums = sorted(set(valid_nums))
-                        valid_max = sorted_nums[0]
-                        for i in range(1, len(sorted_nums)):
-                            curr = sorted_nums[i]
-                            prev = sorted_nums[i-1]
-                            if curr - prev <= 5:
-                                valid_max = curr
-                            else:
-                                # قفزة شاذة غير متصلة (مثل القفزة الفجائية من 27 إلى 103)
-                                if baseline_hint > 0 and curr <= baseline_hint:
-                                    valid_max = curr
-                                    continue
-                                break
-                        return valid_max
-        except Exception as e:
-            logger.warning(f"Error fetching latest chapter for {clean_slug}: {e}")
+                endpoint = data.get("next") if isinstance(data, dict) else None
+                page += 1
+            except Exception as e:
+                logger.warning(f"Error fetching page {page} for {clean_slug}: {e}")
+                break
+
+        if valid_nums:
+            sorted_nums = sorted(set(valid_nums))
+            valid_max = sorted_nums[0]
+            for i in range(1, len(sorted_nums)):
+                curr = sorted_nums[i]
+                prev = sorted_nums[i-1]
+                if curr - prev <= 5:
+                    valid_max = curr
+                else:
+                    if baseline_hint > 0 and curr <= baseline_hint:
+                        valid_max = curr
+                        continue
+                    break
+            return valid_max
         return None

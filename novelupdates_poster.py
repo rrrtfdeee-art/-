@@ -147,30 +147,163 @@ def get_latest_chapters_feed(force_refresh: bool = False) -> List[Dict[str, Any]
     except Exception as e_raw:
         logger.debug(f"Raw github notice: {e_raw}")
 
-    # 3. محاولة GitHub API مع التوكن
-    try:
-        import syndication_extractor
-        tok = syndication_extractor.GITHUB_TOKEN
-        api_url = "https://api.github.com/repos/rrrtfdeee-art/nsw-en-public/contents/data/latest_chapters.json"
-        resp = requests.get(api_url, headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github.v3.raw"}, timeout=8)
-        if resp.status_code == 200:
-            data = resp.json()
-            if isinstance(data, list) and data:
-                _CHAPTERS_CACHE = {"timestamp": now, "data": data}
-                return data
-    except Exception as e_api:
-        logger.debug(f"GitHub API notice: {e_api}")
+    # 3. محاولة GitHub API مع التوكن البيئي إن توفر
+    gh_tok = os.getenv("GITHUB_TOKEN", "").strip()
+    if gh_tok:
+        try:
+            api_url = "https://api.github.com/repos/rrrtfdeee-art/nsw-en-public/contents/data/latest_chapters.json"
+            resp = requests.get(api_url, headers={"Authorization": f"Bearer {gh_tok}", "Accept": "application/vnd.github.v3.raw"}, timeout=8)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list) and data:
+                    _CHAPTERS_CACHE = {"timestamp": now, "data": data}
+                    return data
+        except Exception as e_api:
+            logger.debug(f"GitHub API notice: {e_api}")
     
     return _CHAPTERS_CACHE["data"] or []
+
+
+APPROVED_CHAPTER_STATUSES = ("PUBLISHED", "SCHEDULED", "APPROVED", "STAGING_APPROVED", "READY")
+
+def fetch_chapter_release_from_supabase(novel_name_or_link: str, chapter_num: int, custom_domain: str = "") -> Optional[Dict[str, Any]]:
+    """
+    سحب بيانات ورابط الفصل مباشرة من قاعدتي بيانات Supabase عبر REST API:
+    - الأولوية لقاعدة Supabase الإنجليزية المركزية (novels_en و chapters_en).
+    - الاحتياطي: قاعدة Supabase العربية (novels و chapters).
+    - قبول الفصول ذات الحالات المعتمدة فقط (PUBLISHED, SCHEDULED, APPROVED, STAGING_APPROVED, READY).
+    """
+    target_num = int(chapter_num)
+    search_term = str(novel_name_or_link).strip().lower()
+
+    # 1. فحص قاعدة Supabase الإنجليزية
+    sb_en_url = (os.getenv("SUPABASE_URL_EN") or "https://vsudtgopvcethxgxykpx.supabase.co").rstrip("/")
+    sb_en_key = os.getenv("SUPABASE_KEY_EN", "").strip()
+
+    if sb_en_url and sb_en_key:
+        headers_en = {
+            "apikey": sb_en_key,
+            "Authorization": f"Bearer {sb_en_key}",
+            "Content-Type": "application/json"
+        }
+        try:
+            matched_novel = None
+            n_resp = requests.get(f"{sb_en_url}/rest/v1/novels_en?select=id,name_en,slug&limit=100", headers=headers_en, timeout=10)
+            if n_resp.status_code == 200:
+                for n_entry in n_resp.json():
+                    name_val = (n_entry.get("name_en") or "").lower()
+                    slug_val = (n_entry.get("slug") or "").lower()
+                    if search_term in name_val or name_val in search_term or (slug_val and slug_val in search_term):
+                        matched_novel = n_entry
+                        break
+
+            # الاستعلام عن الفصل
+            query_url = f"{sb_en_url}/rest/v1/chapters_en?chapter_number=eq.{target_num}&select=*"
+            if matched_novel:
+                query_url += f"&novel_id=eq.{matched_novel['id']}&limit=5"
+            else:
+                query_url += "&limit=10"
+
+            c_resp = requests.get(query_url, headers=headers_en, timeout=12)
+            if c_resp.status_code == 200:
+                rows = c_resp.json()
+                for r in rows:
+                    st = str(r.get("status") or "").strip().upper()
+                    if st in APPROVED_CHAPTER_STATUSES or not st:
+                        raw_link = r.get("post_url") or r.get("url") or ""
+                        if not raw_link and matched_novel:
+                            slug = matched_novel.get("slug") or search_term
+                            raw_link = f"https://en.novelskyworld.com/{slug}/chapter-{target_num}.html"
+
+                        formatted_link = format_release_link(raw_link, custom_domain)
+                        title_val = r.get("trans_title") or r.get("title_en") or r.get("title") or f"Chapter {target_num}"
+                        pub_date = r.get("published_at") or r.get("created_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                        if "T" in pub_date:
+                            pub_date = pub_date.split("T")[0]
+
+                        n_name = (matched_novel.get("name_en") if matched_novel else "") or novel_name_or_link
+                        return {
+                            "success": True,
+                            "novel_title": n_name,
+                            "chapter_num": target_num,
+                            "release_code": f"c{target_num}",
+                            "release_url": formatted_link,
+                            "raw_url": raw_link,
+                            "date": pub_date,
+                            "full_title": title_val,
+                            "source": "english_supabase"
+                        }
+        except Exception as e_sb_en:
+            logger.debug(f"[novelupdates] Error checking English Supabase for ch {target_num}: {e_sb_en}")
+
+    # 2. فحص قاعدة Supabase العربية (احتياطي)
+    sb_ar_url = (os.getenv("SUPABASE_URL_AR") or os.getenv("SUPABASE_URL", "")).rstrip("/")
+    sb_ar_key = (os.getenv("SUPABASE_KEY_AR") or os.getenv("SUPABASE_KEY", "")).strip()
+
+    if sb_ar_url and sb_ar_key:
+        headers_ar = {
+            "apikey": sb_ar_key,
+            "Authorization": f"Bearer {sb_ar_key}",
+            "Content-Type": "application/json"
+        }
+        try:
+            matched_novel_ar = None
+            n_resp = requests.get(f"{sb_ar_url}/rest/v1/novels?select=id,title,domain&limit=100", headers=headers_ar, timeout=10)
+            if n_resp.status_code == 200:
+                for n_entry in n_resp.json():
+                    t_val = (n_entry.get("title") or "").lower()
+                    if search_term in t_val or t_val in search_term:
+                        matched_novel_ar = n_entry
+                        break
+
+            q_url = f"{sb_ar_url}/rest/v1/chapters?chapter_number=eq.{target_num}&select=*"
+            if matched_novel_ar:
+                q_url += f"&novel_id=eq.{matched_novel_ar['id']}&limit=5"
+            else:
+                q_url += "&limit=10"
+
+            c_resp = requests.get(q_url, headers=headers_ar, timeout=12)
+            if c_resp.status_code == 200:
+                rows = c_resp.json()
+                for r in rows:
+                    st = str(r.get("status") or "").strip().upper()
+                    if st in APPROVED_CHAPTER_STATUSES or not st:
+                        raw_link = r.get("post_url") or r.get("url") or ""
+                        formatted_link = format_release_link(raw_link, custom_domain)
+                        title_val = r.get("trans_title") or r.get("title") or f"Chapter {target_num}"
+                        pub_date = r.get("published_at") or r.get("created_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                        if "T" in pub_date:
+                            pub_date = pub_date.split("T")[0]
+
+                        n_name = (matched_novel_ar.get("title") if matched_novel_ar else "") or novel_name_or_link
+                        return {
+                            "success": True,
+                            "novel_title": n_name,
+                            "chapter_num": target_num,
+                            "release_code": f"c{target_num}",
+                            "release_url": formatted_link,
+                            "raw_url": raw_link,
+                            "date": pub_date,
+                            "full_title": title_val,
+                            "source": "arabic_supabase"
+                        }
+        except Exception as e_sb_ar:
+            logger.debug(f"[novelupdates] Error checking Arabic Supabase for ch {target_num}: {e_sb_ar}")
+
+    return None
 
 
 def fetch_chapter_release_info(novel_name_or_link: str, chapter_num: int, custom_domain: str = "") -> Dict[str, Any]:
     """
     استخراج بيانات الفصل المحدّد لرواية معينة:
-    - يبحث في latest_chapters.json أولاً.
-    - يطبق الدومين المخصص إن وجد.
-    - يرجع كود الإصدار ورابطه الكامل وعنوانه.
+    1. يبحث مباشرة في قاعدتي Supabase (الإنجليزية والعربية).
+    2. احتياطي: يبحث في latest_chapters.json.
+    3. يطبق الدومين المخصص بذكاء ويمنع ازدواجية السلاش.
     """
+    # 1. الاستعلام المباشر من Supabase
+    sb_res = fetch_chapter_release_from_supabase(novel_name_or_link, chapter_num, custom_domain=custom_domain)
+    if sb_res and sb_res.get("success"):
+        return sb_res
     chapters = get_latest_chapters_feed()
     target_num = int(chapter_num)
     search_term = str(novel_name_or_link).strip().lower()

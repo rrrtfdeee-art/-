@@ -586,6 +586,49 @@ def log_syndication_event(novel_id: int, chapter_num: int, platform: str, status
             pass
     threading.Thread(target=_deferred_log, daemon=True).start()
 
+def has_successful_publish_log(novel_id: int, chapter_num: int, platform: str = "") -> bool:
+    """فحص قاعدة البيانات للتأكد مما إذا كان هذا الفصل قد نُشر بنجاح مسبقاً (قفل منع التكرار)."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    if platform and platform != "all":
+        cur.execute(
+            "SELECT 1 FROM syndication_logs WHERE novel_id = ? AND chapter_num = ? AND platform = ? AND status = 'SUCCESS' LIMIT 1",
+            (novel_id, int(chapter_num), platform)
+        )
+    else:
+        cur.execute(
+            "SELECT 1 FROM syndication_logs WHERE novel_id = ? AND chapter_num = ? AND status = 'SUCCESS' LIMIT 1",
+            (novel_id, int(chapter_num))
+        )
+    row = cur.fetchone()
+    conn.close()
+    return bool(row)
+
+def has_successful_publish_log_by_name(novel_name: str, chapter_num: int, platform: str = "") -> bool:
+    """فحص سجلات النشر الناجحة باسم الرواية ورقم الفصل."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ?", (novel_name.strip(),))
+    nov_rows = cur.fetchall()
+    if not nov_rows:
+        conn.close()
+        return False
+    nov_ids = [r["id"] for r in nov_rows]
+    placeholders = ",".join("?" for _ in nov_ids)
+    if platform and platform != "all":
+        cur.execute(
+            f"SELECT 1 FROM syndication_logs WHERE novel_id IN ({placeholders}) AND chapter_num = ? AND platform = ? AND status = 'SUCCESS' LIMIT 1",
+            (*nov_ids, int(chapter_num), platform)
+        )
+    else:
+        cur.execute(
+            f"SELECT 1 FROM syndication_logs WHERE novel_id IN ({placeholders}) AND chapter_num = ? AND status = 'SUCCESS' LIMIT 1",
+            (*nov_ids, int(chapter_num))
+        )
+    row = cur.fetchone()
+    conn.close()
+    return bool(row)
+
 def get_recent_syndication_logs(novel_id: Optional[int] = None, limit: int = 50) -> List[Dict[str, Any]]:
     conn = _get_conn()
     cur = conn.cursor()
@@ -617,7 +660,10 @@ _CREDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ga_crede
 GAS_WEBAPP_URL = os.getenv("NSW_GAS_WEBAPP_URL") or "https://script.google.com/macros/s/AKfycby9_FzjhGalNqbG3ywOZUmpaatdDXd9XH1XMpEvwqv4MO_Pf2vnKroof5gsI3Bxjhkf_Q/exec"
 
 def get_schedule_spreadsheet_id() -> str:
-    """الحصول على معرف شيت الجدولة السحابي المعتمد من الإعدادات أو الافتراضي."""
+    """الحصول على معرف شيت الجدولة السحابي المعتمد من المتغيرات البيئية أولاً كأولوية قصوى ثم الإعدادات."""
+    env_ssid = os.getenv("SCHEDULE_SPREADSHEET_ID", "").strip()
+    if env_ssid:
+        return env_ssid
     return get_synd_setting("schedule_spreadsheet_id", DEFAULT_SCHEDULE_SPREADSHEET_ID).strip() or DEFAULT_SCHEDULE_SPREADSHEET_ID
 
 def set_schedule_spreadsheet_id(ssid: str):
@@ -981,21 +1027,24 @@ def sync_novels_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, An
         # فحص هل الرواية موجودة بالفعل — المطابقة الصارمة بالمعرف + الاسم لمنع التداخل بين سجلات نفس الرواية على منصات مختلفة
         existing = None
         if r_id:
-            cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND rewayat_novel_id = ?", (n_name, r_id))
+            cur.execute("SELECT id, last_synced_chapter FROM syndicated_novels WHERE novel_name = ? AND rewayat_novel_id = ?", (n_name, r_id))
             existing = cur.fetchone()
         if not existing and w_id:
-            cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND (wattpad_story_id = ? OR wattpad_story_id = ?)", (n_name, w_id, w_id + ".0"))
+            cur.execute("SELECT id, last_synced_chapter FROM syndicated_novels WHERE novel_name = ? AND (wattpad_story_id = ? OR wattpad_story_id = ?)", (n_name, w_id, w_id + ".0"))
             existing = cur.fetchone()
         if not existing:
             # مطابقة بالمنصة إذا لم تتوفر معرفات دقيقة
             if r_enabled and not w_enabled:
-                cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND rewayat_enabled = 1", (n_name,))
+                cur.execute("SELECT id, last_synced_chapter FROM syndicated_novels WHERE novel_name = ? AND rewayat_enabled = 1", (n_name,))
                 existing = cur.fetchone()
             elif w_enabled and not r_enabled:
-                cur.execute("SELECT id FROM syndicated_novels WHERE novel_name = ? AND wattpad_enabled = 1", (n_name,))
+                cur.execute("SELECT id, last_synced_chapter FROM syndicated_novels WHERE novel_name = ? AND wattpad_enabled = 1", (n_name,))
                 existing = cur.fetchone()
         
         if existing:
+            # تحديث تصاعدي فقط للعداد: لا نسمح لشيت الإعدادات بإنقاص عداد الفصول المنجزة
+            current_last = int(existing["last_synced_chapter"] or 0)
+            new_last = max(current_last, last_ch)
             cur.execute("""
             UPDATE syndicated_novels SET
                 blogger_url = ?, blogger_label = ?,
@@ -1006,7 +1055,7 @@ def sync_novels_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, An
             WHERE id = ?
             """, (
                 b_url, b_label, r_enabled, r_id, r_url,
-                w_enabled, w_id, w_url, start_ch, last_ch, stop_ch,
+                w_enabled, w_id, w_url, start_ch, new_last, stop_ch,
                 interval_h, next_run, custom_cta, daily_times, is_active, existing["id"]
             ))
         else:
@@ -1286,11 +1335,21 @@ def sync_schedule_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, 
             sch_ts = 0.0
 
         cur.execute("""
-        SELECT id, status FROM syndicated_chapter_schedules 
+        SELECT id, status, published_at, post_url FROM syndicated_chapter_schedules 
         WHERE novel_name = ? AND platform = ? AND chapter_num = ?
         """, (n_name, plat, ch_num))
         exist_sch = cur.fetchone()
         if exist_sch:
+            # منع التراجع: إذا كان الفصل منشوراً أو قيد النشر محلياً والشيت يحمل PENDING لا نرجعه إلى PENDING
+            curr_db_status = str(exist_sch["status"] or "").strip().upper()
+            if curr_db_status in ("PUBLISHED", "PUBLISHING") and stat == "PENDING":
+                final_stat = curr_db_status
+            else:
+                final_stat = stat
+
+            final_pub_at = pub_at or (exist_sch["published_at"] if curr_db_status == "PUBLISHED" else "")
+            final_p_url = p_url or (exist_sch["post_url"] if curr_db_status == "PUBLISHED" else "")
+
             cur.execute("""
             UPDATE syndicated_chapter_schedules SET
                 scheduled_time = ?,
@@ -1301,7 +1360,7 @@ def sync_schedule_from_sheet(spreadsheet_id: Optional[str] = None) -> Dict[str, 
                 period_range = ?,
                 last_error = ?
             WHERE id = ?
-            """, (sch_time_str, sch_ts, stat, pub_at, p_url, p_range, l_err, exist_sch["id"]))
+            """, (sch_time_str, sch_ts, final_stat, final_pub_at, final_p_url, p_range, l_err, exist_sch["id"]))
         else:
             cur.execute("""
             INSERT INTO syndicated_chapter_schedules (

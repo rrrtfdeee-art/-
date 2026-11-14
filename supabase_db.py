@@ -37,17 +37,31 @@ def _load_env():
 
 _load_env()
 
-# استخراج إعدادات Supabase من المتغيرات البيئية
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or os.getenv("SUPABASE_ANON_KEY", "")
+# استخراج إعدادات Supabase من المتغيرات البيئية (العربية المركزية)
+SUPABASE_URL = (os.getenv("SUPABASE_URL_AR") or os.getenv("SUPABASE_URL", "")).rstrip("/")
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_KEY_AR") or
+    os.getenv("SUPABASE_KEY", "") or
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or
+    os.getenv("SUPABASE_ANON_KEY", "")
+)
+
+# إعدادات Supabase الإنجليزية
+SUPABASE_URL_EN = os.getenv("SUPABASE_URL_EN", "").rstrip("/")
+SUPABASE_KEY_EN = os.getenv("SUPABASE_KEY_EN", "")
 
 def is_configured() -> bool:
     """التحقق من توفر رابط ومفتاح Supabase في المتغيرات البيئية."""
     global SUPABASE_URL, SUPABASE_KEY
     if not (SUPABASE_URL and SUPABASE_KEY):
         _load_env()
-        SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-        SUPABASE_KEY = os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or os.getenv("SUPABASE_ANON_KEY", "")
+        SUPABASE_URL = (os.getenv("SUPABASE_URL_AR") or os.getenv("SUPABASE_URL", "")).rstrip("/")
+        SUPABASE_KEY = (
+            os.getenv("SUPABASE_KEY_AR") or
+            os.getenv("SUPABASE_KEY", "") or
+            os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or
+            os.getenv("SUPABASE_ANON_KEY", "")
+        )
     return bool(SUPABASE_URL and SUPABASE_KEY)
 
 def _get_headers() -> Dict[str, str]:

@@ -59,15 +59,10 @@ def _load_env():
 
 _load_env()
 
-_p1 = "ghp_gfKOQZ868yw"
-_p2 = "9uCWHH5ZJd5rLzZzito1ORa9d"
-_s1 = "sb_secret_RSKsq1WMjgZ"
-_s2 = "NFDFH0Wu3nQ_YydUcF1k"
-
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") or (_p1 + _p2)
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 GITHUB_PRIVATE_REPO = os.getenv("GITHUB_BACKUP_REPO", "rrrtfdeee-art/back")
-SUPABASE_URL = (os.getenv("SUPABASE_URL") or "https://pyoxhjxdpvbqnacuihxi.supabase.co").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or (_s1 + _s2)
+SUPABASE_URL = (os.getenv("SUPABASE_URL_AR") or os.getenv("SUPABASE_URL", "https://pyoxhjxdpvbqnacuihxi.supabase.co")).rstrip("/")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY_AR") or os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 NOVELS = [
     {"id": 1, "name_ar": "After Severing Ties",                                "slug": "severing-ties"},
