@@ -1410,8 +1410,8 @@ function handleSaveSyndLog(req) {
  * تستخدم muteHttpExceptions لمنع أي خطأ أثناء إقلاع السيرفر البارد (Cold Boot).
  */
 function wakeRenderServer() {
-  var renderHealthUrl = "https://2-yqmt.onrender.com/_stcore/health";
-  var renderMainUrl = "https://2-yqmt.onrender.com/";
+  var renderHealthUrl = "https://opz6iomely.onrender.com/_stcore/health";
+  var renderMainUrl = "https://opz6iomely.onrender.com/";
   var options = {
     "method": "get",
     "headers": {
