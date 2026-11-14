@@ -188,51 +188,58 @@ def fetch_chapter_release_from_supabase(novel_name_or_link: str, chapter_num: in
         }
         try:
             matched_novel = None
-            n_resp = requests.get(f"{sb_en_url}/rest/v1/novels_en?select=id,name_en,slug&limit=100", headers=headers_en, timeout=10)
+            n_resp = requests.get(f"{sb_en_url}/rest/v1/novels_en?select=id,name_en,slug,name_original,custom_rules&limit=100", headers=headers_en, timeout=10)
             if n_resp.status_code == 200:
                 for n_entry in n_resp.json():
                     name_val = (n_entry.get("name_en") or "").lower()
                     slug_val = (n_entry.get("slug") or "").lower()
-                    if search_term in name_val or name_val in search_term or (slug_val and slug_val in search_term):
+                    name_orig = (n_entry.get("name_original") or "").lower()
+                    cr = {}
+                    try:
+                        cr = json.loads(n_entry.get("custom_rules") or "{}") if isinstance(n_entry.get("custom_rules"), str) else (n_entry.get("custom_rules") or {})
+                    except Exception:
+                        cr = {}
+                    sort_order = str(cr.get("sort_order") or "")
+
+                    if search_term in (str(n_entry.get("id")), sort_order) or \
+                       search_term in name_val or name_val in search_term or \
+                       (slug_val and (slug_val in search_term or search_term in slug_val)) or \
+                       (name_orig and (name_orig in search_term or search_term in name_orig)):
                         matched_novel = n_entry
                         break
 
-            # الاستعلام عن الفصل
-            query_url = f"{sb_en_url}/rest/v1/chapters_en?chapter_number=eq.{target_num}&select=*"
             if matched_novel:
-                query_url += f"&novel_id=eq.{matched_novel['id']}&limit=5"
-            else:
-                query_url += "&limit=10"
+                # الاستعلام عن الفصل حصراً باستخدام novel_id
+                query_url = f"{sb_en_url}/rest/v1/chapters_en?novel_id=eq.{matched_novel['id']}&chapter_number=eq.{target_num}&select=*&limit=5"
+                c_resp = requests.get(query_url, headers=headers_en, timeout=12)
+                if c_resp.status_code == 200:
+                    rows = c_resp.json()
+                    for r in rows:
+                        st = str(r.get("status") or "").strip().upper()
+                        if st in APPROVED_CHAPTER_STATUSES or not st:
+                            raw_link = r.get("post_url") or r.get("url") or ""
+                            if not raw_link and matched_novel:
+                                slug = matched_novel.get("slug") or search_term
+                                raw_link = f"https://en.novelskyworld.com/{slug}/chapter-{target_num}.html"
 
-            c_resp = requests.get(query_url, headers=headers_en, timeout=12)
-            if c_resp.status_code == 200:
-                rows = c_resp.json()
-                for r in rows:
-                    st = str(r.get("status") or "").strip().upper()
-                    if st in APPROVED_CHAPTER_STATUSES or not st:
-                        raw_link = r.get("post_url") or r.get("url") or ""
-                        if not raw_link and matched_novel:
-                            slug = matched_novel.get("slug") or search_term
-                            raw_link = f"https://en.novelskyworld.com/{slug}/chapter-{target_num}.html"
+                            formatted_link = format_release_link(raw_link, custom_domain)
+                            title_val = r.get("trans_title") or r.get("title_en") or r.get("title") or f"Chapter {target_num}"
+                            pub_date = r.get("published_at") or r.get("created_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                            if "T" in pub_date:
+                                pub_date = pub_date.split("T")[0]
 
-                        formatted_link = format_release_link(raw_link, custom_domain)
-                        title_val = r.get("trans_title") or r.get("title_en") or r.get("title") or f"Chapter {target_num}"
-                        pub_date = r.get("published_at") or r.get("created_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                        if "T" in pub_date:
-                            pub_date = pub_date.split("T")[0]
-
-                        n_name = (matched_novel.get("name_en") if matched_novel else "") or novel_name_or_link
-                        return {
-                            "success": True,
-                            "novel_title": n_name,
-                            "chapter_num": target_num,
-                            "release_code": f"c{target_num}",
-                            "release_url": formatted_link,
-                            "raw_url": raw_link,
-                            "date": pub_date,
-                            "full_title": title_val,
-                            "source": "english_supabase"
-                        }
+                            n_name = (matched_novel.get("name_en") if matched_novel else "") or novel_name_or_link
+                            return {
+                                "success": True,
+                                "novel_title": n_name,
+                                "chapter_num": target_num,
+                                "release_code": f"c{target_num}",
+                                "release_url": formatted_link,
+                                "raw_url": raw_link,
+                                "date": pub_date,
+                                "full_title": title_val,
+                                "source": "english_supabase"
+                            }
         except Exception as e_sb_en:
             logger.debug(f"[novelupdates] Error checking English Supabase for ch {target_num}: {e_sb_en}")
 
@@ -248,41 +255,52 @@ def fetch_chapter_release_from_supabase(novel_name_or_link: str, chapter_num: in
         }
         try:
             matched_novel_ar = None
-            n_resp = requests.get(f"{sb_ar_url}/rest/v1/novels?select=id,title,domain&limit=100", headers=headers_ar, timeout=10)
+            n_resp = requests.get(f"{sb_ar_url}/rest/v1/novels?select=id,name_ar,slug,name_original,custom_rules&limit=100", headers=headers_ar, timeout=10)
             if n_resp.status_code == 200:
                 for n_entry in n_resp.json():
-                    t_val = (n_entry.get("title") or "").lower()
-                    if search_term in t_val or t_val in search_term:
+                    name_ar = (n_entry.get("name_ar") or "").lower()
+                    slug_val = (n_entry.get("slug") or "").lower()
+                    name_orig = (n_entry.get("name_original") or "").lower()
+                    cr = {}
+                    try:
+                        cr = json.loads(n_entry.get("custom_rules") or "{}") if isinstance(n_entry.get("custom_rules"), str) else (n_entry.get("custom_rules") or {})
+                    except Exception:
+                        cr = {}
+                    title_en = (cr.get("title_en") or "").lower()
+                    sort_order = str(cr.get("sort_order") or "")
+
+                    if search_term in (str(n_entry.get("id")), sort_order) or \
+                       search_term in name_ar or name_ar in search_term or \
+                       (title_en and (search_term in title_en or title_en in search_term)) or \
+                       (slug_val and (slug_val in search_term or search_term in slug_val)) or \
+                       (name_orig and (name_orig in search_term or search_term in name_orig)):
                         matched_novel_ar = n_entry
                         break
 
-            q_url = f"{sb_ar_url}/rest/v1/chapters?chapter_number=eq.{target_num}&select=*"
             if matched_novel_ar:
-                q_url += f"&novel_id=eq.{matched_novel_ar['id']}&limit=5"
-            else:
-                q_url += "&limit=10"
+                # الاستعلام عن الفصل حصراً باستخدام novel_id المطابق
+                q_url = f"{sb_ar_url}/rest/v1/chapters?novel_id=eq.{matched_novel_ar['id']}&chapter_number=eq.{target_num}&select=*&limit=5"
+                c_resp = requests.get(q_url, headers=headers_ar, timeout=12)
+                if c_resp.status_code == 200:
+                    rows = c_resp.json()
+                    for r in rows:
+                        st = str(r.get("status") or "").strip().upper()
+                        if st in APPROVED_CHAPTER_STATUSES or not st:
+                            raw_link = r.get("post_url") or r.get("url") or ""
+                            formatted_link = format_release_link(raw_link, custom_domain)
+                            title_val = r.get("trans_title") or r.get("title") or f"Chapter {target_num}"
+                            pub_date = r.get("published_at") or r.get("created_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                            if "T" in pub_date:
+                                pub_date = pub_date.split("T")[0]
 
-            c_resp = requests.get(q_url, headers=headers_ar, timeout=12)
-            if c_resp.status_code == 200:
-                rows = c_resp.json()
-                for r in rows:
-                    st = str(r.get("status") or "").strip().upper()
-                    if st in APPROVED_CHAPTER_STATUSES or not st:
-                        raw_link = r.get("post_url") or r.get("url") or ""
-                        formatted_link = format_release_link(raw_link, custom_domain)
-                        title_val = r.get("trans_title") or r.get("title") or f"Chapter {target_num}"
-                        pub_date = r.get("published_at") or r.get("created_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                        if "T" in pub_date:
-                            pub_date = pub_date.split("T")[0]
-
-                        n_name = (matched_novel_ar.get("title") if matched_novel_ar else "") or novel_name_or_link
-                        return {
-                            "success": True,
-                            "novel_title": n_name,
-                            "chapter_num": target_num,
-                            "release_code": f"c{target_num}",
-                            "release_url": formatted_link,
-                            "raw_url": raw_link,
+                            n_name = (matched_novel_ar.get("name_ar") or matched_novel_ar.get("slug") if matched_novel_ar else "") or novel_name_or_link
+                            return {
+                                "success": True,
+                                "novel_title": n_name,
+                                "chapter_num": target_num,
+                                "release_code": f"c{target_num}",
+                                "release_url": formatted_link,
+                                "raw_url": raw_link,
                             "date": pub_date,
                             "full_title": title_val,
                             "source": "arabic_supabase"

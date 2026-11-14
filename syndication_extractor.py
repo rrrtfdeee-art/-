@@ -50,19 +50,63 @@ SUPABASE_KEY_EN = os.getenv("SUPABASE_KEY_EN", "")
 APPROVED_CHAPTER_STATUSES = ("PUBLISHED", "SCHEDULED", "APPROVED", "STAGING_APPROVED", "READY")
 
 NOVEL_NAME_MAPPINGS = {
+    # 1. After Severing Ties
     "after severing ties": "After Severing Ties",
     "severing-ties": "After Severing Ties",
-    "when the entire sect read my thoughts": "When the Entire Sect Read My Thoughts, the Plot Went Off the Rails",
-    "entire sect": "When the Entire Sect Read My Thoughts, the Plot Went Off the Rails",
+    "قطع العلاقات": "After Severing Ties",
+    # 2. المزارع الخبير في المدرسة الابتدائية
     "المزارع الخبير في المدرسة الابتدائية": "المزارع الخبير في المدرسة الابتدائية",
     "expert-cultivator": "المزارع الخبير في المدرسة الابتدائية",
+    "the-expert-cultivator-in-elementary": "المزارع الخبير في المدرسة الابتدائية",
+    # 3. نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا
     "نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا": "نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا",
     "mahayana-reflection": "نظام الانعكاس لا يظهر إلا بعد بلوغ مرحلة الماهايانا",
+    # 4. رماد النبل وجمر التمرد
     "رَمادُ النُّبل وجمرُ التمرد": "رَمادُ النُّبل وجمرُ التمرد",
+    "رماد النبل وجمر التمرد": "رَمادُ النُّبل وجمرُ التمرد",
     "noble-ash": "رَمادُ النُّبل وجمرُ التمرد",
+    # 5. المهندس الأعظم
     "المهندس الأعظم": "المهندس الأعظم",
     "greatest-estate-developer": "المهندس الأعظم",
+    "the-greatest-estate-developer": "المهندس الأعظم",
+    # 6. ناسخ أسلحة الأكاديمية
+    "ناسخ أسلحة الأكاديمية": "ناسخ أسلحة الأكاديمية",
+    "the-academys-weapon-replicator": "ناسخ أسلحة الأكاديمية",
+    # 7. عندما قرأت الطائفة بأكملها أفكاري
+    "when the entire sect read my thoughts": "When the Entire Sect Read My Thoughts, the Plot Went Off the Rails",
+    "entire sect": "When the Entire Sect Read My Thoughts, the Plot Went Off the Rails",
+    "عندما قرأت الطائفة بأكملها أفكاري، انهارت الحبكة حقاً": "When the Entire Sect Read My Thoughts, the Plot Went Off the Rails",
+    "when-the-entire-sect-read-my-thoughts-the-plot-went-off-the-rails": "When the Entire Sect Read My Thoughts, the Plot Went Off the Rails",
+    # 8. بينما يزرع الآخرون، أنا أنهب فرص بطل الرواية
+    "بينما يزرع الآخرون، أنا أنهب فرص بطل الرواية": "بينما يزرع الآخرون، أنا أنهب فرص بطل الرواية",
+    "while others cultivate i snatch male leads opportunities": "بينما يزرع الآخرون، أنا أنهب فرص بطل الرواية",
+    "while-others-cultivate-i-snatch-male-leads-opportunities": "بينما يزرع الآخرون، أنا أنهب فرص بطل الرواية",
+    # 9. تلاميذ الأشرار جميعهم متيمون؟ الشيزون المتكاسلة تصول وتجول
+    "تلاميذ الأشرار جميعهم متيمون؟ الشيزون المتكاسلة تصول وتجول": "تلاميذ الأشرار جميعهم متيمون؟ الشيزون المتكاسلة تصول وتجول",
+    "the villain disciples are all simps? the slacking shizun runs wild": "تلاميذ الأشرار جميعهم متيمون؟ الشيزون المتكاسلة تصول وتجول",
+    "the-villain-disciples-are-all-simps": "تلاميذ الأشرار جميعهم متيمون؟ الشيزون المتكاسلة تصول وتجول",
+    "shizun": "تلاميذ الأشرار جميعهم متيمون؟ الشيزون المتكاسلة تصول وتجول",
+    # 10. قيدت نفسي في الأرض المحرمة لـ 500 عام
+    "قيدت نفسي في الأرض المحرمة لـ 500 عام، لمَ تبكون الآن وقد أصبحت مزارعاً حراً؟": "قيدت نفسي في الأرض المحرمة لـ 500 عام، لمَ تبكون الآن وقد أصبحت مزارعاً حراً؟",
+    "confined in the forbidden ground for 500 years": "قيدت نفسي في الأرض المحرمة لـ 500 عام، لمَ تبكون الآن وقد أصبحت مزارعاً حراً؟",
+    "confined-in-forbidden-ground-for-500": "قيدت نفسي في الأرض المحرمة لـ 500 عام، لمَ تبكون الآن وقد أصبحت مزارعاً حراً؟",
+    # 11. لورد الشياطين شرير لدرجة الاستقامة
+    "انتقال سريع: لورد الشياطين شرير لدرجة الاستقامة": "انتقال سريع: لورد الشياطين شرير لدرجة الاستقامة",
+    "quick transmigration: the demon venerable is righteously evil": "انتقال سريع: لورد الشياطين شرير لدرجة الاستقامة",
+    "quick-transmigration-the-demon-venerable-is-righteously-evil": "انتقال سريع: لورد الشياطين شرير لدرجة الاستقامة",
 }
+
+def _normalize_title_text(text: str) -> str:
+    """تجريد وتوحيد نصوص العناوين للمقارنة الذكية (إزالة التشكيل وتوحيد الحروف)."""
+    if not text:
+        return ""
+    t = str(text).lower().strip()
+    t = re.sub(r'[إأآا]', 'ا', t)
+    t = re.sub(r'[ىي]', 'ي', t)
+    t = re.sub(r'ة', 'ه', t)
+    t = re.sub(r'[\u064B-\u065F\u0670]', '', t)  # إزالة التشكيل
+    t = re.sub(r'[^a-z0-9\u0600-\u06FF]', '', t)
+    return t
 
 def resolve_archive_novel_folder(novel_name: str) -> str:
     """تحديد اسم مجلد/سلسلة الرواية المطابق."""
@@ -72,9 +116,177 @@ def resolve_archive_novel_folder(novel_name: str) -> str:
             return v
     return re.sub(r'[<>:"/\\|?*]', '_', str(novel_name)).strip()
 
+# كاش مؤقت لقائمة الروايات لتجنب الاستعلامات المتكررة
+_ARABIC_NOVELS_CACHE = {"timestamp": 0.0, "novels": []}
+_ENGLISH_NOVELS_CACHE = {"timestamp": 0.0, "novels": []}
+
+def resolve_supabase_arabic_novel(novel_identifier: Union[str, int]) -> Optional[Dict[str, Any]]:
+    """
+    مطابقة ذكية وشاملة للرواية في قاعدة Supabase العربية المركزية.
+    يدعم:
+    - رقم الرواية المباشر أو الترتيب (id / sort_order) مثل: 9, '9', 'الرواية 9', 'الرواية ال9', 'novel 9'
+    - العنوان الإنجليزي من custom_rules.title_en (مثل: 'The Villain Disciples Are All Simps...')
+    - المعرف اللطيف slug
+    - الاسم العربي name_ar مع التجريد وإزالة التشكيل
+    - الاسم الأصلي name_original
+    - جدول NOVEL_NAME_MAPPINGS
+    """
+    if not (SUPABASE_URL_AR and SUPABASE_KEY_AR):
+        return None
+
+    global _ARABIC_NOVELS_CACHE
+    now_ts = time.time()
+    novels = _ARABIC_NOVELS_CACHE["novels"]
+    if now_ts - _ARABIC_NOVELS_CACHE["timestamp"] > 300 or not novels:
+        headers = {
+            "apikey": SUPABASE_KEY_AR,
+            "Authorization": f"Bearer {SUPABASE_KEY_AR}"
+        }
+        try:
+            url = f"{SUPABASE_URL_AR}/rest/v1/novels?select=id,name_ar,name_original,slug,custom_rules,status&order=id.asc"
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                novels = r.json()
+                _ARABIC_NOVELS_CACHE = {"timestamp": now_ts, "novels": novels}
+        except Exception as e_fetch:
+            logger.debug(f"[extractor] Error fetching Arabic novels cache: {e_fetch}")
+
+    if not novels:
+        return None
+
+    raw_str = str(novel_identifier).strip().lower()
+    clean_q = _normalize_title_text(raw_str)
+
+    # 1. فحص هل الإدخال رقم مباشر أو 'الرواية 9' / 'novel 9'
+    num_match = re.search(r'(?:الرواية|novel)?\s*(?:الـ|ال)?(\d+)', raw_str, re.IGNORECASE)
+    extracted_num = None
+    if num_match and (raw_str.startswith(("الرواية", "novel", "novels")) or raw_str == num_match.group(1)):
+        extracted_num = int(num_match.group(1))
+
+    # فحص جدول NOVEL_NAME_MAPPINGS
+    mapped_target = resolve_archive_novel_folder(raw_str)
+    mapped_clean = _normalize_title_text(mapped_target)
+
+    for n in novels:
+        n_id = n.get("id")
+        cr = {}
+        try:
+            cr = json.loads(n.get("custom_rules") or "{}") if isinstance(n.get("custom_rules"), str) else (n.get("custom_rules") or {})
+        except Exception:
+            cr = {}
+        title_en = cr.get("title_en", "")
+        sort_order = cr.get("sort_order")
+
+        # أ. مطابقة الرقم المباشر أو الترتيب
+        if extracted_num is not None:
+            if n_id == extracted_num or (sort_order is not None and int(sort_order) == extracted_num):
+                return n
+
+        # ب. مطابقة العنوان الإنجليزي في custom_rules
+        if title_en:
+            t_en_clean = _normalize_title_text(title_en)
+            if clean_q == t_en_clean or raw_str in title_en.lower() or title_en.lower() in raw_str:
+                return n
+            if mapped_clean and (mapped_clean == t_en_clean or mapped_target.lower() in title_en.lower()):
+                return n
+
+        # ج. مطابقة الـ slug
+        slug = (n.get("slug") or "").strip().lower()
+        if slug:
+            s_clean = _normalize_title_text(slug)
+            if slug in raw_str or raw_str in slug or clean_q == s_clean or (s_clean and s_clean in clean_q):
+                return n
+
+        # د. مطابقة الاسم العربي
+        name_ar = n.get("name_ar") or ""
+        if name_ar:
+            ar_clean = _normalize_title_text(name_ar)
+            if clean_q and (clean_q in ar_clean or ar_clean in clean_q):
+                return n
+            if mapped_clean and (mapped_clean in ar_clean or ar_clean in mapped_clean):
+                return n
+
+        # هـ. مطابقة الاسم الأصلي (name_original)
+        name_orig = (n.get("name_original") or "").strip().lower()
+        if name_orig and (raw_str in name_orig or name_orig in raw_str):
+            return n
+
+    return None
+
+def resolve_supabase_english_novel(novel_identifier: Union[str, int]) -> Optional[Dict[str, Any]]:
+    """
+    مطابقة ذكية وشاملة للرواية في قاعدة Supabase الإنجليزية المركزية (novels_en).
+    """
+    if not (SUPABASE_URL_EN and SUPABASE_KEY_EN):
+        return None
+
+    global _ENGLISH_NOVELS_CACHE
+    now_ts = time.time()
+    novels = _ENGLISH_NOVELS_CACHE["novels"]
+    if now_ts - _ENGLISH_NOVELS_CACHE["timestamp"] > 300 or not novels:
+        headers = {
+            "apikey": SUPABASE_KEY_EN,
+            "Authorization": f"Bearer {SUPABASE_KEY_EN}"
+        }
+        try:
+            url = f"{SUPABASE_URL_EN}/rest/v1/novels_en?select=id,name_en,name_original,slug,custom_rules,status&order=id.asc"
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                novels = r.json()
+                _ENGLISH_NOVELS_CACHE = {"timestamp": now_ts, "novels": novels}
+        except Exception as e_fetch:
+            logger.debug(f"[extractor] Error fetching English novels cache: {e_fetch}")
+
+    if not novels:
+        return None
+
+    raw_str = str(novel_identifier).strip().lower()
+    clean_q = _normalize_title_text(raw_str)
+
+    num_match = re.search(r'(?:الرواية|novel)?\s*(?:الـ|ال)?(\d+)', raw_str, re.IGNORECASE)
+    extracted_num = int(num_match.group(1)) if num_match and (raw_str.startswith(("الرواية", "novel", "novels")) or raw_str == num_match.group(1)) else None
+
+    mapped_target = resolve_archive_novel_folder(raw_str)
+    mapped_clean = _normalize_title_text(mapped_target)
+
+    for n in novels:
+        n_id = n.get("id")
+        name_en = (n.get("name_en") or "").strip().lower()
+        slug = (n.get("slug") or "").strip().lower()
+        name_orig = (n.get("name_original") or "").strip().lower()
+
+        cr = {}
+        try:
+            cr = json.loads(n.get("custom_rules") or "{}") if isinstance(n.get("custom_rules"), str) else (n.get("custom_rules") or {})
+        except Exception:
+            cr = {}
+        sort_order = cr.get("sort_order")
+
+        if extracted_num is not None:
+            if n_id == extracted_num or (sort_order is not None and int(sort_order) == extracted_num):
+                return n
+
+        if name_en:
+            n_clean = _normalize_title_text(name_en)
+            if clean_q == n_clean or raw_str in name_en or name_en in raw_str:
+                return n
+            if mapped_clean and (mapped_clean == n_clean or mapped_target.lower() in name_en):
+                return n
+
+        if slug:
+            s_clean = _normalize_title_text(slug)
+            if slug in raw_str or raw_str in slug or clean_q == s_clean or (s_clean and s_clean in clean_q):
+                return n
+
+        if name_orig and (raw_str in name_orig or name_orig in raw_str):
+            return n
+
+    return None
+
 def fetch_chapter_from_arabic_supabase(novel_name: str, chapter_num: int) -> Optional[Dict[str, Any]]:
     """
     سحب الفصل مباشرة من قاعدة بيانات Supabase العربية (جدولا novels و chapters عبر REST API).
+    - يحدد معرف الرواية بدقة صارمة لمنع خلط الفصول بين الروايات نهائياً.
     - يسمح فقط بالفصول ذات الحالات المعتمدة: APPROVED_CHAPTER_STATUSES
     - استرجاع ذكي: إذا كان trans_content مفرغاً وكان له post_url أو blogger_post_id يسترجع المتن تلقائياً.
     """
@@ -88,35 +300,16 @@ def fetch_chapter_from_arabic_supabase(novel_name: str, chapter_num: int) -> Opt
     }
 
     try:
-        novel_clean = novel_name.strip().lower()
-        matched_novel_id = None
+        # 1. مطابقة معرف الرواية بدقة صارمة
+        matched_novel = resolve_supabase_arabic_novel(novel_name)
+        if not matched_novel:
+            logger.warning(f"[extractor] Could not resolve novel '{novel_name}' in Arabic Supabase. Will NOT fetch without novel_id.")
+            return None
 
-        # 1. البحث عن معرف الرواية في جدول novels
-        try:
-            n_url = f"{SUPABASE_URL_AR}/rest/v1/novels?select=id,title&limit=100"
-            n_resp = requests.get(n_url, headers=headers, timeout=10)
-            if n_resp.status_code == 200:
-                n_list = n_resp.json()
-                for n_entry in n_list:
-                    t_val = (n_entry.get("title") or "").strip().lower()
-                    if novel_clean in t_val or t_val in novel_clean:
-                        matched_novel_id = n_entry.get("id")
-                        break
-                    # فحص جدول الربط NOVEL_NAME_MAPPINGS
-                    mapped = resolve_archive_novel_folder(novel_name).lower()
-                    if mapped in t_val or t_val in mapped:
-                        matched_novel_id = n_entry.get("id")
-                        break
-        except Exception as e_n:
-            logger.debug(f"[extractor] Error matching novel in Arabic Supabase: {e_n}")
+        novel_id = matched_novel["id"]
 
-        # 2. الاستعلام عن الفصل من جدول chapters
-        params = f"chapter_number=eq.{chapter_num}&select=*"
-        if matched_novel_id:
-            ch_url = f"{SUPABASE_URL_AR}/rest/v1/chapters?novel_id=eq.{matched_novel_id}&{params}&limit=5"
-        else:
-            ch_url = f"{SUPABASE_URL_AR}/rest/v1/chapters?{params}&limit=10"
-
+        # 2. الاستعلام عن الفصل حصراً باستخدام novel_id المطابق
+        ch_url = f"{SUPABASE_URL_AR}/rest/v1/chapters?novel_id=eq.{novel_id}&chapter_number=eq.{chapter_num}&select=*&limit=5"
         resp = requests.get(ch_url, headers=headers, timeout=15)
         if resp.status_code == 200:
             rows = resp.json()
@@ -129,9 +322,9 @@ def fetch_chapter_from_arabic_supabase(novel_name: str, chapter_num: int) -> Opt
                         break
 
                 if not target_row and rows:
-                    # فحص بدون قيود صارمة إذا لم يتطابق status ولكن يوجد محتوى
+                    # فحص احتياطي إذا لم يتطابق status ولكن يوجد محتوى مترجم
                     for r_item in rows:
-                        if (r_item.get("trans_content") or r_item.get("content")):
+                        if r_item.get("trans_content") or r_item.get("content"):
                             target_row = r_item
                             break
 
@@ -165,6 +358,7 @@ def fetch_chapter_from_arabic_supabase(novel_name: str, chapter_num: int) -> Opt
 def fetch_chapter_from_english_supabase(novel_name: str, chapter_num: int) -> Optional[Dict[str, Any]]:
     """
     سحب الفصل مباشرة من قاعدة بيانات Supabase الإنجليزية المركزية (جدولا novels_en و chapters_en).
+    - يحدد معرف الرواية بدقة صارمة لمنع خلط الفصول نهائياً.
     - يسمح فقط بالفصول ذات الحالات المعتمدة: APPROVED_CHAPTER_STATUSES
     - استرجاع ذكي: إذا كان trans_content مفرغاً يسترجع المتن من post_url.
     """
@@ -177,32 +371,16 @@ def fetch_chapter_from_english_supabase(novel_name: str, chapter_num: int) -> Op
             "Content-Type": "application/json"
         }
 
-        # 1. محاولة مطابقة novel_id من جدول novels_en
-        matched_id = None
-        try:
-            n_resp = requests.get(f"{SUPABASE_URL_EN}/rest/v1/novels_en?select=id,name_en,slug&limit=100", headers=headers, timeout=10)
-            if n_resp.status_code == 200:
-                n_list = n_resp.json()
-                n_clean = novel_name.strip().lower()
-                for n_entry in n_list:
-                    name_val = (n_entry.get("name_en") or "").lower()
-                    slug_val = (n_entry.get("slug") or "").lower()
-                    if n_clean in name_val or name_val in n_clean or n_clean in slug_val:
-                        matched_id = n_entry.get("id")
-                        break
-                    mapped = resolve_archive_novel_folder(novel_name).lower()
-                    if mapped in name_val or mapped in slug_val:
-                        matched_id = n_entry.get("id")
-                        break
-        except Exception:
-            pass
+        # 1. مطابقة معرف الرواية بدقة صارمة
+        matched_novel = resolve_supabase_english_novel(novel_name)
+        if not matched_novel:
+            logger.warning(f"[extractor] Could not resolve novel '{novel_name}' in English Supabase. Will NOT fetch without novel_id.")
+            return None
 
-        # 2. الاستعلام عن الفصل من chapters_en
-        if matched_id:
-            url = f"{SUPABASE_URL_EN}/rest/v1/chapters_en?novel_id=eq.{matched_id}&chapter_number=eq.{chapter_num}&select=*&limit=5"
-        else:
-            url = f"{SUPABASE_URL_EN}/rest/v1/chapters_en?chapter_number=eq.{chapter_num}&select=*&limit=10"
+        novel_id = matched_novel["id"]
 
+        # 2. الاستعلام عن الفصل حصراً باستخدام novel_id المطابق
+        url = f"{SUPABASE_URL_EN}/rest/v1/chapters_en?novel_id=eq.{novel_id}&chapter_number=eq.{chapter_num}&select=*&limit=5"
         resp = requests.get(url, headers=headers, timeout=15)
         if resp.status_code == 200:
             rows = resp.json()
@@ -216,7 +394,7 @@ def fetch_chapter_from_english_supabase(novel_name: str, chapter_num: int) -> Op
 
                 if not target_row and rows:
                     for r_item in rows:
-                        if (r_item.get("trans_content") or r_item.get("content")):
+                        if r_item.get("trans_content") or r_item.get("content"):
                             target_row = r_item
                             break
 

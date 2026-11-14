@@ -177,8 +177,21 @@ def get_chapter_by_novel_name(novel_name: str, chapter_number: int) -> Optional[
     """جلب فصل بالاسم ورقم الفصل (عبر الربط مع جدول الروايات)."""
     if not is_configured():
         return None
-    # أولاً البحث عن الرواية
-    novs = _request("GET", "novels", params={"title": f"ilike.*{novel_name.strip()}*", "limit": 1})
+    # أولاً البحث عن الرواية بالاسم العربي أو الـ slug أو العنوان الأصلي
+    novs = _request("GET", "novels", params={"name_ar": f"ilike.*{novel_name.strip()}*", "limit": 1})
+    if not novs:
+        novs = _request("GET", "novels", params={"slug": f"ilike.*{novel_name.strip()}*", "limit": 1})
+    if not novs:
+        # فحص كافة الروايات للبحث في custom_rules أو التطابق الجزئي
+        all_n = get_all_novels()
+        n_low = novel_name.strip().lower()
+        for n_item in all_n:
+            if n_low in str(n_item.get("name_ar") or "").lower() or \
+               n_low in str(n_item.get("slug") or "").lower() or \
+               n_low in str(n_item.get("custom_rules") or "").lower() or \
+               n_low == str(n_item.get("id")):
+                novs = [n_item]
+                break
     if not novs:
         return None
     nid = novs[0]["id"]
