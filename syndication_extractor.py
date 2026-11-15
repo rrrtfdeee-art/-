@@ -723,14 +723,22 @@ def _strip_blogger_html(
     text = re.sub(r'\[fn=[^\]]*\](.*?)\[/fn\]', r' (حاشية: \1) ', text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r'\[/?fn[^\]]*\]', '', text, flags=re.IGNORECASE)
 
-    # 6. معالجة الحاويات وصناديق النظام السردية في HTML (تحويلها لفواصل سردية واضحة 【 ... 】)
+    # 6. معالجة الحاويات وصناديق النظام السردية في HTML (تحويلها لفواصل سردية واضحة 【 ... 】 مع الحفاظ التام على قوس الإغلاق)
     narrative_box_classes = [
         "system", "nsw-mind-voice", "nsw-trans-voice", "nsw-official-doc",
         "doc-title", "doc-body", "doc-seal", "nsw-rift",
         "nsw-system-log", "status-window", "nsw-en-status", "nsw-tip", "personal-letter"
     ]
     for nbc in narrative_box_classes:
-        text = re.sub(rf'<div[^>]*class=["\'][^"\']*{nbc}[^"\']*["\'][^>]*>', '\n\n【 ', text, flags=re.IGNORECASE)
+        # استبدال الحاوية بالكامل متضمنة وسوم الفتح والإغلاق لضمان وجود قوس الإغلاق الصيني 】 دائماً
+        text = re.sub(
+            rf'<(?:div|p|span)[^>]*class=["\'][^"\']*{nbc}[^"\']*["\'][^>]*>(.*?)</(?:div|p|span)>',
+            r'\n\n【 \1 】\n\n',
+            text,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        # كاحتياط في حال كانت وسوم الفتح غير مقفلة في سطرها
+        text = re.sub(rf'<(?:div|p|span)[^>]*class=["\'][^"\']*{nbc}[^"\']*["\'][^>]*>', '\n\n【 ', text, flags=re.IGNORECASE)
 
     # 7. حاويات التغليف السردية العادية (تحويلها لفواصل أسطر)
     wrapper_classes = [
@@ -867,9 +875,23 @@ def clean_chapter_paragraphs(raw_text: str, novel_name: str = "", chapter_num: i
             continue
         break
 
+    # ضمان إغلاق أقواس الأفكار ونوافذ النظام 【 ... 】 بدقة في كل فقرة
+    formatted_paras = []
+    for p in paras:
+        p_str = p.strip()
+        if p_str.startswith("【") and "】" not in p_str:
+            p_str = p_str + " 】"
+        elif p_str.count("【") > p_str.count("】"):
+            diff = p_str.count("【") - p_str.count("】")
+            p_str = p_str + (" 】" * diff)
+        formatted_paras.append(p_str)
+    paras = formatted_paras
+
     # ضبط فواصل مربعات النظام المتتالية
     cleaned_result = "\n\n".join(paras).strip()
     cleaned_result = re.sub(r'【\s*】', '', cleaned_result)
+    cleaned_result = re.sub(r'【\s+', '【 ', cleaned_result)
+    cleaned_result = re.sub(r'\s+】', ' 】', cleaned_result)
     cleaned_result = re.sub(r'\n{3,}', '\n\n', cleaned_result)
     return cleaned_result
 
