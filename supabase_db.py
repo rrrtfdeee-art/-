@@ -37,13 +37,17 @@ def _load_env():
 
 _load_env()
 
-# استخراج إعدادات Supabase من المتغيرات البيئية (العربية المركزية)
-SUPABASE_URL = (os.getenv("SUPABASE_URL_AR") or os.getenv("SUPABASE_URL", "")).rstrip("/")
+# استخراج إعدادات Supabase / Cloudflare D1 Gateway (العربية المركزية)
+DEFAULT_URL = "https://black-waterfall-1d15.wxsajad.workers.dev"
+DEFAULT_KEY = "nsw_secret_db_2026"
+
+SUPABASE_URL = (os.getenv("SUPABASE_URL_AR") or os.getenv("SUPABASE_URL") or DEFAULT_URL).rstrip("/")
 SUPABASE_KEY = (
     os.getenv("SUPABASE_KEY_AR") or
-    os.getenv("SUPABASE_KEY", "") or
-    os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or
-    os.getenv("SUPABASE_ANON_KEY", "")
+    os.getenv("SUPABASE_KEY") or
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY") or
+    os.getenv("SUPABASE_ANON_KEY") or
+    DEFAULT_KEY
 )
 
 # إعدادات Supabase الإنجليزية
@@ -55,12 +59,13 @@ def is_configured() -> bool:
     global SUPABASE_URL, SUPABASE_KEY
     if not (SUPABASE_URL and SUPABASE_KEY):
         _load_env()
-        SUPABASE_URL = (os.getenv("SUPABASE_URL_AR") or os.getenv("SUPABASE_URL", "")).rstrip("/")
+        SUPABASE_URL = (os.getenv("SUPABASE_URL_AR") or os.getenv("SUPABASE_URL") or DEFAULT_URL).rstrip("/")
         SUPABASE_KEY = (
             os.getenv("SUPABASE_KEY_AR") or
-            os.getenv("SUPABASE_KEY", "") or
-            os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or
-            os.getenv("SUPABASE_ANON_KEY", "")
+            os.getenv("SUPABASE_KEY") or
+            os.getenv("SUPABASE_SERVICE_ROLE_KEY") or
+            os.getenv("SUPABASE_ANON_KEY") or
+            DEFAULT_KEY
         )
     return bool(SUPABASE_URL and SUPABASE_KEY)
 
