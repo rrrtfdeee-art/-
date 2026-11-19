@@ -25,6 +25,29 @@ from typing import Optional, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
+def _load_env():
+    env_paths = [
+        ".env",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
+        r"C:\s\.env"
+    ]
+    for ep in env_paths:
+        if os.path.exists(ep):
+            try:
+                with open(ep, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            k, v = k.strip(), v.strip().strip("'\"")
+                            if k not in os.environ:
+                                os.environ[k] = v
+            except Exception:
+                pass
+
+_load_env()
+
+
 # ─────────────────────────────────────────────────────────
 # إعدادات قواعد Supabase السحابية (بديل مستودعات الأرشيف القديمة)
 # ─────────────────────────────────────────────────────────
@@ -34,12 +57,16 @@ GITHUB_BACKUP_REPO_EN = os.getenv("GITHUB_BACKUP_REPO_EN", "rrrtfdeee-art/back-e
 GITHUB_BACKUP_REPO = GITHUB_BACKUP_REPO_AR
 
 # إعدادات Supabase العربية المركزية (novels & chapters)
-SUPABASE_URL_AR = (os.getenv("SUPABASE_URL_AR") or os.getenv("SUPABASE_URL", "https://pyoxhjxdpvbqnacuihxi.supabase.co")).rstrip("/")
+DEFAULT_URL_AR = "https://black-waterfall-1d15.wxsajad.workers.dev"
+DEFAULT_KEY_AR = "nsw_secret_db_2026"
+
+SUPABASE_URL_AR = (os.getenv("SUPABASE_URL_AR") or os.getenv("SUPABASE_URL") or DEFAULT_URL_AR).rstrip("/")
 SUPABASE_KEY_AR = (
     os.getenv("SUPABASE_KEY_AR") or
-    os.getenv("SUPABASE_KEY", "") or
-    os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or
-    os.getenv("SUPABASE_ANON_KEY", "")
+    os.getenv("SUPABASE_KEY") or
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY") or
+    os.getenv("SUPABASE_ANON_KEY") or
+    DEFAULT_KEY_AR
 )
 
 # إعدادات Supabase الإنجليزية المركزية (novels_en & chapters_en)
@@ -438,10 +465,7 @@ def fetch_chapter_from_github_archive(
             return data
         return fetch_chapter_from_arabic_supabase(novel_name, chapter_num)
     else:
-        data = fetch_chapter_from_arabic_supabase(novel_name, chapter_num)
-        if data:
-            return data
-        return fetch_chapter_from_english_supabase(novel_name, chapter_num)
+        return fetch_chapter_from_arabic_supabase(novel_name, chapter_num)
 
 # ─────────────────────────────────────────────────────────
 # معرفات الجداول والإعدادات (من خريطة_المنظومة.md)
@@ -942,9 +966,7 @@ def prepare_chapter_for_publishing(
         if not data:
             logger.info(f"[extractor] {novel_name} ف{chapter_num}: لم يُوجد بـ Supabase أو شيت الترجمة، أجرب 1IFT...")
             data = fetch_chapter_from_published_sheet(novel_name, chapter_num)
-        # 4. احتياطي إنجليزي
-        if not data:
-            data = fetch_chapter_from_english_supabase(novel_name, chapter_num)
+        # تم تعطيل الاحتياطي الإنجليزي للروايات العربية منعاً لنشر محتوى أجنبي للمستخدم العربي
 
     if not data:
         result["error"] = f"تعذّر إيجاد الفصل {chapter_num} لرواية '{novel_name}' في Supabase أو الجداول المتاحة (المصدر: {source_site})."

@@ -61,8 +61,10 @@ _load_env()
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 GITHUB_PRIVATE_REPO = os.getenv("GITHUB_BACKUP_REPO", "rrrtfdeee-art/back")
-SUPABASE_URL = (os.getenv("SUPABASE_URL_AR") or os.getenv("SUPABASE_URL", "https://pyoxhjxdpvbqnacuihxi.supabase.co")).rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY_AR") or os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+DEFAULT_URL = "https://black-waterfall-1d15.wxsajad.workers.dev"
+DEFAULT_KEY = "nsw_secret_db_2026"
+SUPABASE_URL = (os.getenv("SUPABASE_URL_AR") or os.getenv("SUPABASE_URL") or DEFAULT_URL).rstrip("/")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY_AR") or os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or DEFAULT_KEY
 
 NOVELS = [
     {"id": 1, "name_ar": "After Severing Ties",                                "slug": "severing-ties"},
